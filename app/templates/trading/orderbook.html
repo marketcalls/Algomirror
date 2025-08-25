@@ -1,4 +1,5 @@
 {% extends "layout.html" %}
+{% from 'macros/account_badge.html' import account_badge, account_dot, get_account_badge_color %}
 
 {% block title %}Order Book - AlgoMirror{% endblock %}
 
@@ -116,8 +117,13 @@
                             <td class="text-xs">{{ order.timestamp if order.timestamp else '-' }}</td>
                             {% if not single_account %}
                             <td>
-                                <div class="text-xs opacity-70">{{ order.account_name }}</div>
-                                <div class="text-xs opacity-50">{{ order.broker }}</div>
+                                <div class="flex items-center gap-2">
+                                    {{ account_dot(order.account_id, order.account_name + ' · ' + order.broker) }}
+                                    <div>
+                                        <div class="text-xs font-medium">{{ order.account_name }}</div>
+                                        <div class="text-xs opacity-50">{{ order.broker }}</div>
+                                    </div>
+                                </div>
                             </td>
                             {% endif %}
                             <td class="font-semibold">{{ order.symbol }}</td>

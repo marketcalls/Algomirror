@@ -86,7 +86,12 @@ class PingMonitor:
                 try:
                     api_key = account.get_api_key()
                 except Exception as key_error:
-                    current_app.logger.error(f"Failed to decrypt API key for account {account.id}: {key_error}")
+                    # Mark account as having encryption issues and skip silently after first error
+                    if account.id not in getattr(self, 'encryption_error_accounts', set()):
+                        if not hasattr(self, 'encryption_error_accounts'):
+                            self.encryption_error_accounts = set()
+                        self.encryption_error_accounts.add(account.id)
+                        current_app.logger.error(f"Failed to decrypt API key for account {account.id} (encryption key mismatch - account needs to be re-added): {key_error}")
                     continue
                 
                 if not api_key:

@@ -1,4 +1,5 @@
 {% extends "layout.html" %}
+{% from 'macros/account_badge.html' import account_badge, account_dot, get_account_badge_color %}
 
 {% block title %}Trade Book - AlgoMirror{% endblock %}
 
@@ -113,8 +114,13 @@
                             <td class="text-xs">{{ trade.timestamp if trade.timestamp else trade.filltime if trade.filltime else '-' }}</td>
                             {% if not single_account %}
                             <td>
-                                <div class="text-xs opacity-70">{{ trade.account_name }}</div>
-                                <div class="text-xs opacity-50">{{ trade.broker }}</div>
+                                <div class="flex items-center gap-2">
+                                    {{ account_dot(trade.account_id, trade.account_name + ' · ' + trade.broker) }}
+                                    <div>
+                                        <div class="text-xs font-medium">{{ trade.account_name }}</div>
+                                        <div class="text-xs opacity-50">{{ trade.broker }}</div>
+                                    </div>
+                                </div>
                             </td>
                             {% endif %}
                             <td class="font-semibold">{{ trade.symbol }}</td>

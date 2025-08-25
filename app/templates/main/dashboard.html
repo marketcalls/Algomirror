@@ -1,4 +1,5 @@
 {% extends "layout.html" %}
+{% from 'macros/account_badge.html' import account_badge, account_dot, get_account_badge_color %}
 
 {% block title %}Dashboard - AlgoMirror{% endblock %}
 
@@ -102,8 +103,11 @@
                     <div class="card-body p-4">
                         <div class="flex justify-between items-start">
                             <div class="flex items-center gap-2">
-                                <div id="account-status-{{ account.id }}" class="w-3 h-3 rounded-full {{ 'bg-success' if account.status == 'connected' else 'bg-error' if account.status == 'failed' else 'bg-warning' }}" title="{{ account.name }}: {{ account.status }}"></div>
-                                <div>
+                                <!-- Account color indicator -->
+                                {{ account_dot(account.id, account.name + ' · ' + account.broker) }}
+                                <!-- Connection status overlay -->
+                                <div id="account-status-{{ account.id }}" class="w-3 h-3 rounded-full {{ 'bg-success' if account.status == 'connected' else 'bg-error' if account.status == 'failed' else 'bg-warning' }} ring-2 ring-base-100 -ml-4 relative z-10" title="{{ account.name }}: {{ account.status }}"></div>
+                                <div class="ml-1">
                                     <h3 class="font-semibold">{{ account.name }}</h3>
                                     <p class="text-sm opacity-70">{{ account.broker }}</p>
                                 </div>
@@ -196,6 +200,22 @@
             </div>
         </a>
     </div>
+
+    <!-- Color Badge Test (Debug) -->
+    {% if current_user.is_authenticated %}
+    <div class="card bg-base-100 shadow-xl">
+        <div class="card-body">
+            <h2 class="card-title">Account Color System Test</h2>
+            <div class="flex gap-2 flex-wrap">
+                {% for i in range(1, 8) %}
+                    {{ account_dot(i, 'Account ' + i|string) }}
+                    {{ account_badge('Account ' + i|string, i, 'Test Broker', 'sm') }}
+                {% endfor %}
+            </div>
+            <p class="text-xs opacity-50 mt-2">Each account gets a unique color based on its ID</p>
+        </div>
+    </div>
+    {% endif %}
 
     <!-- Recent Activity -->
     {% if recent_activities %}

@@ -240,4 +240,24 @@
         </main>
     </div>
     {% endif %}
+
+    <!-- Account Badge Color Generator -->
+    <script>
+        function getAccountBadgeColor(accountId) {
+            // Generate consistent colors based on account ID
+            const colors = [
+                'badge-primary',    // Blue
+                'badge-secondary',  // Purple
+                'badge-accent',     // Cyan
+                'badge-success',    // Green
+                'badge-warning',    // Orange
+                'badge-error',      // Red
+                'badge-info',       // Light blue
+            ];
+            
+            // Use account ID to consistently assign the same color
+            const colorIndex = accountId % colors.length;
+            return colors[colorIndex];
+        }
+    </script>
 {% endblock %}

@@ -1,4 +1,5 @@
 {% extends "layout.html" %}
+{% from 'macros/account_badge.html' import account_badge, account_dot, get_account_badge_color %}
 
 {% block title %}Funds - AlgoMirror{% endblock %}
 
@@ -97,9 +98,12 @@
         <div class="card bg-base-100 shadow-xl">
             <div class="card-body">
                 <div class="flex justify-between items-start">
-                    <div>
-                        <h2 class="card-title">{{ fund.account_name }}</h2>
-                        <p class="text-sm opacity-70">{{ fund.broker }}</p>
+                    <div class="flex items-center gap-3">
+                        {{ account_dot(fund.account_id, fund.account_name + ' · ' + fund.broker) }}
+                        <div>
+                            <h2 class="card-title">{{ fund.account_name }}</h2>
+                            <p class="text-sm opacity-70">{{ fund.broker }}</p>
+                        </div>
                     </div>
                     {% if single_account %}
                     <button onclick="refreshSingleAccount({{ fund.account_id }})" class="btn btn-ghost btn-sm btn-circle">

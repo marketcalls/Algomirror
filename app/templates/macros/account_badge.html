@@ -1,0 +1,19 @@
+<!-- Account Badge Macros for consistent account color coding -->
+
+{% macro get_account_badge_color(account_id) -%}
+    {%- set colors = ['primary', 'secondary', 'accent', 'success', 'warning', 'error', 'info'] -%}
+    {%- set color_index = account_id % colors|length -%}
+    badge-{{ colors[color_index] }}
+{%- endmacro %}
+
+{% macro account_badge(account_name, account_id, broker=None, size='sm') -%}
+    <span class="badge {{ get_account_badge_color(account_id) }} badge-{{ size }}">
+        {{ account_name }}
+        {%- if broker %} · {{ broker }}{%- endif -%}
+    </span>
+{%- endmacro %}
+
+{% macro account_dot(account_id, title='') -%}
+    <div class="w-3 h-3 rounded-full {{ get_account_badge_color(account_id).replace('badge-', 'bg-') }} ring-1 ring-gray-300" 
+         {%- if title %} title="{{ title }}"{%- endif -%}></div>
+{%- endmacro %}
