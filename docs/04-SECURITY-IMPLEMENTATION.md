@@ -121,15 +121,43 @@ class User(UserMixin, db.Model):
 # config.py
 class Config:
     # Session configuration
+    SESSION_TYPE = 'filesystem'  # Default: filesystem sessions (single-user)
+    # Alternative: 'sqlalchemy' for database sessions (multi-user)
     SESSION_COOKIE_SECURE = True  # HTTPS only
     SESSION_COOKIE_HTTPONLY = True  # No JavaScript access
     SESSION_COOKIE_SAMESITE = 'Lax'  # CSRF protection
     PERMANENT_SESSION_LIFETIME = timedelta(hours=24)
-    
+
+    # For SQLAlchemy sessions (when SESSION_TYPE='sqlalchemy')
+    SESSION_SQLALCHEMY_TABLE = 'flask_sessions'
+    SESSION_SQLALCHEMY = None  # Set to db instance at runtime
+
     # Remember me configuration
     REMEMBER_COOKIE_SECURE = True
     REMEMBER_COOKIE_HTTPONLY = True
     REMEMBER_COOKIE_DURATION = timedelta(days=30)
+```
+
+#### Session Storage Options
+
+**Filesystem Sessions (Default)**
+- Suitable for single-user applications
+- Sessions stored in server filesystem
+- Simple configuration, no external dependencies
+
+**Database Sessions (Alternative)**
+- Better for multi-user applications
+- Sessions stored in database table
+- Requires additional database table
+
+```python
+# app/__init__.py - Session initialization
+def create_app():
+    # Configure session storage
+    if app.config.get('SESSION_TYPE') == 'sqlalchemy':
+        app.config['SESSION_SQLALCHEMY'] = db
+
+    sess.init_app(app)
 ```
 
 ### 4. Login Security
@@ -577,8 +605,8 @@ SECRET_KEY=<generate-strong-random-key>
 ENCRYPTION_KEY=<base64-encoded-32-byte-key>
 
 # Session Configuration
-SESSION_TYPE=redis
-SESSION_REDIS=redis://localhost:6379/0
+# Options: 'filesystem' (default, single-user) or 'sqlalchemy' (multi-user)
+SESSION_TYPE=filesystem
 
 # Database
 DATABASE_URL=postgresql://user:pass@localhost/algomirror

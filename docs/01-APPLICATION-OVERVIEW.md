@@ -48,7 +48,7 @@ AlgoMirror is an enterprise-grade multi-account management platform for OpenAlgo
 
 ### Infrastructure
 - **Rate Limiting**: Flask-Limiter with Redis backend (production)
-- **Session Storage**: Redis for distributed sessions (production)
+- **Session Storage**: Configurable - filesystem (single-user) or database sessions (multi-user)
 - **Background Tasks**: Threading for WebSocket and monitoring services
 - **Logging**: Structured JSON logging with rotation
 
@@ -200,7 +200,7 @@ Supports 22+ brokers including:
 - Batch processing for WebSocket subscriptions
 
 ### 2. Scalability Features
-- Horizontal scaling with Redis sessions
+- Horizontal scaling with database sessions (when configured)
 - Load balancing ready architecture
 - Microservice-compatible design
 - Asynchronous processing for heavy operations
@@ -255,7 +255,7 @@ Supports 22+ brokers including:
 
 ### 1. Requirements
 - PostgreSQL database
-- Redis for caching/sessions
+- Redis for caching (optional for database sessions)
 - HTTPS with SSL certificates
 - Reverse proxy (Nginx/Apache)
 - WSGI server (Gunicorn)

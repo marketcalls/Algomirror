@@ -458,7 +458,8 @@ Services:
 Services:
   - Gunicorn WSGI Server (4 workers)
   - PostgreSQL Database (connection pooling)
-  - Redis (sessions + caching)
+  - Redis (caching) + Database sessions
+  - Alternative: Filesystem sessions (single-user)
   - Nginx Reverse Proxy (SSL termination)
   - WebSocket Load Balancing
   - Structured JSON logging

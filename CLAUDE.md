@@ -205,21 +205,22 @@ Structured JSON logging (`app/__init__.py`):
 Required environment variables (see `.env.example`):
 - `SECRET_KEY`: Flask session key (generate strong random key for production)
 - `DATABASE_URL`: SQLite (dev) or PostgreSQL (production) - default: sqlite:///instance/algomirror.db
-- `REDIS_URL`: Optional, for production rate limiting and session storage
+- `REDIS_URL`: Optional, for production rate limiting
+- `SESSION_TYPE`: Session storage type - 'filesystem' (default, single-user) or 'sqlalchemy' (multi-user)
 - `ENCRYPTION_KEY`: Optional, auto-generated if not provided
 - `FLASK_ENV`: development or production
 - `LOG_LEVEL`: DEBUG, INFO, WARNING, ERROR
 - `CORS_ORIGINS`: Allowed CORS origins for API access
 
 ### Development vs Production Configuration
-- **Development**: Uses SQLite, filesystem sessions, less strict security
-- **Production**: Requires PostgreSQL, Redis, HTTPS, strict security headers
+- **Development**: Uses SQLite, filesystem sessions (default), less strict security
+- **Production**: Requires PostgreSQL, configurable sessions (filesystem or database), HTTPS, strict security headers
 
 ## Production Deployment
 
 For production deployment:
 1. **Database**: Use PostgreSQL instead of SQLite for scalability
-2. **Caching & Sessions**: Configure Redis for rate limiting and session storage
+2. **Caching & Sessions**: Configure Redis for rate limiting; choose session type (filesystem or database)
 3. **WSGI Server**: Use Gunicorn with multiple workers
 4. **Reverse Proxy**: Nginx or Apache with SSL/TLS termination
 5. **Security**: Enable HTTPS with proper SSL certificates
