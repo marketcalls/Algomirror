@@ -58,6 +58,12 @@ def setup_logging(app):
     app.logger.addHandler(logHandler)
     app.logger.setLevel(log_level)
     app.logger.info('AlgoMirror startup', extra={'event': 'startup'})
+
+    # Suppress noisy loggers
+    logging.getLogger('app.utils.websocket_manager').setLevel(logging.WARNING)
+    logging.getLogger('app.utils.background_service').setLevel(logging.WARNING)
+    logging.getLogger('app.utils.option_chain').setLevel(logging.WARNING)
+    logging.getLogger('app.trading.routes').setLevel(logging.WARNING)
     
     # Also log to console in development
     if app.debug:

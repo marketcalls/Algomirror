@@ -470,8 +470,8 @@ def option_chain_stream(underlying):
     expiry = request.args.get('expiry')
     
     # Log outside the generator where we have app context
-    print(f"[SSE] Starting stream for {underlying} with expiry {expiry}")
-    print(f"[SSE] Active managers: {list(option_chain_service.active_managers.keys())}")
+    # print(f"[SSE] Starting stream for {underlying} with expiry {expiry}")
+    # print(f"[SSE] Active managers: {list(option_chain_service.active_managers.keys())}")
     
     def generate():
         # Determine the manager key to use
@@ -492,7 +492,7 @@ def option_chain_stream(underlying):
                             # If no expiry specified, use the first available
                             if not expiry:
                                 manager = option_chain_service.active_managers[key]
-                                print(f"[SSE] Using manager {key} for {underlying}")
+                                # print(f"[SSE] Using manager {key} for {underlying}")
                                 break
                             # If expiry specified but not found, try to start it
                             elif key.endswith(f"_{expiry}"):
@@ -501,45 +501,45 @@ def option_chain_stream(underlying):
                 
                 # If no manager found, try to start one
                 if not manager and expiry:
-                    print(f"[SSE] No manager found for {underlying}_{expiry}, attempting to start")
+                    # print(f"[SSE] No manager found for {underlying}_{expiry}, attempting to start")
                     # Try to start option chain (will handle failover internally)
                     if option_chain_service.start_option_chain(underlying, expiry):
                         manager_key = f"{underlying}_{expiry}"
                         manager = option_chain_service.active_managers.get(manager_key)
-                        print(f"[SSE] Started new manager for {manager_key}")
+                        # print(f"[SSE] Started new manager for {manager_key}")
                     else:
-                        print(f"[SSE] Failed to start option chain for {underlying}_{expiry} - checking for backup accounts")
+                        # print(f"[SSE] Failed to start option chain for {underlying}_{expiry} - checking for backup accounts")
                         # If primary fails and we have backup accounts, trigger failover
                         if option_chain_service.backup_accounts:
-                            print(f"[SSE] Attempting failover with {len(option_chain_service.backup_accounts)} backup accounts")
+                            # print(f"[SSE] Attempting failover with {len(option_chain_service.backup_accounts)} backup accounts")
                             option_chain_service.on_account_disconnected(option_chain_service.primary_account)
                             # Try again after failover
                             if option_chain_service.start_option_chain(underlying, expiry):
                                 manager_key = f"{underlying}_{expiry}"
                                 manager = option_chain_service.active_managers.get(manager_key)
-                                print(f"[SSE] Started manager after failover for {manager_key}")
+                                # print(f"[SSE] Started manager after failover for {manager_key}")
                 
                 if manager:
                     chain_data = manager.get_option_chain()
                     
                     # Simple print for debugging
-                    print(f"[SSE] Sending data for {underlying}, options count: {len(chain_data.get('options', []))}, expiry: {chain_data.get('expiry')}")
+                    # print(f"[SSE] Sending data for {underlying}, options count: {len(chain_data.get('options', []))}, expiry: {chain_data.get('expiry')}")
                     
                     # Send as server-sent event
                     data_json = json.dumps(chain_data)
                     yield f"data: {data_json}\n\n"
                 else:
-                    print(f"[SSE] Option chain not active for {underlying} with expiry {expiry}")
+                    # print(f"[SSE] Option chain not active for {underlying} with expiry {expiry}")
                     yield f"data: {json.dumps({'status': 'inactive', 'message': f'Option chain not active for {underlying} {expiry or ""}'})}\n\n"
                 
                 # Update every second
                 time.sleep(1)
                 
             except GeneratorExit:
-                print(f"[SSE] Client disconnected from {underlying} stream")
+                # print(f"[SSE] Client disconnected from {underlying} stream")
                 break
             except Exception as e:
-                print(f"[SSE] Error streaming option chain: {e}")
+                # print(f"[SSE] Error streaming option chain: {e}")
                 import traceback
                 traceback.print_exc()
                 yield f"data: {json.dumps({'status': 'error', 'message': str(e)})}\n\n"
