@@ -22,6 +22,7 @@ else:
 
 cipher_suite = Fernet(ENCRYPTION_KEY)
 
+
 class User(UserMixin, db.Model):
     __tablename__ = 'users'
     

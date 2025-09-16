@@ -17,8 +17,9 @@ class Config:
     SESSION_COOKIE_SAMESITE = 'Lax'
 
     # For SQLAlchemy sessions (when SESSION_TYPE=sqlalchemy)
-    SESSION_SQLALCHEMY_TABLE = 'sessions'
+    SESSION_SQLALCHEMY_TABLE = 'flask_sessions'
     SESSION_SQLALCHEMY = None  # Will be set to db in app init
+    SESSION_SQLALCHEMY_EXTEND_EXISTING = True
     
     # Security
     WTF_CSRF_ENABLED = True

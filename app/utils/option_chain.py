@@ -515,6 +515,21 @@ class OptionChainManager:
         # Simplified max pain calculation
         # In production, use proper max pain algorithm
         return self.atm_strike
+
+    def get_strike_position(self, strike):
+        """Get strike position relative to ATM"""
+        if not self.atm_strike:
+            return 0
+        return (strike - self.atm_strike) // self.strike_step
+
+    def get_position_tag(self, position):
+        """Get position tag based on strike position"""
+        if position == 0:
+            return 'ATM'
+        elif position > 0:
+            return f'OTM{abs(position)}'
+        else:
+            return f'ITM{abs(position)}'
     
     def get_execution_price(self, symbol, action, quantity=None):
         """

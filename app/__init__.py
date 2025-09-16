@@ -60,10 +60,10 @@ def setup_logging(app):
     app.logger.info('AlgoMirror startup', extra={'event': 'startup'})
 
     # Suppress noisy loggers
-    logging.getLogger('app.utils.websocket_manager').setLevel(logging.WARNING)
-    logging.getLogger('app.utils.background_service').setLevel(logging.WARNING)
-    logging.getLogger('app.utils.option_chain').setLevel(logging.WARNING)
-    logging.getLogger('app.trading.routes').setLevel(logging.WARNING)
+    logging.getLogger('app.utils.websocket_manager').setLevel(logging.CRITICAL)
+    logging.getLogger('app.utils.background_service').setLevel(logging.CRITICAL)
+    logging.getLogger('app.utils.option_chain').setLevel(logging.CRITICAL)
+    logging.getLogger('app.trading.routes').setLevel(logging.CRITICAL)
     
     # Also log to console in development
     if app.debug:
@@ -91,6 +91,11 @@ def create_app(config_name=None):
         app.config['SESSION_SQLALCHEMY'] = db
 
     sess.init_app(app)
+
+    # Import models and create tables
+    with app.app_context():
+        from app import models
+        db.create_all()
     
     # Initialize rate limiter
     from app.utils.rate_limiter import init_rate_limiter
