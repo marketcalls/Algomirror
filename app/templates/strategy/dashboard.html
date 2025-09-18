@@ -1,0 +1,244 @@
+{% extends "layout.html" %}
+
+{% block title %}Strategy Dashboard - AlgoMirror{% endblock %}
+
+{% block content %}
+<div class="container mx-auto px-4 py-6">
+    <!-- Header -->
+    <div class="flex justify-between items-center mb-6">
+        <div>
+            <h1 class="text-3xl font-bold">Multi-Strategy Trading Platform</h1>
+            <p class="text-base-content/70 mt-1">Manage unlimited strategies across multiple accounts</p>
+        </div>
+        <div class="flex gap-3">
+            <select class="select select-bordered" id="marketCondition">
+                <option value="">Market Condition: All</option>
+                <option value="non_expiry">Non-Expiry</option>
+                <option value="expiry">Expiry Day</option>
+            </select>
+            <a href="{{ url_for('strategy.builder') }}" class="btn btn-primary">
+                <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path>
+                </svg>
+                New Strategy
+            </a>
+        </div>
+    </div>
+
+    <!-- Account Cards Grid -->
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
+        {% for account in accounts[:2] %}
+        <div class="card bg-base-100 shadow-lg">
+            <div class="card-body">
+                <div class="flex justify-between items-start mb-2">
+                    <div>
+                        <h3 class="font-semibold text-lg">{{ account.account_name }}</h3>
+                        <p class="text-sm text-base-content/60">{{ account.broker_name }}</p>
+                    </div>
+                    <span class="badge badge-success badge-sm">Connected</span>
+                </div>
+
+                <div class="space-y-2">
+                    <div class="flex justify-between">
+                        <span class="text-sm">Available:</span>
+                        <span class="font-semibold">₹590.52</span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span class="text-sm">Margin:</span>
+                        <span class="font-semibold">₹0.00</span>
+                    </div>
+
+                    <!-- Today's Trade Toggle -->
+                    <div class="flex justify-between items-center pt-2 border-t">
+                        <span class="text-sm">Today's Trade</span>
+                        <input type="checkbox" class="toggle toggle-sm" checked />
+                    </div>
+
+                    <!-- Active Strategies -->
+                    <div class="pt-2">
+                        <p class="text-sm text-base-content/60">Active Strategies</p>
+                        <p class="text-center py-2 text-sm text-base-content/50">No active strategies</p>
+                    </div>
+                </div>
+
+                <!-- Today's P&L -->
+                <div class="flex justify-between items-center pt-3 border-t">
+                    <span class="text-sm">Today's P&L</span>
+                    <span class="font-bold text-success">+₹{{ today_pnl|round(2) }}</span>
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+
+        <!-- Add More Accounts Card -->
+        {% if accounts|length < 3 %}
+        <div class="card bg-base-100 shadow-lg border-2 border-dashed border-base-300">
+            <div class="card-body flex items-center justify-center">
+                <a href="{{ url_for('accounts.add') }}" class="btn btn-ghost btn-circle btn-lg">
+                    <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path>
+                    </svg>
+                </a>
+                <p class="text-base-content/60 mt-2">Add Trading Account</p>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+
+    <!-- Strategy Templates Section -->
+    <div class="card bg-base-100 shadow-lg mb-6">
+        <div class="card-body">
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="card-title">Strategy Templates</h2>
+                <a href="{{ url_for('strategy.templates') }}" class="btn btn-ghost btn-sm">
+                    Manage Templates
+                    <svg class="w-4 h-4 ml-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
+                    </svg>
+                </a>
+            </div>
+
+            {% if strategies|length == 0 %}
+            <div class="text-center py-8">
+                <p class="text-base-content/60 mb-4">No templates created yet</p>
+                <a href="{{ url_for('strategy.builder') }}" class="link link-primary">Create your first template</a>
+            </div>
+            {% else %}
+            <div class="overflow-x-auto">
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <th>Strategy Name</th>
+                            <th>Type</th>
+                            <th>Risk Profile</th>
+                            <th>Accounts</th>
+                            <th>Status</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for strategy in strategies[:5] %}
+                        <tr>
+                            <td class="font-medium">{{ strategy.name }}</td>
+                            <td>
+                                <span class="badge badge-sm">
+                                    {{ strategy.legs.count() }} Leg{% if strategy.legs.count() != 1 %}s{% endif %}
+                                </span>
+                            </td>
+                            <td>
+                                <span class="badge badge-sm {% if strategy.risk_profile == 'conservative' %}badge-success{% elif strategy.risk_profile == 'balanced' %}badge-warning{% else %}badge-error{% endif %}">
+                                    {{ strategy.risk_profile|title if strategy.risk_profile else 'Balanced' }}
+                                </span>
+                            </td>
+                            <td>{{ strategy.selected_accounts|length if strategy.selected_accounts else 0 }}</td>
+                            <td>
+                                {% if strategy.is_active %}
+                                <span class="badge badge-success badge-sm">Active</span>
+                                {% else %}
+                                <span class="badge badge-ghost badge-sm">Inactive</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                <div class="flex gap-2">
+                                    <button onclick="executeStrategy({{ strategy.id }})" class="btn btn-primary btn-xs">Execute</button>
+                                    <a href="{{ url_for('strategy.builder', strategy_id=strategy.id) }}" class="btn btn-ghost btn-xs">Edit</a>
+                                    <button onclick="toggleStrategy({{ strategy.id }})" class="btn btn-ghost btn-xs">
+                                        {% if strategy.is_active %}Pause{% else %}Activate{% endif %}
+                                    </button>
+                                </div>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Active Positions Section -->
+    <div class="card bg-base-100 shadow-lg">
+        <div class="card-body">
+            <h2 class="card-title mb-4">Active Positions</h2>
+
+            <div id="activePositions" class="text-center py-8 text-base-content/60">
+                <p>No active positions</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+// Execute Strategy
+function executeStrategy(strategyId) {
+    if (confirm('Are you sure you want to execute this strategy?')) {
+        fetch(`/strategy/execute/${strategyId}`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': document.querySelector('meta[name="csrf-token"]').content
+            }
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.status === 'success') {
+                showNotification('Strategy executed successfully', 'success');
+                setTimeout(() => location.reload(), 1500);
+            } else {
+                showNotification(data.message || 'Failed to execute strategy', 'error');
+            }
+        })
+        .catch(error => {
+            showNotification('Error executing strategy', 'error');
+            console.error('Error:', error);
+        });
+    }
+}
+
+// Toggle Strategy Active Status
+function toggleStrategy(strategyId) {
+    fetch(`/strategy/toggle/${strategyId}`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'X-CSRFToken': document.querySelector('meta[name="csrf-token"]').content
+        }
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.status === 'success') {
+            showNotification(data.message, 'success');
+            setTimeout(() => location.reload(), 1000);
+        } else {
+            showNotification(data.message || 'Failed to toggle strategy', 'error');
+        }
+    })
+    .catch(error => {
+        showNotification('Error toggling strategy', 'error');
+        console.error('Error:', error);
+    });
+}
+
+// Show notification
+function showNotification(message, type) {
+    const toast = document.createElement('div');
+    toast.className = `toast toast-end`;
+    toast.innerHTML = `
+        <div class="alert alert-${type === 'success' ? 'success' : 'error'}">
+            <span>${message}</span>
+        </div>
+    `;
+    document.body.appendChild(toast);
+    setTimeout(() => toast.remove(), 3000);
+}
+
+// Load active positions
+function loadActivePositions() {
+    // This would fetch active positions for all strategies
+    // Implementation would query all active strategy executions
+}
+
+// Load positions on page load
+document.addEventListener('DOMContentLoaded', loadActivePositions);
+</script>
+{% endblock %}

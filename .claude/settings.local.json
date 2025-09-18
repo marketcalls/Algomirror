@@ -1,7 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "Bash(\"D:\\openalgo-multi\\algomirror\\venv\\Scripts\\python.exe\" -c \"import os; from dotenv import load_dotenv; load_dotenv(); print(''ENCRYPTION_KEY exists:'', bool(os.environ.get(''ENCRYPTION_KEY''))); print(''First 10 chars:'', os.environ.get(''ENCRYPTION_KEY'', ''NOT SET'')[:10])\")"
+      "Bash(tree:*)",
+      "Bash(findstr:*)",
+      "Bash(tasklist)"
     ],
     "deny": [],
     "ask": []

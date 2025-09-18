@@ -249,6 +249,125 @@ class TradingSession(db.Model):
     def __repr__(self):
         return f'<TradingSession {self.session_name} - Day {self.day_of_week}>'
 
+class Strategy(db.Model):
+    __tablename__ = 'strategies'
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    name = db.Column(db.String(100), nullable=False)
+    description = db.Column(db.Text)
+    market_condition = db.Column(db.String(50))  # 'non_expiry', 'expiry', 'any'
+    risk_profile = db.Column(db.String(50))  # 'balanced', 'conservative', 'aggressive'
+    is_active = db.Column(db.Boolean, default=True)
+    is_template = db.Column(db.Boolean, default=False)
+
+    # Timing settings
+    entry_time = db.Column(db.Time)
+    exit_time = db.Column(db.Time)
+    square_off_time = db.Column(db.Time)
+
+    # Risk management
+    max_loss = db.Column(db.Float)
+    max_profit = db.Column(db.Float)
+    trailing_sl = db.Column(db.Float)
+
+    # Multi-account settings
+    selected_accounts = db.Column(db.JSON)  # List of account IDs
+    allocation_type = db.Column(db.String(50))  # 'equal', 'proportional', 'custom'
+
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationships
+    legs = db.relationship('StrategyLeg', backref='strategy', lazy='dynamic', cascade='all, delete-orphan')
+    executions = db.relationship('StrategyExecution', backref='strategy', lazy='dynamic', cascade='all, delete-orphan')
+
+    def __repr__(self):
+        return f'<Strategy {self.name}>'
+
+class StrategyLeg(db.Model):
+    __tablename__ = 'strategy_legs'
+
+    id = db.Column(db.Integer, primary_key=True)
+    strategy_id = db.Column(db.Integer, db.ForeignKey('strategies.id'), nullable=False)
+    leg_number = db.Column(db.Integer, nullable=False)
+
+    # Instrument details
+    instrument = db.Column(db.String(50))  # 'NIFTY', 'BANKNIFTY', 'SENSEX'
+    product_type = db.Column(db.String(20))  # 'options', 'futures', 'equity'
+    expiry = db.Column(db.String(50))  # 'current_week', 'next_week', 'current_month'
+    action = db.Column(db.String(10))  # 'BUY', 'SELL'
+
+    # Option specifics
+    option_type = db.Column(db.String(10))  # 'CE', 'PE'
+    strike_selection = db.Column(db.String(50))  # 'ATM', 'OTM', 'ITM', 'strike_price', 'premium_near'
+    strike_offset = db.Column(db.Integer, default=0)
+    strike_price = db.Column(db.Float)
+    premium_value = db.Column(db.Float)
+
+    # Order details
+    order_type = db.Column(db.String(20))  # 'MARKET', 'LIMIT'
+    quantity = db.Column(db.Integer)
+    lots = db.Column(db.Integer, default=1)
+
+    # Exit conditions
+    stop_loss_type = db.Column(db.String(20))  # 'percentage', 'points', 'premium'
+    stop_loss_value = db.Column(db.Float)
+    take_profit_type = db.Column(db.String(20))  # 'percentage', 'points', 'premium'
+    take_profit_value = db.Column(db.Float)
+
+    # Trailing stop loss
+    enable_trailing = db.Column(db.Boolean, default=False)
+    trailing_type = db.Column(db.String(20))  # 'percentage', 'points'
+    trailing_value = db.Column(db.Float)
+
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    def __repr__(self):
+        return f'<StrategyLeg {self.instrument} {self.action}>'
+
+class StrategyExecution(db.Model):
+    __tablename__ = 'strategy_executions'
+
+    id = db.Column(db.Integer, primary_key=True)
+    strategy_id = db.Column(db.Integer, db.ForeignKey('strategies.id'), nullable=False)
+    account_id = db.Column(db.Integer, db.ForeignKey('trading_accounts.id'), nullable=False)
+    leg_id = db.Column(db.Integer, db.ForeignKey('strategy_legs.id'), nullable=False)
+
+    # Order details
+    order_id = db.Column(db.String(100))
+    symbol = db.Column(db.String(100))  # Actual traded symbol
+    exchange = db.Column(db.String(20))
+    entry_price = db.Column(db.Float)
+    exit_price = db.Column(db.Float)
+    quantity = db.Column(db.Integer)
+
+    # Status tracking
+    status = db.Column(db.String(50))  # 'pending', 'entered', 'exited', 'stopped', 'error'
+    entry_time = db.Column(db.DateTime)
+    exit_time = db.Column(db.DateTime)
+
+    # P&L tracking
+    realized_pnl = db.Column(db.Float)
+    unrealized_pnl = db.Column(db.Float)
+    brokerage = db.Column(db.Float)
+
+    # Exit reason
+    exit_reason = db.Column(db.String(100))  # 'stop_loss', 'take_profit', 'square_off', 'manual'
+
+    # Error tracking
+    error_message = db.Column(db.Text)
+
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationships
+    account = db.relationship('TradingAccount')
+    leg = db.relationship('StrategyLeg')
+
+    def __repr__(self):
+        return f'<StrategyExecution {self.symbol} {self.status}>'
+
 class MarketHoliday(db.Model):
     __tablename__ = 'market_holidays'
     

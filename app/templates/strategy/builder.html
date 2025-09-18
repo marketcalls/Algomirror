@@ -1,0 +1,460 @@
+{% extends "layout.html" %}
+
+{% block title %}Strategy Builder - AlgoMirror{% endblock %}
+
+{% block content %}
+<div class="container mx-auto px-4 py-6">
+    <!-- Header -->
+    <div class="flex justify-between items-center mb-6">
+        <div>
+            <h1 class="text-2xl font-bold">Strategy Builder</h1>
+            <p class="text-base-content/70">Create multi-leg option strategies with 9 configurable parameters</p>
+        </div>
+        <a href="{{ url_for('strategy.dashboard') }}" class="btn btn-ghost">
+            <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path>
+            </svg>
+            Back to Dashboard
+        </a>
+    </div>
+
+    <form id="strategyForm">
+        <!-- Basic Information Card -->
+        <div class="card bg-base-100 shadow-lg mb-6">
+            <div class="card-body">
+                <h2 class="card-title mb-4">Basic Information</h2>
+
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div class="form-control">
+                        <label class="label">
+                            <span class="label-text">Strategy Name</span>
+                        </label>
+                        <input type="text" id="strategyName" class="input input-bordered"
+                               placeholder="e.g., Iron Condor Weekly" required
+                               value="{{ strategy.name if strategy else '' }}">
+                    </div>
+
+                    <div class="form-control">
+                        <label class="label">
+                            <span class="label-text">Risk Profile</span>
+                        </label>
+                        <select id="riskProfile" class="select select-bordered">
+                            <option value="balanced" {% if strategy and strategy.risk_profile == 'balanced' %}selected{% endif %}>Balanced (65% margin)</option>
+                            <option value="conservative" {% if strategy and strategy.risk_profile == 'conservative' %}selected{% endif %}>Conservative (40% margin)</option>
+                            <option value="aggressive" {% if strategy and strategy.risk_profile == 'aggressive' %}selected{% endif %}>Aggressive (80% margin)</option>
+                        </select>
+                    </div>
+
+                    <div class="form-control">
+                        <label class="label">
+                            <span class="label-text">Market Condition</span>
+                        </label>
+                        <select id="marketCondition" class="select select-bordered">
+                            <option value="non_expiry" {% if strategy and strategy.market_condition == 'non_expiry' %}selected{% endif %}>Non-Expiry</option>
+                            <option value="expiry" {% if strategy and strategy.market_condition == 'expiry' %}selected{% endif %}>Expiry Day</option>
+                            <option value="any" {% if strategy and strategy.market_condition == 'any' %}selected{% endif %}>Any Day</option>
+                        </select>
+                    </div>
+
+                    <div class="form-control">
+                        <label class="label">
+                            <span class="label-text">Select Accounts</span>
+                        </label>
+                        <div class="space-y-2">
+                            {% for account in accounts %}
+                            <label class="label cursor-pointer justify-start">
+                                <input type="checkbox" class="checkbox checkbox-primary mr-3"
+                                       name="accounts" value="{{ account.id }}"
+                                       {% if strategy and strategy.selected_accounts and account.id in strategy.selected_accounts %}checked{% endif %}>
+                                <span>{{ account.account_name }} ({{ account.broker_name }})</span>
+                            </label>
+                            {% endfor %}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Strategy Legs Card -->
+        <div class="card bg-base-100 shadow-lg mb-6">
+            <div class="card-body">
+                <div class="flex justify-between items-center mb-4">
+                    <h2 class="card-title">Strategy Legs</h2>
+                    <button type="button" onclick="addLeg()" class="btn btn-primary btn-sm">
+                        <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path>
+                        </svg>
+                        Add Leg
+                    </button>
+                </div>
+
+                <div id="strategyLegs">
+                    <!-- Legs will be added dynamically -->
+                </div>
+            </div>
+        </div>
+
+        <!-- Risk Management Card -->
+        <div class="card bg-base-100 shadow-lg mb-6">
+            <div class="card-body">
+                <h2 class="card-title mb-4">Risk Management</h2>
+
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div class="form-control">
+                        <label class="label">
+                            <span class="label-text">Max Loss (₹)</span>
+                        </label>
+                        <input type="number" id="maxLoss" class="input input-bordered"
+                               placeholder="5000" value="{{ strategy.max_loss if strategy else '' }}">
+                    </div>
+
+                    <div class="form-control">
+                        <label class="label">
+                            <span class="label-text">Max Profit (₹)</span>
+                        </label>
+                        <input type="number" id="maxProfit" class="input input-bordered"
+                               placeholder="10000" value="{{ strategy.max_profit if strategy else '' }}">
+                    </div>
+
+                    <div class="form-control">
+                        <label class="label">
+                            <span class="label-text">Trailing Stop Loss (%)</span>
+                        </label>
+                        <input type="number" id="trailingSl" class="input input-bordered"
+                               placeholder="20" step="0.1" value="{{ strategy.trailing_sl if strategy else '' }}">
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Action Buttons -->
+        <div class="flex justify-end gap-3">
+            <button type="button" onclick="saveAsTemplate()" class="btn btn-ghost">Save as Template</button>
+            <button type="button" onclick="saveStrategy(false)" class="btn btn-outline btn-primary">Save Strategy</button>
+            <button type="button" onclick="saveStrategy(true)" class="btn btn-primary">Save & Execute</button>
+        </div>
+    </form>
+</div>
+
+<!-- Leg Template -->
+<template id="legTemplate">
+    <div class="leg-item border rounded-lg p-4 mb-4">
+        <div class="flex justify-between items-center mb-3">
+            <h3 class="font-semibold">Leg <span class="leg-number">1</span></h3>
+            <button type="button" onclick="removeLeg(this)" class="btn btn-ghost btn-sm">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                </svg>
+            </button>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-3">
+            <!-- Row 1: Instrument, Product Type, Expiry, Action -->
+            <div class="form-control">
+                <label class="label"><span class="label-text text-xs">1. Instrument</span></label>
+                <select class="select select-bordered select-sm leg-instrument">
+                    <option value="NIFTY">NIFTY</option>
+                    <option value="BANKNIFTY">BANKNIFTY</option>
+                    <option value="FINNIFTY">FINNIFTY</option>
+                    <option value="MIDCPNIFTY">MIDCPNIFTY</option>
+                    <option value="SENSEX">SENSEX</option>
+                </select>
+            </div>
+
+            <div class="form-control">
+                <label class="label"><span class="label-text text-xs">2. Product Type</span></label>
+                <select class="select select-bordered select-sm leg-product-type" onchange="toggleOptionFields(this)">
+                    <option value="options">Options</option>
+                    <option value="futures">Futures</option>
+                </select>
+            </div>
+
+            <div class="form-control">
+                <label class="label"><span class="label-text text-xs">3. Expiry</span></label>
+                <select class="select select-bordered select-sm leg-expiry">
+                    <option value="current_week">Current Week</option>
+                    <option value="next_week">Next Week</option>
+                    <option value="current_month">Current Month</option>
+                    <option value="next_month">Next Month</option>
+                </select>
+            </div>
+
+            <div class="form-control">
+                <label class="label"><span class="label-text text-xs">4. Action</span></label>
+                <select class="select select-bordered select-sm leg-action">
+                    <option value="BUY">BUY</option>
+                    <option value="SELL">SELL</option>
+                </select>
+            </div>
+
+            <!-- Row 2: Option Type, Strike Selection, Strike Price/Offset, Lots -->
+            <div class="form-control option-field">
+                <label class="label"><span class="label-text text-xs">5. Option Type</span></label>
+                <select class="select select-bordered select-sm leg-option-type">
+                    <option value="CE">Call (CE)</option>
+                    <option value="PE">Put (PE)</option>
+                </select>
+            </div>
+
+            <div class="form-control option-field">
+                <label class="label"><span class="label-text text-xs">6. Strike Selection</span></label>
+                <select class="select select-bordered select-sm leg-strike-selection" onchange="toggleStrikeInput(this)">
+                    <option value="ATM">ATM (At The Money)</option>
+                    <optgroup label="In The Money">
+                        <option value="ITM" data-offset="1">ITM 1</option>
+                        <option value="ITM" data-offset="2">ITM 2</option>
+                        <option value="ITM" data-offset="3">ITM 3</option>
+                        <option value="ITM" data-offset="4">ITM 4</option>
+                        <option value="ITM" data-offset="5">ITM 5</option>
+                        <option value="ITM" data-offset="10">ITM 10</option>
+                        <option value="ITM" data-offset="15">ITM 15</option>
+                        <option value="ITM" data-offset="20">ITM 20</option>
+                    </optgroup>
+                    <optgroup label="Out of The Money">
+                        <option value="OTM" data-offset="1">OTM 1</option>
+                        <option value="OTM" data-offset="2">OTM 2</option>
+                        <option value="OTM" data-offset="3">OTM 3</option>
+                        <option value="OTM" data-offset="4">OTM 4</option>
+                        <option value="OTM" data-offset="5">OTM 5</option>
+                        <option value="OTM" data-offset="10">OTM 10</option>
+                        <option value="OTM" data-offset="15">OTM 15</option>
+                        <option value="OTM" data-offset="20">OTM 20</option>
+                    </optgroup>
+                    <option value="strike_price">Specific Strike</option>
+                    <option value="premium_near">Premium Near</option>
+                </select>
+            </div>
+
+            <div class="form-control">
+                <label class="label"><span class="label-text text-xs leg-strike-label">7. Strike Value</span></label>
+                <input type="number" class="input input-bordered input-sm leg-strike-value" placeholder="Auto" disabled>
+            </div>
+
+            <div class="form-control">
+                <label class="label"><span class="label-text text-xs">8. Lots</span></label>
+                <input type="number" class="input input-bordered input-sm leg-lots" value="1" min="1">
+            </div>
+
+            <!-- Row 3: Order Type, SL%, TP% -->
+            <div class="form-control">
+                <label class="label"><span class="label-text text-xs">9. Order Type</span></label>
+                <select class="select select-bordered select-sm leg-order-type">
+                    <option value="MARKET">MARKET</option>
+                    <option value="LIMIT">LIMIT</option>
+                </select>
+            </div>
+
+            <div class="form-control">
+                <label class="label"><span class="label-text text-xs">Stop Loss (%)</span></label>
+                <input type="number" class="input input-bordered input-sm leg-sl" placeholder="%" step="0.1">
+            </div>
+
+            <div class="form-control">
+                <label class="label"><span class="label-text text-xs">Take Profit (%)</span></label>
+                <input type="number" class="input input-bordered input-sm leg-tp" placeholder="%" step="0.1">
+            </div>
+        </div>
+    </div>
+</template>
+
+<script>
+let legCount = 0;
+
+// Add a new leg
+function addLeg() {
+    const template = document.getElementById('legTemplate');
+    const clone = template.content.cloneNode(true);
+
+    legCount++;
+    clone.querySelector('.leg-number').textContent = legCount;
+
+    document.getElementById('strategyLegs').appendChild(clone);
+}
+
+// Remove a leg
+function removeLeg(button) {
+    button.closest('.leg-item').remove();
+    updateLegNumbers();
+}
+
+// Update leg numbers after removal
+function updateLegNumbers() {
+    const legs = document.querySelectorAll('.leg-item');
+    legs.forEach((leg, index) => {
+        leg.querySelector('.leg-number').textContent = index + 1;
+    });
+    legCount = legs.length;
+}
+
+// Toggle option-specific fields
+function toggleOptionFields(select) {
+    const legItem = select.closest('.leg-item');
+    const optionFields = legItem.querySelectorAll('.option-field');
+
+    if (select.value === 'futures') {
+        optionFields.forEach(field => field.style.display = 'none');
+    } else {
+        optionFields.forEach(field => field.style.display = 'block');
+    }
+}
+
+// Toggle strike input based on selection
+function toggleStrikeInput(select) {
+    const legItem = select.closest('.leg-item');
+    const input = legItem.querySelector('.leg-strike-value');
+    const label = legItem.querySelector('.leg-strike-label');
+    const selectedOption = select.options[select.selectedIndex];
+    const offset = selectedOption.dataset.offset;
+
+    if (select.value === 'strike_price') {
+        input.disabled = false;
+        input.placeholder = 'Enter strike price';
+        input.value = '';
+        label.textContent = '7. Strike Price';
+    } else if (select.value === 'premium_near') {
+        input.disabled = false;
+        input.placeholder = 'Enter target premium';
+        input.value = '';
+        label.textContent = '7. Target Premium';
+    } else if (select.value === 'ITM' || select.value === 'OTM') {
+        // For ITM/OTM options, store offset as hidden value
+        input.disabled = true;
+        input.placeholder = 'Auto-calculated';
+        input.value = offset || '0';
+        input.dataset.offset = offset || '0';
+        label.textContent = '7. Strike Offset';
+    } else {
+        // ATM
+        input.disabled = true;
+        input.placeholder = 'Auto (ATM)';
+        input.value = '';
+        label.textContent = '7. Strike Value';
+    }
+}
+
+// Save strategy
+function saveStrategy(execute = false) {
+    const legs = [];
+    document.querySelectorAll('.leg-item').forEach(legItem => {
+        const strikeSelect = legItem.querySelector('.leg-strike-selection');
+        const selectedOption = strikeSelect?.options[strikeSelect.selectedIndex];
+        const strikeValue = legItem.querySelector('.leg-strike-value').value;
+
+        // Determine strike offset for ITM/OTM selections
+        let strikeOffset = 0;
+        if (selectedOption && selectedOption.dataset.offset) {
+            strikeOffset = parseInt(selectedOption.dataset.offset) || 0;
+        }
+
+        legs.push({
+            instrument: legItem.querySelector('.leg-instrument').value,
+            product_type: legItem.querySelector('.leg-product-type').value,
+            expiry: legItem.querySelector('.leg-expiry').value,
+            action: legItem.querySelector('.leg-action').value,
+            option_type: legItem.querySelector('.leg-option-type')?.value,
+            strike_selection: strikeSelect?.value,
+            strike_price: strikeSelect?.value === 'strike_price' ? parseFloat(strikeValue) : null,
+            strike_offset: strikeOffset,
+            premium_value: strikeSelect?.value === 'premium_near' ? parseFloat(strikeValue) : null,
+            lots: parseInt(legItem.querySelector('.leg-lots').value) || 1,
+            order_type: legItem.querySelector('.leg-order-type').value,
+            stop_loss_type: 'percentage',
+            stop_loss_value: parseFloat(legItem.querySelector('.leg-sl').value) || null,
+            take_profit_type: 'percentage',
+            take_profit_value: parseFloat(legItem.querySelector('.leg-tp').value) || null
+        });
+    });
+
+    const selectedAccounts = Array.from(document.querySelectorAll('input[name="accounts"]:checked'))
+        .map(cb => parseInt(cb.value));
+
+    const strategyData = {
+        name: document.getElementById('strategyName').value,
+        risk_profile: document.getElementById('riskProfile').value,
+        market_condition: document.getElementById('marketCondition').value,
+        selected_accounts: selectedAccounts,
+        allocation_type: 'equal',
+        max_loss: parseFloat(document.getElementById('maxLoss').value) || null,
+        max_profit: parseFloat(document.getElementById('maxProfit').value) || null,
+        trailing_sl: parseFloat(document.getElementById('trailingSl').value) || null,
+        legs: legs
+    };
+
+    const url = {% if strategy %}'/strategy/builder/{{ strategy.id }}'{% else %}'/strategy/builder'{% endif %};
+
+    fetch(url, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'X-CSRFToken': document.querySelector('meta[name="csrf-token"]').content
+        },
+        body: JSON.stringify(strategyData)
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.status === 'success') {
+            showNotification('Strategy saved successfully', 'success');
+
+            if (execute) {
+                // Execute the strategy
+                fetch(`/strategy/execute/${data.strategy_id}`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRFToken': document.querySelector('meta[name="csrf-token"]').content
+                    }
+                })
+                .then(response => response.json())
+                .then(execData => {
+                    if (execData.status === 'success') {
+                        showNotification('Strategy executed successfully', 'success');
+                        setTimeout(() => window.location.href = '/strategy', 2000);
+                    }
+                });
+            } else {
+                setTimeout(() => window.location.href = '/strategy', 1500);
+            }
+        } else {
+            showNotification(data.message || 'Failed to save strategy', 'error');
+        }
+    })
+    .catch(error => {
+        showNotification('Error saving strategy', 'error');
+        console.error('Error:', error);
+    });
+}
+
+// Save as template
+function saveAsTemplate() {
+    saveStrategy(false);
+    // Additional logic to mark as template would go here
+}
+
+// Show notification
+function showNotification(message, type) {
+    const toast = document.createElement('div');
+    toast.className = `toast toast-end`;
+    toast.innerHTML = `
+        <div class="alert alert-${type === 'success' ? 'success' : 'error'}">
+            <span>${message}</span>
+        </div>
+    `;
+    document.body.appendChild(toast);
+    setTimeout(() => toast.remove(), 3000);
+}
+
+// Initialize with existing data or add first leg
+document.addEventListener('DOMContentLoaded', function() {
+    {% if strategy %}
+        // Load existing legs
+        {% for leg in strategy.legs %}
+        addLeg();
+        // Populate leg data here
+        {% endfor %}
+    {% else %}
+        // Add first leg by default
+        addLeg();
+    {% endif %}
+});
+</script>
+{% endblock %}
