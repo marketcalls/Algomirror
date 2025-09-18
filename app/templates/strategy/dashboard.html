@@ -145,6 +145,7 @@
                                     <button onclick="toggleStrategy({{ strategy.id }})" class="btn btn-ghost btn-xs">
                                         {% if strategy.is_active %}Pause{% else %}Activate{% endif %}
                                     </button>
+                                    <button onclick="deleteStrategy({{ strategy.id }})" class="btn btn-error btn-xs">Delete</button>
                                 </div>
                             </td>
                         </tr>
@@ -217,6 +218,32 @@ function toggleStrategy(strategyId) {
         showNotification('Error toggling strategy', 'error');
         console.error('Error:', error);
     });
+}
+
+// Delete Strategy
+function deleteStrategy(strategyId) {
+    if (confirm('Are you sure you want to delete this strategy? This action cannot be undone.')) {
+        fetch(`/strategy/delete/${strategyId}`, {
+            method: 'DELETE',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': document.querySelector('meta[name="csrf-token"]').content
+            }
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.status === 'success') {
+                showNotification('Strategy deleted successfully', 'success');
+                setTimeout(() => location.reload(), 1000);
+            } else {
+                showNotification(data.message || 'Failed to delete strategy', 'error');
+            }
+        })
+        .catch(error => {
+            showNotification('Error deleting strategy', 'error');
+            console.error('Error:', error);
+        });
+    }
 }
 
 // Show notification

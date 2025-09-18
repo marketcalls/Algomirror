@@ -3,7 +3,12 @@
     "allow": [
       "Bash(tree:*)",
       "Bash(findstr:*)",
-      "Bash(tasklist)"
+      "Bash(tasklist)",
+      "Bash(flask db migrate:*)",
+      "Bash(flask db:*)",
+      "Bash(python:*)",
+      "Bash(taskkill:*)",
+      "Bash(netstat:*)"
     ],
     "deny": [],
     "ask": []

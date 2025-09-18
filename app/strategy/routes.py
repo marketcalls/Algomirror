@@ -53,6 +53,15 @@ def builder(strategy_id=None):
             id=strategy_id,
             user_id=current_user.id
         ).first_or_404()
+        # Explicitly load legs for the strategy
+        strategy.legs_list = StrategyLeg.query.filter_by(
+            strategy_id=strategy.id
+        ).order_by(StrategyLeg.leg_number).all()
+        logger.info(f"Loading strategy {strategy_id} with {len(strategy.legs_list)} legs")
+
+        # Log details for debugging
+        for leg in strategy.legs_list:
+            logger.debug(f"Leg {leg.leg_number}: {leg.instrument} {leg.action} {leg.option_type}")
 
     # Get user's accounts
     accounts = TradingAccount.query.filter_by(
@@ -102,6 +111,9 @@ def builder(strategy_id=None):
                     strike_price=leg_data.get('strike_price'),
                     premium_value=leg_data.get('premium_value'),
                     order_type=leg_data.get('order_type', 'MARKET'),
+                    price_condition=leg_data.get('price_condition'),
+                    limit_price=leg_data.get('limit_price'),
+                    trigger_price=leg_data.get('trigger_price'),
                     quantity=leg_data.get('quantity'),
                     lots=leg_data.get('lots', 1),
                     stop_loss_type=leg_data.get('stop_loss_type'),
@@ -127,8 +139,14 @@ def builder(strategy_id=None):
             logger.error(f"Error saving strategy: {e}")
             return jsonify({'status': 'error', 'message': str(e)}), 400
 
+    # Pass legs as a separate variable for easier access in template
+    legs_data = []
+    if strategy and hasattr(strategy, 'legs_list'):
+        legs_data = strategy.legs_list
+
     return render_template('strategy/builder.html',
                          strategy=strategy,
+                         strategy_legs=legs_data,
                          accounts=accounts)
 
 @strategy_bp.route('/execute/<int:strategy_id>', methods=['POST'])

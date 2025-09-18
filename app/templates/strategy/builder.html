@@ -206,8 +206,20 @@
                         <option value="ITM" data-offset="3">ITM 3</option>
                         <option value="ITM" data-offset="4">ITM 4</option>
                         <option value="ITM" data-offset="5">ITM 5</option>
+                        <option value="ITM" data-offset="6">ITM 6</option>
+                        <option value="ITM" data-offset="7">ITM 7</option>
+                        <option value="ITM" data-offset="8">ITM 8</option>
+                        <option value="ITM" data-offset="9">ITM 9</option>
                         <option value="ITM" data-offset="10">ITM 10</option>
+                        <option value="ITM" data-offset="11">ITM 11</option>
+                        <option value="ITM" data-offset="12">ITM 12</option>
+                        <option value="ITM" data-offset="13">ITM 13</option>
+                        <option value="ITM" data-offset="14">ITM 14</option>
                         <option value="ITM" data-offset="15">ITM 15</option>
+                        <option value="ITM" data-offset="16">ITM 16</option>
+                        <option value="ITM" data-offset="17">ITM 17</option>
+                        <option value="ITM" data-offset="18">ITM 18</option>
+                        <option value="ITM" data-offset="19">ITM 19</option>
                         <option value="ITM" data-offset="20">ITM 20</option>
                     </optgroup>
                     <optgroup label="Out of The Money">
@@ -216,8 +228,20 @@
                         <option value="OTM" data-offset="3">OTM 3</option>
                         <option value="OTM" data-offset="4">OTM 4</option>
                         <option value="OTM" data-offset="5">OTM 5</option>
+                        <option value="OTM" data-offset="6">OTM 6</option>
+                        <option value="OTM" data-offset="7">OTM 7</option>
+                        <option value="OTM" data-offset="8">OTM 8</option>
+                        <option value="OTM" data-offset="9">OTM 9</option>
                         <option value="OTM" data-offset="10">OTM 10</option>
+                        <option value="OTM" data-offset="11">OTM 11</option>
+                        <option value="OTM" data-offset="12">OTM 12</option>
+                        <option value="OTM" data-offset="13">OTM 13</option>
+                        <option value="OTM" data-offset="14">OTM 14</option>
                         <option value="OTM" data-offset="15">OTM 15</option>
+                        <option value="OTM" data-offset="16">OTM 16</option>
+                        <option value="OTM" data-offset="17">OTM 17</option>
+                        <option value="OTM" data-offset="18">OTM 18</option>
+                        <option value="OTM" data-offset="19">OTM 19</option>
                         <option value="OTM" data-offset="20">OTM 20</option>
                     </optgroup>
                     <option value="strike_price">Specific Strike</option>
@@ -235,15 +259,36 @@
                 <input type="number" class="input input-bordered input-sm leg-lots" value="1" min="1">
             </div>
 
-            <!-- Row 3: Order Type, SL%, TP% -->
+            <!-- Row 3: Order Type, Price Condition, Limit Price, Trigger Price -->
             <div class="form-control">
                 <label class="label"><span class="label-text text-xs">9. Order Type</span></label>
-                <select class="select select-bordered select-sm leg-order-type">
+                <select class="select select-bordered select-sm leg-order-type" onchange="togglePriceFields(this)">
                     <option value="MARKET">MARKET</option>
                     <option value="LIMIT">LIMIT</option>
+                    <option value="SL-MKT">SL-MKT</option>
+                    <option value="SL-LMT">SL-LMT</option>
                 </select>
             </div>
 
+            <div class="form-control price-condition-field" style="display:none;">
+                <label class="label"><span class="label-text text-xs">Price Condition</span></label>
+                <select class="select select-bordered select-sm leg-price-condition">
+                    <option value="ABOVE">ABOVE</option>
+                    <option value="BELOW">BELOW</option>
+                </select>
+            </div>
+
+            <div class="form-control limit-price-field" style="display:none;">
+                <label class="label"><span class="label-text text-xs">Limit Price</span></label>
+                <input type="number" class="input input-bordered input-sm leg-limit-price" placeholder="0.00" step="0.05">
+            </div>
+
+            <div class="form-control trigger-price-field" style="display:none;">
+                <label class="label"><span class="label-text text-xs">Trigger Price</span></label>
+                <input type="number" class="input input-bordered input-sm leg-trigger-price" placeholder="0.00" step="0.05">
+            </div>
+
+            <!-- Row 4: SL%, TP% -->
             <div class="form-control">
                 <label class="label"><span class="label-text text-xs">Stop Loss (%)</span></label>
                 <input type="number" class="input input-bordered input-sm leg-sl" placeholder="%" step="0.1">
@@ -298,6 +343,31 @@ function toggleOptionFields(select) {
     }
 }
 
+// Toggle price fields based on order type
+function togglePriceFields(selectElement) {
+    const legItem = selectElement.closest('.leg-item');
+    const orderType = selectElement.value;
+    const priceConditionField = legItem.querySelector('.price-condition-field');
+    const limitPriceField = legItem.querySelector('.limit-price-field');
+    const triggerPriceField = legItem.querySelector('.trigger-price-field');
+
+    // Hide all by default
+    if (priceConditionField) priceConditionField.style.display = 'none';
+    if (limitPriceField) limitPriceField.style.display = 'none';
+    if (triggerPriceField) triggerPriceField.style.display = 'none';
+
+    // Show relevant fields based on order type
+    if (orderType === 'LIMIT') {
+        if (priceConditionField) priceConditionField.style.display = 'block';
+        if (limitPriceField) limitPriceField.style.display = 'block';
+    } else if (orderType === 'SL-MKT') {
+        if (triggerPriceField) triggerPriceField.style.display = 'block';
+    } else if (orderType === 'SL-LMT') {
+        if (limitPriceField) limitPriceField.style.display = 'block';
+        if (triggerPriceField) triggerPriceField.style.display = 'block';
+    }
+}
+
 // Toggle strike input based on selection
 function toggleStrikeInput(select) {
     const legItem = select.closest('.leg-item');
@@ -346,8 +416,22 @@ function saveStrategy(execute = false) {
             strikeOffset = parseInt(selectedOption.dataset.offset) || 0;
         }
 
+        const orderType = legItem.querySelector('.leg-order-type').value;
+        const priceCondition = legItem.querySelector('.leg-price-condition')?.value;
+        const limitPrice = legItem.querySelector('.leg-limit-price')?.value;
+        const triggerPrice = legItem.querySelector('.leg-trigger-price')?.value;
+        const lots = parseInt(legItem.querySelector('.leg-lots').value) || 1;
+
+        // Calculate quantity based on instrument and lots
+        let lotSize = 15; // Default for NIFTY
+        const instrument = legItem.querySelector('.leg-instrument').value;
+        if (instrument === 'BANKNIFTY') lotSize = 15;
+        else if (instrument === 'FINNIFTY') lotSize = 25;
+        else if (instrument === 'MIDCPNIFTY') lotSize = 50;
+        else if (instrument === 'SENSEX') lotSize = 10;
+
         legs.push({
-            instrument: legItem.querySelector('.leg-instrument').value,
+            instrument: instrument,
             product_type: legItem.querySelector('.leg-product-type').value,
             expiry: legItem.querySelector('.leg-expiry').value,
             action: legItem.querySelector('.leg-action').value,
@@ -356,8 +440,12 @@ function saveStrategy(execute = false) {
             strike_price: strikeSelect?.value === 'strike_price' ? parseFloat(strikeValue) : null,
             strike_offset: strikeOffset,
             premium_value: strikeSelect?.value === 'premium_near' ? parseFloat(strikeValue) : null,
-            lots: parseInt(legItem.querySelector('.leg-lots').value) || 1,
-            order_type: legItem.querySelector('.leg-order-type').value,
+            lots: lots,
+            quantity: lots * lotSize,  // Add quantity field
+            order_type: orderType,
+            price_condition: orderType === 'LIMIT' ? priceCondition : null,
+            limit_price: limitPrice ? parseFloat(limitPrice) : null,
+            trigger_price: triggerPrice ? parseFloat(triggerPrice) : null,
             stop_loss_type: 'percentage',
             stop_loss_value: parseFloat(legItem.querySelector('.leg-sl').value) || null,
             take_profit_type: 'percentage',
@@ -445,11 +533,87 @@ function showNotification(message, type) {
 
 // Initialize with existing data or add first leg
 document.addEventListener('DOMContentLoaded', function() {
+    console.log('Strategy object:', {{ 'true' if strategy else 'false' }});
     {% if strategy %}
+        console.log('Strategy ID: {{ strategy.id }}');
+    {% endif %}
+    console.log('Strategy legs:', {{ strategy_legs|length if strategy_legs else 0 }});
+
+    {% if strategy_legs and strategy_legs|length > 0 %}
+        console.log('Loading {{ strategy_legs|length }} existing legs for strategy');
         // Load existing legs
-        {% for leg in strategy.legs %}
-        addLeg();
-        // Populate leg data here
+        {% for leg in strategy_legs %}
+        {
+            console.log('Loading leg {{ loop.index }}: {{ leg.instrument }} {{ leg.action }}');
+            addLeg();
+            const legItem = document.querySelectorAll('.leg-item')[{{ loop.index0 }}];
+
+            // Populate basic fields
+            legItem.querySelector('.leg-instrument').value = '{{ leg.instrument }}';
+            legItem.querySelector('.leg-product-type').value = '{{ leg.product_type }}';
+            legItem.querySelector('.leg-expiry').value = '{{ leg.expiry }}';
+            legItem.querySelector('.leg-action').value = '{{ leg.action }}';
+            legItem.querySelector('.leg-lots').value = {{ leg.lots or 1 }};
+            legItem.querySelector('.leg-order-type').value = '{{ leg.order_type or "MARKET" }}';
+
+            // Populate option fields if options
+            {% if leg.product_type == 'options' %}
+            legItem.querySelector('.leg-option-type').value = '{{ leg.option_type or "" }}';
+            legItem.querySelector('.leg-strike-selection').value = '{{ leg.strike_selection or "ATM" }}';
+
+            // Set strike value based on selection
+            {% if leg.strike_selection == 'strike_price' %}
+            legItem.querySelector('.leg-strike-value').value = {{ leg.strike_price if leg.strike_price else '""' }};
+            legItem.querySelector('.leg-strike-value').disabled = false;
+            {% elif leg.strike_selection == 'premium_near' %}
+            legItem.querySelector('.leg-strike-value').value = {{ leg.premium_value if leg.premium_value else '""' }};
+            legItem.querySelector('.leg-strike-value').disabled = false;
+            {% elif leg.strike_selection in ['ITM', 'OTM'] %}
+            legItem.querySelector('.leg-strike-value').dataset.offset = '{{ leg.strike_offset or 0 }}';
+            // Find and select the correct ITM/OTM option with offset
+            const strikeSelect = legItem.querySelector('.leg-strike-selection');
+            for (let option of strikeSelect.options) {
+                if (option.value === '{{ leg.strike_selection }}' && option.dataset.offset === '{{ leg.strike_offset }}') {
+                    strikeSelect.value = option.value;
+                    option.selected = true;
+                    break;
+                }
+            }
+            {% endif %}
+            {% endif %}
+
+            // Populate price fields based on order type
+            {% if leg.order_type == 'LIMIT' %}
+            togglePriceFields(legItem.querySelector('.leg-order-type'));
+            {% if leg.price_condition %}
+            legItem.querySelector('.leg-price-condition').value = '{{ leg.price_condition }}';
+            {% endif %}
+            {% if leg.limit_price %}
+            legItem.querySelector('.leg-limit-price').value = {{ leg.limit_price }};
+            {% endif %}
+            {% elif leg.order_type in ['SL-MKT', 'SL-LMT'] %}
+            togglePriceFields(legItem.querySelector('.leg-order-type'));
+            {% if leg.trigger_price %}
+            legItem.querySelector('.leg-trigger-price').value = {{ leg.trigger_price }};
+            {% endif %}
+            {% if leg.order_type == 'SL-LMT' and leg.limit_price %}
+            legItem.querySelector('.leg-limit-price').value = {{ leg.limit_price }};
+            {% endif %}
+            {% endif %}
+
+            // Populate stop loss and take profit
+            {% if leg.stop_loss_value %}
+            legItem.querySelector('.leg-sl').value = {{ leg.stop_loss_value }};
+            {% endif %}
+            {% if leg.take_profit_value %}
+            legItem.querySelector('.leg-tp').value = {{ leg.take_profit_value }};
+            {% endif %}
+
+            // Toggle option fields if futures
+            {% if leg.product_type == 'futures' %}
+            toggleOptionFields(legItem.querySelector('.leg-product-type'));
+            {% endif %}
+        }
         {% endfor %}
     {% else %}
         // Add first leg by default

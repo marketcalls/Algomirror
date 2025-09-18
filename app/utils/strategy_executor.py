@@ -135,20 +135,55 @@ class StrategyExecutor:
                 host=host_url
             )
 
-            # Prepare order parameters
+            # Prepare order parameters based on order type and price condition
             order_params = {
                 'strategy': f"Strategy_{self.strategy.id}",
                 'symbol': symbol,
                 'action': leg.action,
                 'exchange': exchange,
-                'price_type': leg.order_type,
                 'product': 'MIS',  # Default to MIS for intraday
                 'quantity': quantity
             }
 
-            # Add price for limit orders
-            if leg.order_type == 'LIMIT' and leg.strike_price:
-                order_params['price'] = leg.strike_price
+            # Handle different order types
+            if leg.order_type == 'MARKET':
+                order_params['price_type'] = 'MARKET'
+
+            elif leg.order_type == 'LIMIT':
+                # For LIMIT orders with ABOVE/BELOW condition, determine actual order type
+                if leg.price_condition == 'ABOVE':
+                    # If price crosses ABOVE, use SL-MKT for BUY, LIMIT for SELL
+                    if leg.action == 'BUY':
+                        order_params['price_type'] = 'SL-MKT'
+                        order_params['trigger_price'] = leg.trigger_price if leg.trigger_price else leg.limit_price
+                    else:  # SELL
+                        order_params['price_type'] = 'LIMIT'
+                        order_params['price'] = leg.limit_price
+                elif leg.price_condition == 'BELOW':
+                    # If price crosses BELOW, use LIMIT for BUY, SL-MKT for SELL
+                    if leg.action == 'BUY':
+                        order_params['price_type'] = 'LIMIT'
+                        order_params['price'] = leg.limit_price
+                    else:  # SELL
+                        order_params['price_type'] = 'SL-MKT'
+                        order_params['trigger_price'] = leg.trigger_price if leg.trigger_price else leg.limit_price
+                else:
+                    # Default LIMIT order without condition
+                    order_params['price_type'] = 'LIMIT'
+                    if leg.limit_price:
+                        order_params['price'] = leg.limit_price
+
+            elif leg.order_type == 'SL-MKT':
+                order_params['price_type'] = 'SL-MKT'
+                if leg.trigger_price:
+                    order_params['trigger_price'] = leg.trigger_price
+
+            elif leg.order_type == 'SL-LMT':
+                order_params['price_type'] = 'SL-LMT'
+                if leg.limit_price:
+                    order_params['price'] = leg.limit_price
+                if leg.trigger_price:
+                    order_params['trigger_price'] = leg.trigger_price
 
             logger.debug(f"Order params: {order_params}")
 

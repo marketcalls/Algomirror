@@ -306,7 +306,10 @@ class StrategyLeg(db.Model):
     premium_value = db.Column(db.Float)
 
     # Order details
-    order_type = db.Column(db.String(20))  # 'MARKET', 'LIMIT'
+    order_type = db.Column(db.String(20))  # 'MARKET', 'LIMIT', 'SL-MKT', 'SL-LMT'
+    limit_price = db.Column(db.Float)  # Price for LIMIT orders
+    trigger_price = db.Column(db.Float)  # Trigger price for stop orders
+    price_condition = db.Column(db.String(10))  # 'ABOVE' or 'BELOW' for LIMIT orders
     quantity = db.Column(db.Integer)
     lots = db.Column(db.Integer, default=1)
 
