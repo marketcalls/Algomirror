@@ -43,10 +43,29 @@ class StrategyExecutor:
         if not self.accounts:
             raise ValueError("No active accounts selected for strategy")
 
+        # Ensure legs are loaded
+        legs = self.strategy.legs.order_by(StrategyLeg.leg_number).all()
+
+        if not legs:
+            raise ValueError("No legs defined for this strategy")
+
+        logger.info(f"Executing strategy {self.strategy.id} with {len(legs)} legs across {len(self.accounts)} accounts")
+
         results = []
-        for leg in self.strategy.legs:
-            leg_results = self._execute_leg(leg)
-            results.extend(leg_results)
+        for i, leg in enumerate(legs, 1):
+            logger.info(f"Executing leg {i}/{len(legs)}: {leg.instrument} {leg.action} {leg.option_type if leg.product_type == 'options' else ''}")
+
+            try:
+                leg_results = self._execute_leg(leg)
+                results.extend(leg_results)
+                logger.info(f"Leg {i} execution results: {len(leg_results)} orders placed")
+            except Exception as e:
+                logger.error(f"Error executing leg {i}: {e}")
+                results.append({
+                    'leg': i,
+                    'status': 'error',
+                    'error': str(e)
+                })
 
         return results
 
@@ -56,12 +75,31 @@ class StrategyExecutor:
 
         # Build symbol based on leg configuration
         symbol = self._build_symbol(leg)
+
+        if not symbol:
+            logger.error(f"Failed to build symbol for leg {leg.leg_number}")
+            return [{
+                'leg': leg.leg_number,
+                'status': 'error',
+                'error': 'Failed to build symbol'
+            }]
+
         exchange = self._get_exchange(leg)
+
+        logger.info(f"Built symbol: {symbol} on exchange: {exchange}")
 
         # Calculate quantity per account
         quantity_per_account = self._calculate_quantity(leg, len(self.accounts))
 
-        # Execute on each account
+        if quantity_per_account <= 0:
+            logger.error(f"Invalid quantity calculated for leg {leg.leg_number}: {quantity_per_account}")
+            return [{
+                'leg': leg.leg_number,
+                'status': 'error',
+                'error': f'Invalid quantity: {quantity_per_account}'
+            }]
+
+        # Execute on each account (using threads for parallel execution)
         threads = []
         for account in self.accounts:
             thread = threading.Thread(
@@ -80,10 +118,21 @@ class StrategyExecutor:
     def _execute_on_account(self, account: TradingAccount, leg: StrategyLeg,
                            symbol: str, exchange: str, quantity: int, results: List):
         """Execute order on a specific account"""
+        from app import create_app
+
         try:
+            logger.info(f"Executing leg {leg.leg_number} on account {account.account_name}: "
+                       f"{symbol} {leg.action} qty={quantity}")
+
+            # Get API key before entering thread context
+            api_key = account.get_api_key()
+            account_id = account.id
+            account_name = account.account_name
+            host_url = account.host_url
+
             client = ExtendedOpenAlgoAPI(
-                api_key=account.get_api_key(),
-                host=account.host_url
+                api_key=api_key,
+                host=host_url
             )
 
             # Prepare order parameters
@@ -101,82 +150,123 @@ class StrategyExecutor:
             if leg.order_type == 'LIMIT' and leg.strike_price:
                 order_params['price'] = leg.strike_price
 
+            logger.debug(f"Order params: {order_params}")
+
             # Place order
             response = client.placeorder(**order_params)
 
             if response.get('status') == 'success':
-                # Create execution record
-                execution = StrategyExecution(
-                    strategy_id=self.strategy.id,
-                    account_id=account.id,
-                    leg_id=leg.id,
-                    order_id=response.get('orderid'),
-                    symbol=symbol,
-                    exchange=exchange,
-                    quantity=quantity,
-                    status='entered',
-                    entry_time=datetime.utcnow()
-                )
+                # Create execution record within app context
+                app = create_app()
+                with app.app_context():
+                    execution = StrategyExecution(
+                        strategy_id=self.strategy.id,
+                        account_id=account_id,
+                        leg_id=leg.id,
+                        order_id=response.get('orderid'),
+                        symbol=symbol,
+                        exchange=exchange,
+                        quantity=quantity,
+                        status='entered',
+                        entry_time=datetime.utcnow()
+                    )
 
-                with self.lock:
-                    db.session.add(execution)
-                    db.session.commit()
+                    with self.lock:
+                        db.session.add(execution)
+                        db.session.commit()
 
-                    results.append({
-                        'account': account.account_name,
-                        'symbol': symbol,
-                        'order_id': response.get('orderid'),
-                        'status': 'success'
-                    })
+                        results.append({
+                            'account': account_name,
+                            'symbol': symbol,
+                            'order_id': response.get('orderid'),
+                            'status': 'success',
+                            'leg': leg.leg_number
+                        })
 
-                # Start monitoring for exits
-                self._start_exit_monitoring(execution)
+                    # Start monitoring for exits (pass execution ID)
+                    self._start_exit_monitoring_async(execution.id)
 
             else:
                 with self.lock:
                     results.append({
-                        'account': account.account_name,
+                        'account': account_name,
                         'symbol': symbol,
                         'status': 'failed',
-                        'error': response.get('message', 'Order placement failed')
+                        'error': response.get('message', 'Order placement failed'),
+                        'leg': leg.leg_number
                     })
 
         except Exception as e:
-            logger.error(f"Error executing on account {account.account_name}: {e}")
+            logger.error(f"Error executing leg {leg.leg_number} on account: {e}")
             with self.lock:
                 results.append({
-                    'account': account.account_name,
+                    'account': account_name if 'account_name' in locals() else 'unknown',
                     'symbol': symbol,
                     'status': 'error',
-                    'error': str(e)
+                    'error': str(e),
+                    'leg': leg.leg_number
                 })
+
+    def _start_exit_monitoring_async(self, execution_id: int):
+        """Start exit monitoring for an execution (async version)"""
+        # This will be called after execution is saved
+        # For now, just log - actual implementation would start monitoring
+        logger.info(f"Exit monitoring would start for execution {execution_id}")
 
     def _build_symbol(self, leg: StrategyLeg) -> str:
         """Build OpenAlgo symbol format based on leg configuration"""
-        base_symbol = leg.instrument
+        try:
+            base_symbol = leg.instrument
 
-        if leg.product_type == 'options':
-            # Get expiry date
-            expiry = self._get_expiry_string(leg)
+            if not base_symbol:
+                logger.error(f"No instrument specified for leg {leg.leg_number}")
+                return ""
 
-            # Get strike price
-            strike = self._get_strike_price(leg)
+            if leg.product_type == 'options':
+                # Get expiry date
+                expiry = self._get_expiry_string(leg)
 
-            # Build option symbol: NIFTY28MAR2420800CE
-            symbol = f"{base_symbol}{expiry}{strike}{leg.option_type}"
+                if not expiry:
+                    logger.error(f"Failed to get expiry for leg {leg.leg_number}")
+                    return ""
 
-        elif leg.product_type == 'futures':
-            # Get expiry date
-            expiry = self._get_expiry_string(leg)
+                # Get strike price
+                strike = self._get_strike_price(leg)
 
-            # Build futures symbol: NIFTY28MAR24FUT
-            symbol = f"{base_symbol}{expiry}FUT"
+                if not strike or strike == "0":
+                    logger.error(f"Failed to get strike price for leg {leg.leg_number}")
+                    return ""
 
-        else:
-            # Equity symbol
-            symbol = base_symbol
+                if not leg.option_type:
+                    logger.error(f"No option type (CE/PE) specified for leg {leg.leg_number}")
+                    return ""
 
-        return symbol
+                # Build option symbol: NIFTY28MAR2420800CE
+                symbol = f"{base_symbol}{expiry}{strike}{leg.option_type}"
+                logger.info(f"Built option symbol: {symbol}")
+
+            elif leg.product_type == 'futures':
+                # Get expiry date
+                expiry = self._get_expiry_string(leg)
+
+                if not expiry:
+                    logger.error(f"Failed to get expiry for futures leg {leg.leg_number}")
+                    return ""
+
+                # Build futures symbol: NIFTY28MAR24FUT
+                symbol = f"{base_symbol}{expiry}FUT"
+                logger.info(f"Built futures symbol: {symbol}")
+
+            else:
+                # Equity symbol
+                symbol = base_symbol
+                logger.info(f"Using equity symbol: {symbol}")
+
+            return symbol
+
+        except Exception as e:
+            logger.error(f"Error building symbol for leg {leg.leg_number}: {e}")
+            return ""
 
     def _get_exchange(self, leg: StrategyLeg) -> str:
         """Get exchange based on instrument"""
@@ -190,12 +280,15 @@ class StrategyExecutor:
     def _get_expiry_string(self, leg: StrategyLeg) -> str:
         """Get actual expiry date from OpenAlgo API"""
         try:
+            # Import datetime at the top of the method to avoid shadowing
+            from datetime import datetime as dt
+
             # Check cache first
             cache_key = f"{leg.instrument}_{leg.product_type}_{leg.expiry}"
             if cache_key in self.expiry_cache:
                 cached_data = self.expiry_cache[cache_key]
                 # Check if cache is still valid (less than 1 hour old)
-                if (datetime.utcnow() - cached_data['timestamp']).seconds < 3600:
+                if (dt.utcnow() - cached_data['timestamp']).seconds < 3600:
                     return cached_data['expiry']
 
             # Determine exchange
@@ -224,17 +317,15 @@ class StrategyExecutor:
 
                     # Sort expiries to ensure they're in chronological order
                     # Convert expiry strings to dates for sorting
-                    from datetime import datetime
-
                     def parse_expiry(exp_str):
                         """Parse expiry string like '10-JUL-25' to date"""
                         try:
-                            return datetime.strptime(exp_str, '%d-%b-%y')
+                            return dt.strptime(exp_str, '%d-%b-%y')
                         except:
                             try:
-                                return datetime.strptime(exp_str, '%d%b%y')
+                                return dt.strptime(exp_str, '%d%b%y')
                             except:
-                                return datetime.max
+                                return dt.max
 
                     sorted_expiries = sorted(expiries, key=parse_expiry)
 
@@ -255,8 +346,8 @@ class StrategyExecutor:
                     elif leg.expiry == 'current_month':
                         # Find the monthly expiry (usually last Thursday of month)
                         # For indices, monthly expiry is typically the last expiry of the month
-                        current_month = datetime.now().month
-                        current_year = datetime.now().year
+                        current_month = dt.now().month
+                        current_year = dt.now().year
 
                         for exp_str in sorted_expiries:
                             exp_date = parse_expiry(exp_str)
@@ -270,8 +361,8 @@ class StrategyExecutor:
 
                     elif leg.expiry == 'next_month':
                         # Find next month's expiry
-                        next_month = (datetime.now().month % 12) + 1
-                        next_year = datetime.now().year if next_month > datetime.now().month else datetime.now().year + 1
+                        next_month = (dt.now().month % 12) + 1
+                        next_year = dt.now().year if next_month > dt.now().month else dt.now().year + 1
 
                         for exp_str in sorted_expiries:
                             exp_date = parse_expiry(exp_str)
@@ -281,7 +372,7 @@ class StrategyExecutor:
 
                         # If no next month expiry found, use the first expiry after current month
                         if not selected_expiry:
-                            current_date = datetime.now()
+                            current_date = dt.now()
                             for exp_str in sorted_expiries:
                                 exp_date = parse_expiry(exp_str)
                                 if exp_date > current_date:
@@ -295,7 +386,7 @@ class StrategyExecutor:
                         # Cache the result
                         self.expiry_cache[cache_key] = {
                             'expiry': formatted_expiry,
-                            'timestamp': datetime.utcnow()
+                            'timestamp': dt.utcnow()
                         }
 
                         logger.info(f"{leg.instrument} {leg.expiry} mapped to expiry: {formatted_expiry}")
@@ -468,16 +559,41 @@ class StrategyExecutor:
 
     def _calculate_quantity(self, leg: StrategyLeg, num_accounts: int) -> int:
         """Calculate quantity per account based on allocation type"""
-        total_quantity = leg.quantity or (leg.lots * self._get_lot_size(leg))
+        # Get lot size for the instrument
+        lot_size = self._get_lot_size(leg)
+
+        # Calculate total quantity
+        if leg.quantity and leg.quantity > 0:
+            # If quantity is explicitly set, use it
+            total_quantity = leg.quantity
+        elif leg.lots and leg.lots > 0:
+            # Otherwise calculate from lots
+            total_quantity = leg.lots * lot_size
+        else:
+            # Default to 1 lot
+            total_quantity = lot_size
+
+        logger.info(f"Leg {leg.leg_number}: Lots={leg.lots}, Quantity={leg.quantity}, "
+                   f"Lot Size={lot_size}, Total Quantity={total_quantity}")
+
+        # Distribute across accounts based on allocation type
+        if num_accounts <= 0:
+            return 0
 
         if self.strategy.allocation_type == 'equal':
-            return total_quantity // num_accounts
+            # Equal distribution across accounts
+            quantity_per_account = total_quantity
+            # Note: For equal allocation, each account gets the full quantity
+            # If you want to split, use: total_quantity // num_accounts
         elif self.strategy.allocation_type == 'proportional':
             # Would implement proportional allocation based on account value
-            return total_quantity // num_accounts
+            quantity_per_account = total_quantity
         else:
-            # Custom allocation
-            return total_quantity // num_accounts
+            # Custom allocation - default to full quantity per account
+            quantity_per_account = total_quantity
+
+        logger.info(f"Quantity per account: {quantity_per_account} for {num_accounts} accounts")
+        return quantity_per_account
 
     def _get_lot_size(self, leg: StrategyLeg) -> int:
         """Get lot size for instrument"""

@@ -148,16 +148,43 @@ def execute_strategy(strategy_id):
                 'message': 'Strategy is not active'
             }), 400
 
+        # Check if strategy has legs
+        leg_count = strategy.legs.count()
+        if leg_count == 0:
+            return jsonify({
+                'status': 'error',
+                'message': 'Strategy has no legs defined'
+            }), 400
+
+        # Check if accounts are selected
+        if not strategy.selected_accounts:
+            return jsonify({
+                'status': 'error',
+                'message': 'No accounts selected for strategy'
+            }), 400
+
+        logger.info(f"Executing strategy {strategy_id} ({strategy.name}) with {leg_count} legs")
+
         # Initialize strategy executor
         executor = StrategyExecutor(strategy)
 
         # Execute strategy
         results = executor.execute()
 
+        # Count successful and failed executions
+        successful = sum(1 for r in results if r.get('status') == 'success')
+        failed = sum(1 for r in results if r.get('status') in ['failed', 'error'])
+
         return jsonify({
             'status': 'success',
-            'message': 'Strategy executed',
-            'results': results
+            'message': f'Strategy executed: {successful} successful, {failed} failed',
+            'results': results,
+            'summary': {
+                'total_legs': leg_count,
+                'accounts': len(strategy.selected_accounts),
+                'successful_orders': successful,
+                'failed_orders': failed
+            }
         })
 
     except Exception as e:
