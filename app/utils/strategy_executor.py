@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 class StrategyExecutor:
     """Execute trading strategies across multiple accounts"""
 
-    def __init__(self, strategy: Strategy):
+    def __init__(self, strategy: Strategy, use_margin_calculator: bool = True, trade_quality: str = 'B'):
         self.strategy = strategy
         self.accounts = self._get_active_accounts()
         self.execution_results = []
@@ -29,6 +29,14 @@ class StrategyExecutor:
         self.price_subscriptions = {}  # Map symbol to WebSocket subscription
         self.latest_prices = {}  # Cache latest prices from WebSocket
         self.expiry_cache = {}  # Cache expiry dates to reduce API calls
+        self.use_margin_calculator = use_margin_calculator
+        self.trade_quality = trade_quality
+        self.margin_calculator = None
+        self.account_margins = {}  # Track available margin per account
+
+        if use_margin_calculator:
+            from app.utils.margin_calculator import MarginCalculator
+            self.margin_calculator = MarginCalculator(strategy.user_id)
 
     def _get_active_accounts(self) -> List[TradingAccount]:
         """Get active trading accounts for strategy"""
@@ -95,23 +103,39 @@ class StrategyExecutor:
 
         logger.info(f"Built symbol: {symbol} on exchange: {exchange}")
 
-        # Calculate quantity per account
-        quantity_per_account = self._calculate_quantity(leg, len(self.accounts))
+        # Calculate quantity per account (will be calculated per account if margin calculator is enabled)
+        base_quantity = self._calculate_quantity(leg, len(self.accounts))
 
-        if quantity_per_account <= 0:
-            logger.error(f"Invalid quantity calculated for leg {leg.leg_number}: {quantity_per_account}")
+        if base_quantity <= 0 and not self.use_margin_calculator:
+            logger.error(f"Invalid quantity calculated for leg {leg.leg_number}: {base_quantity}")
             return [{
                 'leg': leg.leg_number,
                 'status': 'error',
-                'error': f'Invalid quantity: {quantity_per_account}'
+                'error': f'Invalid quantity: {base_quantity}'
             }]
 
         # Execute on each account (using threads for parallel execution)
         threads = []
         for account in self.accounts:
+            # Calculate quantity for this specific account if using margin calculator
+            if self.use_margin_calculator:
+                quantity = self._calculate_quantity(leg, 1, account)
+                if quantity <= 0:
+                    logger.warning(f"Skipping {account.account_name} - insufficient margin for {leg.instrument}")
+                    results.append({
+                        'account': account.account_name,
+                        'symbol': symbol,
+                        'status': 'skipped',
+                        'error': 'Insufficient margin',
+                        'leg': leg.leg_number
+                    })
+                    continue
+            else:
+                quantity = base_quantity
+
             thread = threading.Thread(
                 target=self._execute_on_account,
-                args=(account, leg, symbol, exchange, quantity_per_account, results)
+                args=(account, leg, symbol, exchange, quantity, results)
             )
             thread.start()
             threads.append(thread)
@@ -623,12 +647,49 @@ class StrategyExecutor:
             logger.error(f"Error finding strike by premium: {e}")
             return str(atm_strike)
 
-    def _calculate_quantity(self, leg: StrategyLeg, num_accounts: int) -> int:
-        """Calculate quantity per account based on allocation type"""
+    def _calculate_quantity(self, leg: StrategyLeg, num_accounts: int, account: TradingAccount = None) -> int:
+        """Calculate quantity per account based on allocation type and available margin"""
         # Get lot size for the instrument
         lot_size = self._get_lot_size(leg)
 
-        # Calculate total quantity
+        # If margin calculator is enabled and account provided, calculate based on margin
+        if self.use_margin_calculator and self.margin_calculator and account:
+            # Determine trade type for margin calculation
+            trade_type = self._get_trade_type_for_margin(leg)
+
+            # Get available margin for the account
+            if account.id not in self.account_margins:
+                self.account_margins[account.id] = self.margin_calculator.get_available_margin(account)
+
+            available_margin = self.account_margins[account.id]
+
+            # Calculate optimal lot size based on margin
+            optimal_lots, details = self.margin_calculator.calculate_lot_size(
+                account=account,
+                instrument=leg.instrument,
+                trade_type=trade_type,
+                quality_grade=self.trade_quality,
+                available_margin=available_margin
+            )
+
+            if optimal_lots > 0:
+                # Update remaining margin for next trades
+                margin_used = optimal_lots * details.get('margin_per_lot', 0)
+                self.account_margins[account.id] -= margin_used
+
+                # Convert lots to quantity
+                total_quantity = optimal_lots * lot_size
+
+                logger.info(f"Margin-based calculation for {account.account_name}: "
+                           f"{optimal_lots} lots = {total_quantity} qty "
+                           f"(Margin: {available_margin:.2f} -> {self.account_margins[account.id]:.2f})")
+
+                return total_quantity
+            else:
+                logger.warning(f"Insufficient margin for {leg.instrument} on {account.account_name}")
+                return 0
+
+        # Fallback to original calculation if margin calculator not used
         if leg.quantity and leg.quantity > 0:
             # If quantity is explicitly set, use it
             total_quantity = leg.quantity
@@ -660,6 +721,34 @@ class StrategyExecutor:
 
         logger.info(f"Quantity per account: {quantity_per_account} for {num_accounts} accounts")
         return quantity_per_account
+
+    def _get_trade_type_for_margin(self, leg: StrategyLeg) -> str:
+        """Determine trade type for margin calculation"""
+        if leg.product_type == 'options':
+            if leg.action == 'SELL':
+                # Check if it's part of a spread (both CE and PE)
+                is_spread = self._is_spread_strategy(leg)
+                return 'sell_c_and_p' if is_spread else 'sell_c_p'
+            else:
+                return 'buy'
+        elif leg.product_type == 'futures':
+            return 'futures'
+        else:
+            return 'buy'
+
+    def _is_spread_strategy(self, current_leg: StrategyLeg) -> bool:
+        """Check if current leg is part of a spread strategy"""
+        all_legs = self.strategy.legs.all()
+        for other_leg in all_legs:
+            if (other_leg.instrument == current_leg.instrument and
+                other_leg.product_type == 'options' and
+                other_leg.action == 'SELL' and
+                other_leg.id != current_leg.id):
+                # Check if one is CE and other is PE
+                if ((current_leg.option_type == 'CE' and other_leg.option_type == 'PE') or
+                    (current_leg.option_type == 'PE' and other_leg.option_type == 'CE')):
+                    return True
+        return False
 
     def _get_lot_size(self, leg: StrategyLeg) -> int:
         """Get lot size for instrument from database"""

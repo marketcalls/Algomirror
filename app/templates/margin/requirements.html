@@ -1,0 +1,533 @@
+{% extends "layout.html" %}
+
+{% block title %}Margin Requirements - AlgoMirror{% endblock %}
+
+{% block head %}
+<style>
+    .requirement-section {
+        transition: opacity 0.3s ease-in-out;
+    }
+
+    .tab {
+        transition: all 0.2s ease;
+        cursor: pointer;
+        user-select: none;
+    }
+
+    .tab:hover:not(.tab-active) {
+        background-color: rgba(59, 130, 246, 0.1);
+        transform: translateY(-2px);
+    }
+
+    .tab.tab-active {
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+    }
+
+    .tabs-boxed {
+        gap: 0.5rem;
+    }
+
+    /* Toast notification animations */
+    @keyframes slide-in {
+        from {
+            transform: translateX(100%);
+            opacity: 0;
+        }
+        to {
+            transform: translateX(0);
+            opacity: 1;
+        }
+    }
+
+    @keyframes slide-out {
+        from {
+            transform: translateX(0);
+            opacity: 1;
+        }
+        to {
+            transform: translateX(100%);
+            opacity: 0;
+        }
+    }
+
+    .toast {
+        position: fixed !important;
+        top: 1rem;
+        right: 1rem;
+        animation: slide-in 0.3s ease-out;
+    }
+
+    .toast .alert {
+        min-width: 300px;
+        max-width: 400px;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container mx-auto px-4 py-8">
+    <div class="flex justify-between items-center mb-6">
+        <div class="flex items-center gap-4">
+            <a href="{{ url_for('margin.dashboard') }}" class="btn btn-ghost btn-sm">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
+                </svg>
+                Back
+            </a>
+            <h1 class="text-3xl font-bold text-base-content">Margin Requirements</h1>
+        </div>
+        <button onclick="saveAllRequirements(this)" class="btn btn-primary">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V2" />
+            </svg>
+            Save All Changes
+        </button>
+    </div>
+
+    <!-- Info Alert -->
+    <div class="alert alert-info mb-6">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="stroke-current shrink-0 w-6 h-6">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+        </svg>
+        <div>
+            <p class="font-semibold">Margin Requirements Configuration</p>
+            <p class="text-sm mt-1">Set margin requirements per lot for different trade types and instruments. Values are in INR.</p>
+        </div>
+    </div>
+
+    <!-- Tabs for different instruments -->
+    <div class="tabs tabs-boxed mb-6 bg-base-200 p-2">
+        <a class="tab tab-lg font-bold px-6 py-3 rounded-lg tab-active" onclick="switchTab('NIFTY', this)">
+            <span class="text-lg">NIFTY</span>
+        </a>
+        <a class="tab tab-lg font-bold px-6 py-3 rounded-lg" onclick="switchTab('BANKNIFTY', this)">
+            <span class="text-lg">BANKNIFTY</span>
+        </a>
+        <a class="tab tab-lg font-bold px-6 py-3 rounded-lg" onclick="switchTab('SENSEX', this)">
+            <span class="text-lg">SENSEX</span>
+        </a>
+    </div>
+
+    <!-- NIFTY Requirements -->
+    <div id="NIFTY-requirements" class="requirement-section">
+        <div class="card bg-base-100 shadow-xl">
+            <div class="card-body">
+                <h2 class="card-title mb-4">NIFTY Margin Requirements</h2>
+
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <!-- Expiry Day Margins -->
+                    <div>
+                        <h3 class="font-semibold mb-3 text-primary">Expiry Day (Thursday)</h3>
+                        <div class="space-y-4">
+                            <div class="form-control">
+                                <label class="label">
+                                    <span class="label-text">CE/PE Sell</span>
+                                </label>
+                                <input type="number" id="nifty-ce-pe-sell-expiry" class="input input-bordered" value="205000" />
+                            </div>
+                            <div class="form-control">
+                                <label class="label">
+                                    <span class="label-text">CE & PE Sell (Spread)</span>
+                                </label>
+                                <input type="number" id="nifty-ce-and-pe-sell-expiry" class="input input-bordered" value="250000" />
+                            </div>
+                            <div class="form-control">
+                                <label class="label">
+                                    <span class="label-text">Futures (75 Lot)</span>
+                                </label>
+                                <input type="number" id="nifty-futures-expiry" class="input input-bordered" value="215000" />
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Non-Expiry Day Margins -->
+                    <div>
+                        <h3 class="font-semibold mb-3 text-secondary">Non-Expiry Days</h3>
+                        <div class="space-y-4">
+                            <div class="form-control">
+                                <label class="label">
+                                    <span class="label-text">CE/PE Sell</span>
+                                </label>
+                                <input type="number" id="nifty-ce-pe-sell-non-expiry" class="input input-bordered" value="250000" />
+                            </div>
+                            <div class="form-control">
+                                <label class="label">
+                                    <span class="label-text">CE & PE Sell (Spread)</span>
+                                </label>
+                                <input type="number" id="nifty-ce-and-pe-sell-non-expiry" class="input input-bordered" value="320000" />
+                            </div>
+                            <div class="form-control">
+                                <label class="label">
+                                    <span class="label-text">Futures (75 Lot)</span>
+                                </label>
+                                <input type="number" id="nifty-futures-non-expiry" class="input input-bordered" value="215000" />
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- BANKNIFTY Requirements -->
+    <div id="BANKNIFTY-requirements" class="requirement-section hidden">
+        <div class="card bg-base-100 shadow-xl">
+            <div class="card-body">
+                <h2 class="card-title mb-4">BANKNIFTY Margin Requirements</h2>
+
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <!-- Expiry Day Margins -->
+                    <div>
+                        <h3 class="font-semibold mb-3 text-primary">Expiry Day (Wednesday)</h3>
+                        <div class="space-y-4">
+                            <div class="form-control">
+                                <label class="label">
+                                    <span class="label-text">CE/PE Sell</span>
+                                </label>
+                                <input type="number" id="banknifty-ce-pe-sell-expiry" class="input input-bordered" value="205000" />
+                            </div>
+                            <div class="form-control">
+                                <label class="label">
+                                    <span class="label-text">CE & PE Sell (Spread)</span>
+                                </label>
+                                <input type="number" id="banknifty-ce-and-pe-sell-expiry" class="input input-bordered" value="250000" />
+                            </div>
+                            <div class="form-control">
+                                <label class="label">
+                                    <span class="label-text">Futures (35 Lot)</span>
+                                </label>
+                                <input type="number" id="banknifty-futures-expiry" class="input input-bordered" value="215000" />
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Non-Expiry Day Margins -->
+                    <div>
+                        <h3 class="font-semibold mb-3 text-secondary">Non-Expiry Days</h3>
+                        <div class="space-y-4">
+                            <div class="form-control">
+                                <label class="label">
+                                    <span class="label-text">CE/PE Sell</span>
+                                </label>
+                                <input type="number" id="banknifty-ce-pe-sell-non-expiry" class="input input-bordered" value="250000" />
+                            </div>
+                            <div class="form-control">
+                                <label class="label">
+                                    <span class="label-text">CE & PE Sell (Spread)</span>
+                                </label>
+                                <input type="number" id="banknifty-ce-and-pe-sell-non-expiry" class="input input-bordered" value="320000" />
+                            </div>
+                            <div class="form-control">
+                                <label class="label">
+                                    <span class="label-text">Futures (35 Lot)</span>
+                                </label>
+                                <input type="number" id="banknifty-futures-non-expiry" class="input input-bordered" value="215000" />
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- SENSEX Requirements -->
+    <div id="SENSEX-requirements" class="requirement-section hidden">
+        <div class="card bg-base-100 shadow-xl">
+            <div class="card-body">
+                <h2 class="card-title mb-4">SENSEX Margin Requirements</h2>
+
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <!-- Expiry Day Margins -->
+                    <div>
+                        <h3 class="font-semibold mb-3 text-primary">Expiry Day (Friday)</h3>
+                        <div class="space-y-4">
+                            <div class="form-control">
+                                <label class="label">
+                                    <span class="label-text">CE/PE Sell</span>
+                                </label>
+                                <input type="number" id="sensex-ce-pe-sell-expiry" class="input input-bordered" value="180000" />
+                            </div>
+                            <div class="form-control">
+                                <label class="label">
+                                    <span class="label-text">CE & PE Sell (Spread)</span>
+                                </label>
+                                <input type="number" id="sensex-ce-and-pe-sell-expiry" class="input input-bordered" value="225000" />
+                            </div>
+                            <div class="form-control">
+                                <label class="label">
+                                    <span class="label-text">Futures (20 Lot)</span>
+                                </label>
+                                <input type="number" id="sensex-futures-expiry" class="input input-bordered" value="185000" />
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Non-Expiry Day Margins -->
+                    <div>
+                        <h3 class="font-semibold mb-3 text-secondary">Non-Expiry Days</h3>
+                        <div class="space-y-4">
+                            <div class="form-control">
+                                <label class="label">
+                                    <span class="label-text">CE/PE Sell</span>
+                                </label>
+                                <input type="number" id="sensex-ce-pe-sell-non-expiry" class="input input-bordered" value="220000" />
+                            </div>
+                            <div class="form-control">
+                                <label class="label">
+                                    <span class="label-text">CE & PE Sell (Spread)</span>
+                                </label>
+                                <input type="number" id="sensex-ce-and-pe-sell-non-expiry" class="input input-bordered" value="290000" />
+                            </div>
+                            <div class="form-control">
+                                <label class="label">
+                                    <span class="label-text">Futures (20 Lot)</span>
+                                </label>
+                                <input type="number" id="sensex-futures-non-expiry" class="input input-bordered" value="185000" />
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Trade Types & Quality Section -->
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
+        <!-- Trade Types Card -->
+        <div class="card bg-base-100 shadow-xl">
+            <div class="card-body">
+                <h2 class="card-title mb-4">Trade Types</h2>
+                <div class="space-y-3">
+                    <div class="flex items-center justify-between p-3 bg-base-200 rounded">
+                        <span class="font-medium">Sell CE / PE</span>
+                        <span class="badge badge-primary badge-lg">Single Option Sell</span>
+                    </div>
+                    <div class="flex items-center justify-between p-3 bg-base-200 rounded">
+                        <span class="font-medium">Sell CE and PE</span>
+                        <span class="badge badge-info badge-lg">Spread Strategy</span>
+                    </div>
+                    <div class="flex items-center justify-between p-3 bg-base-200 rounded">
+                        <span class="font-medium">Option Buying</span>
+                        <span class="badge badge-success badge-lg">Premium Based</span>
+                    </div>
+                    <div class="flex items-center justify-between p-3 bg-base-200 rounded">
+                        <span class="font-medium">Futures</span>
+                        <span class="badge badge-warning badge-lg">Futures Contract</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Quality Grades Card -->
+        <div class="card bg-base-100 shadow-xl">
+            <div class="card-body">
+                <h2 class="card-title mb-4">Trade Quality</h2>
+                <div class="space-y-3">
+                    <div class="flex items-center justify-between p-3 bg-base-200 rounded">
+                        <div>
+                            <span class="font-medium">Grade A</span>
+                            <span class="text-sm text-base-content/70 ml-2">Conservative</span>
+                        </div>
+                        <span class="badge badge-success">95%</span>
+                    </div>
+                    <div class="flex items-center justify-between p-3 bg-base-200 rounded">
+                        <div>
+                            <span class="font-medium">Grade B</span>
+                            <span class="text-sm text-base-content/70 ml-2">Moderate</span>
+                        </div>
+                        <span class="badge badge-warning">65%</span>
+                    </div>
+                    <div class="flex items-center justify-between p-3 bg-base-200 rounded">
+                        <div>
+                            <span class="font-medium">Grade C</span>
+                            <span class="text-sm text-base-content/70 ml-2">Aggressive</span>
+                        </div>
+                        <span class="badge badge-error">36%</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    // Pure JavaScript - no template variables in JS code
+    document.addEventListener('DOMContentLoaded', function() {
+        // Initialize first tab with primary colors
+        const firstTab = document.querySelector('.tab.tab-active');
+        if (firstTab) {
+            firstTab.classList.add('bg-primary');
+            firstTab.classList.add('text-primary-content');
+        }
+
+        // Load margin requirements from server
+        loadMarginRequirements();
+    });
+
+    async function loadMarginRequirements() {
+        try {
+            // This will load the existing values if they exist in the database
+            // The values are already loaded via server-side rendering
+            console.log('Margin requirements page loaded');
+        } catch (error) {
+            console.error('Error loading margin requirements:', error);
+        }
+    }
+
+    function switchTab(instrument, tabElement) {
+        // Hide all sections with fade effect
+        document.querySelectorAll('.requirement-section').forEach(section => {
+            section.classList.add('hidden');
+            section.style.opacity = '0';
+        });
+
+        // Remove active from all tabs
+        document.querySelectorAll('.tab').forEach(tab => {
+            tab.classList.remove('tab-active');
+            tab.classList.remove('bg-primary');
+            tab.classList.remove('text-primary-content');
+        });
+
+        // Show selected section with fade in
+        const selectedSection = document.getElementById(instrument + '-requirements');
+        selectedSection.classList.remove('hidden');
+        setTimeout(() => {
+            selectedSection.style.opacity = '1';
+        }, 10);
+
+        // Mark tab as active with enhanced styling
+        tabElement.classList.add('tab-active');
+        tabElement.classList.add('bg-primary');
+        tabElement.classList.add('text-primary-content');
+    }
+
+    // Initialize first tab with primary colors (moved to main DOMContentLoaded)
+
+    async function saveAllRequirements(saveBtn) {
+        // Disable save button and show loading
+        const originalContent = saveBtn.innerHTML;
+        saveBtn.disabled = true;
+        saveBtn.innerHTML = '<span class="loading loading-spinner loading-sm mr-2"></span>Saving...';
+
+        const instruments = ['NIFTY', 'BANKNIFTY', 'SENSEX'];
+        let successCount = 0;
+
+        for (const instrument of instruments) {
+            const prefix = instrument.toLowerCase();
+
+            // Validate inputs
+            const fields = [
+                prefix + '-ce-pe-sell-expiry',
+                prefix + '-ce-pe-sell-non-expiry',
+                prefix + '-ce-and-pe-sell-expiry',
+                prefix + '-ce-and-pe-sell-non-expiry',
+                prefix + '-futures-expiry',
+                prefix + '-futures-non-expiry'
+            ];
+
+            let hasError = false;
+            for (const fieldId of fields) {
+                const field = document.getElementById(fieldId);
+                if (!field || !field.value || isNaN(parseFloat(field.value))) {
+                    showNotification(`Invalid value for ${instrument} - ${fieldId.replace(prefix + '-', '').replace(/-/g, ' ')}`, 'error');
+                    hasError = true;
+                    break;
+                }
+            }
+
+            if (hasError) {
+                saveBtn.disabled = false;
+                saveBtn.innerHTML = originalContent;
+                return;
+            }
+
+            const data = {
+                instrument: instrument,
+                ce_pe_sell_expiry: parseFloat(document.getElementById(prefix + '-ce-pe-sell-expiry').value),
+                ce_pe_sell_non_expiry: parseFloat(document.getElementById(prefix + '-ce-pe-sell-non-expiry').value),
+                ce_and_pe_sell_expiry: parseFloat(document.getElementById(prefix + '-ce-and-pe-sell-expiry').value),
+                ce_and_pe_sell_non_expiry: parseFloat(document.getElementById(prefix + '-ce-and-pe-sell-non-expiry').value),
+                futures_expiry: parseFloat(document.getElementById(prefix + '-futures-expiry').value),
+                futures_non_expiry: parseFloat(document.getElementById(prefix + '-futures-non-expiry').value)
+            };
+
+            try {
+                const response = await fetch('/margin/requirements', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRFToken': document.querySelector('meta[name="csrf-token"]').content
+                    },
+                    body: JSON.stringify(data)
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
+                const result = await response.json();
+                if (result.status === 'success') {
+                    successCount++;
+                } else {
+                    throw new Error(result.message || 'Failed to save ' + instrument);
+                }
+            } catch (error) {
+                showNotification('Error saving ' + instrument + ': ' + error.message, 'error');
+                saveBtn.disabled = false;
+                saveBtn.innerHTML = originalContent;
+                return;
+            }
+        }
+
+        // Re-enable button
+        saveBtn.disabled = false;
+        saveBtn.innerHTML = originalContent;
+
+        // Show success message
+        if (successCount === instruments.length) {
+            showNotification('✓ All margin requirements saved successfully!', 'success');
+        }
+    }
+
+    function showNotification(message, type = 'info') {
+        // Remove any existing notifications
+        const existingToasts = document.querySelectorAll('.toast');
+        existingToasts.forEach(toast => toast.remove());
+
+        const alertClass = type === 'error' ? 'alert-error' : type === 'success' ? 'alert-success' : 'alert-info';
+        const icon = type === 'error' ? '❌' : type === 'success' ? '✓' : 'ℹ️';
+
+        const toastHtml = `
+            <div class="toast toast-top toast-end z-[9999]">
+                <div class="alert ${alertClass} shadow-lg">
+                    <div>
+                        <span class="text-lg mr-2">${icon}</span>
+                        <span>${message}</span>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        const toastContainer = document.createElement('div');
+        toastContainer.innerHTML = toastHtml;
+        document.body.appendChild(toastContainer.firstElementChild);
+
+        // Add animation
+        setTimeout(() => {
+            const toast = document.querySelector('.toast');
+            if (toast) {
+                toast.style.animation = 'slide-in 0.3s ease-out';
+            }
+        }, 10);
+
+        // Remove after 4 seconds
+        setTimeout(() => {
+            const toast = document.querySelector('.toast');
+            if (toast) {
+                toast.style.animation = 'slide-out 0.3s ease-out';
+                setTimeout(() => toast.remove(), 300);
+            }
+        }, 4000);
+    }
+</script>
+{% endblock %}

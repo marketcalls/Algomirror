@@ -142,6 +142,7 @@ def create_app(config_name=None):
     from app.trading import trading_bp
     from app.trading.settings_routes import settings_bp
     from app.strategy import strategy_bp
+    from app.margin import margin_bp
     from app.api import api_bp
 
     app.register_blueprint(auth_bp, url_prefix='/auth')
@@ -150,6 +151,7 @@ def create_app(config_name=None):
     app.register_blueprint(trading_bp, url_prefix='/trading')
     app.register_blueprint(settings_bp)  # Already has url_prefix in blueprint definition
     app.register_blueprint(strategy_bp)  # url_prefix defined in blueprint
+    app.register_blueprint(margin_bp)  # url_prefix defined in blueprint
     app.register_blueprint(api_bp, url_prefix='/api')
     
     # Create database tables

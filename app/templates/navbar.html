@@ -20,6 +20,14 @@
                     <li><a href="{{ url_for('trading.holdings') }}">Holdings</a></li>
                 </ul>
             </li>
+            <li>
+                <a>Margin</a>
+                <ul class="p-2">
+                    <li><a href="{{ url_for('margin.dashboard') }}">Dashboard</a></li>
+                    <li><a href="{{ url_for('margin.requirements') }}">Requirements</a></li>
+                    <li><a href="{{ url_for('margin.calculator') }}">Calculator</a></li>
+                </ul>
+            </li>
         </ul>
         {% endif %}
     </div>
@@ -49,6 +57,19 @@
                 <li><a href="{{ url_for('trading.tradebook') }}">Tradebook</a></li>
                 <li><a href="{{ url_for('trading.positions') }}">Positions</a></li>
                 <li><a href="{{ url_for('trading.holdings') }}">Holdings</a></li>
+            </ul>
+        </li>
+        <li class="dropdown dropdown-hover">
+            <label tabindex="0" class="btn btn-ghost">
+                Margin
+                <svg class="fill-current h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20">
+                    <path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd" />
+                </svg>
+            </label>
+            <ul tabindex="0" class="dropdown-content z-[1] menu p-2 shadow bg-base-100 rounded-box w-52">
+                <li><a href="{{ url_for('margin.dashboard') }}">Dashboard</a></li>
+                <li><a href="{{ url_for('margin.requirements') }}">Requirements</a></li>
+                <li><a href="{{ url_for('margin.calculator') }}">Calculator</a></li>
             </ul>
         </li>
     </ul>

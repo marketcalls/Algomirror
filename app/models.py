@@ -461,6 +461,210 @@ class TradingSettings(db.Model):
         
         db.session.commit()
 
+class MarginRequirement(db.Model):
+    __tablename__ = 'margin_requirements'
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    instrument = db.Column(db.String(50), nullable=False)  # 'NIFTY', 'BANKNIFTY', 'SENSEX'
+
+    # Margin values for different trade types (in INR per lot)
+    ce_pe_sell_expiry = db.Column(db.Float, default=205000)  # CE/PE Sell on Expiry
+    ce_pe_sell_non_expiry = db.Column(db.Float, default=250000)  # CE/PE Sell on Non-Expiry
+    ce_and_pe_sell_expiry = db.Column(db.Float, default=250000)  # CE & PE Sell on Expiry
+    ce_and_pe_sell_non_expiry = db.Column(db.Float, default=320000)  # CE & PE Sell on Non-Expiry
+    futures_expiry = db.Column(db.Float, default=215000)  # Futures on Expiry
+    futures_non_expiry = db.Column(db.Float, default=215000)  # Futures on Non-Expiry
+
+    # SENSEX specific margins
+    sensex_ce_pe_sell_expiry = db.Column(db.Float, default=180000)
+    sensex_ce_pe_sell_non_expiry = db.Column(db.Float, default=220000)
+    sensex_ce_and_pe_sell_expiry = db.Column(db.Float, default=225000)
+    sensex_ce_and_pe_sell_non_expiry = db.Column(db.Float, default=290000)
+    sensex_futures_expiry = db.Column(db.Float, default=185000)
+    sensex_futures_non_expiry = db.Column(db.Float, default=185000)
+
+    is_active = db.Column(db.Boolean, default=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationship
+    user = db.relationship('User', backref='margin_requirements')
+
+    # Unique constraint for user and instrument
+    __table_args__ = (
+        db.UniqueConstraint('user_id', 'instrument', name='_user_instrument_margin_uc'),
+    )
+
+    def __repr__(self):
+        return f'<MarginRequirement {self.instrument} - User {self.user_id}>'
+
+    @staticmethod
+    def get_or_create_defaults(user_id):
+        """Create default margin requirements if they don't exist"""
+        defaults = [
+            {
+                'instrument': 'NIFTY',
+                'ce_pe_sell_expiry': 205000,
+                'ce_pe_sell_non_expiry': 250000,
+                'ce_and_pe_sell_expiry': 250000,
+                'ce_and_pe_sell_non_expiry': 320000,
+                'futures_expiry': 215000,
+                'futures_non_expiry': 215000
+            },
+            {
+                'instrument': 'BANKNIFTY',
+                'ce_pe_sell_expiry': 205000,
+                'ce_pe_sell_non_expiry': 250000,
+                'ce_and_pe_sell_expiry': 250000,
+                'ce_and_pe_sell_non_expiry': 320000,
+                'futures_expiry': 215000,
+                'futures_non_expiry': 215000
+            },
+            {
+                'instrument': 'SENSEX',
+                'ce_pe_sell_expiry': 180000,
+                'ce_pe_sell_non_expiry': 220000,
+                'ce_and_pe_sell_expiry': 225000,
+                'ce_and_pe_sell_non_expiry': 290000,
+                'futures_expiry': 185000,
+                'futures_non_expiry': 185000
+            }
+        ]
+
+        for default in defaults:
+            margin = MarginRequirement.query.filter_by(
+                user_id=user_id,
+                instrument=default['instrument']
+            ).first()
+
+            if not margin:
+                margin = MarginRequirement(
+                    user_id=user_id,
+                    **default
+                )
+                db.session.add(margin)
+
+        db.session.commit()
+
+class TradeQuality(db.Model):
+    __tablename__ = 'trade_qualities'
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    quality_grade = db.Column(db.String(10), nullable=False)  # 'A', 'B', 'C'
+    margin_percentage = db.Column(db.Float, nullable=False)  # 95%, 65%, 36%
+    risk_level = db.Column(db.String(20))  # 'conservative', 'moderate', 'aggressive'
+    description = db.Column(db.Text)
+    is_active = db.Column(db.Boolean, default=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationship
+    user = db.relationship('User', backref='trade_qualities')
+
+    # Unique constraint
+    __table_args__ = (
+        db.UniqueConstraint('user_id', 'quality_grade', name='_user_quality_uc'),
+    )
+
+    def __repr__(self):
+        return f'<TradeQuality {self.quality_grade} - {self.margin_percentage}%>'
+
+    @staticmethod
+    def get_or_create_defaults(user_id):
+        """Create default trade qualities if they don't exist"""
+        defaults = [
+            {
+                'quality_grade': 'A',
+                'margin_percentage': 95.0,
+                'risk_level': 'conservative',
+                'description': 'Conservative approach - Uses 95% of available margin'
+            },
+            {
+                'quality_grade': 'B',
+                'margin_percentage': 65.0,
+                'risk_level': 'moderate',
+                'description': 'Moderate approach - Uses 65% of available margin'
+            },
+            {
+                'quality_grade': 'C',
+                'margin_percentage': 36.0,
+                'risk_level': 'aggressive',
+                'description': 'Aggressive approach - Uses 36% of available margin'
+            }
+        ]
+
+        for default in defaults:
+            quality = TradeQuality.query.filter_by(
+                user_id=user_id,
+                quality_grade=default['quality_grade']
+            ).first()
+
+            if not quality:
+                quality = TradeQuality(
+                    user_id=user_id,
+                    **default
+                )
+                db.session.add(quality)
+
+        db.session.commit()
+
+class MarginTracker(db.Model):
+    __tablename__ = 'margin_trackers'
+
+    id = db.Column(db.Integer, primary_key=True)
+    account_id = db.Column(db.Integer, db.ForeignKey('trading_accounts.id'), nullable=False)
+
+    # Available margins
+    total_available_margin = db.Column(db.Float, default=0)
+    used_margin = db.Column(db.Float, default=0)
+    free_margin = db.Column(db.Float, default=0)
+
+    # F&O specific margins
+    span_margin = db.Column(db.Float, default=0)
+    exposure_margin = db.Column(db.Float, default=0)
+    option_premium = db.Column(db.Float, default=0)
+
+    # Trade-wise margin allocation
+    allocated_margins = db.Column(db.JSON)  # {"trade_id": margin_amount, ...}
+
+    # Real-time tracking
+    last_updated = db.Column(db.DateTime, default=datetime.utcnow)
+    update_count = db.Column(db.Integer, default=0)
+
+    # Relationship
+    account = db.relationship('TradingAccount', backref='margin_tracker')
+
+    def update_margins(self, funds_data):
+        """Update margins from funds API response"""
+        self.total_available_margin = funds_data.get('totalcash', 0)
+        self.used_margin = funds_data.get('margins', 0)
+        self.free_margin = self.total_available_margin - self.used_margin
+        self.span_margin = funds_data.get('spanmargin', 0)
+        self.exposure_margin = funds_data.get('exposuremargin', 0)
+        self.option_premium = funds_data.get('optionpremium', 0)
+        self.last_updated = datetime.utcnow()
+        self.update_count += 1
+
+    def allocate_margin(self, trade_id, margin_amount):
+        """Allocate margin to a specific trade"""
+        if not self.allocated_margins:
+            self.allocated_margins = {}
+        self.allocated_margins[str(trade_id)] = margin_amount
+        self.used_margin += margin_amount
+        self.free_margin -= margin_amount
+
+    def release_margin(self, trade_id):
+        """Release margin from a completed trade"""
+        if self.allocated_margins and str(trade_id) in self.allocated_margins:
+            margin_amount = self.allocated_margins.pop(str(trade_id))
+            self.used_margin -= margin_amount
+            self.free_margin += margin_amount
+
+    def __repr__(self):
+        return f'<MarginTracker Account {self.account_id} - Free: {self.free_margin}>'
+
 @login_manager.user_loader
 def load_user(user_id):
     return User.query.get(int(user_id))

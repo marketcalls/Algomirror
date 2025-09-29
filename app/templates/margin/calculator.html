@@ -1,0 +1,335 @@
+{% extends "layout.html" %}
+
+{% block title %}Margin Calculator - AlgoMirror{% endblock %}
+
+{% block content %}
+<div class="container mx-auto px-4 py-8">
+    <div class="flex items-center gap-4 mb-6">
+        <a href="{{ url_for('margin.dashboard') }}" class="btn btn-ghost btn-sm">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
+            </svg>
+            Back
+        </a>
+        <h1 class="text-3xl font-bold">Lot Size Calculator</h1>
+    </div>
+
+    <!-- Calculator Card -->
+    <div class="card bg-base-100 shadow-xl">
+        <div class="card-body">
+            <h2 class="card-title mb-4">Calculate Optimal Lot Size</h2>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <!-- Input Section -->
+                <div class="space-y-4">
+                    <!-- Available Margin (Manual Input) -->
+                    <div class="form-control">
+                        <label class="label">
+                            <span class="label-text font-semibold">Available Margin</span>
+                            <span class="label-text-alt">Enter your available margin</span>
+                        </label>
+                        <div class="input-group">
+                            <span class="px-3 bg-base-200 flex items-center">₹</span>
+                            <input type="number"
+                                   id="available-margin"
+                                   class="input input-bordered w-full"
+                                   placeholder="0.00"
+                                   value="1245000"
+                                   onchange="updateDisplay()"
+                                   step="1000" />
+                        </div>
+                        <label class="label">
+                            <span class="label-text-alt text-info">Default: ₹12,45,000 - You can modify this value</span>
+                        </label>
+                    </div>
+
+                    <!-- Instrument Selection -->
+                    <div class="form-control">
+                        <label class="label">
+                            <span class="label-text font-semibold">Instrument</span>
+                            <span class="label-text-alt">Lot sizes from settings</span>
+                        </label>
+                        <select id="instrument-select" class="select select-bordered w-full" onchange="updateDisplay()">
+                            <option value="NIFTY" data-lot-size="{{ lot_sizes.get('NIFTY', 75) }}">NIFTY ({{ lot_sizes.get('NIFTY', 75) }} lot)</option>
+                            <option value="BANKNIFTY" data-lot-size="{{ lot_sizes.get('BANKNIFTY', 35) }}">BANKNIFTY ({{ lot_sizes.get('BANKNIFTY', 35) }} lot)</option>
+                            <option value="SENSEX" data-lot-size="{{ lot_sizes.get('SENSEX', 20) }}">SENSEX ({{ lot_sizes.get('SENSEX', 20) }} lot)</option>
+                        </select>
+                    </div>
+
+                    <!-- Trade Type -->
+                    <div class="form-control">
+                        <label class="label">
+                            <span class="label-text font-semibold">Trade Type</span>
+                        </label>
+                        <select id="trade-type-select" class="select select-bordered w-full" onchange="updateDisplay()">
+                            <option value="sell_c_p">Sell CE / PE</option>
+                            <option value="sell_c_and_p">Sell CE and PE</option>
+                            <option value="buy">Option Buying</option>
+                            <option value="futures">Futures</option>
+                        </select>
+                    </div>
+
+                    <!-- Trade Quality -->
+                    <div class="form-control">
+                        <label class="label">
+                            <span class="label-text font-semibold">Trade Quality</span>
+                        </label>
+                        <select id="quality-select" class="select select-bordered w-full" onchange="updateDisplay()">
+                            {% for quality in qualities %}
+                                <option value="{{ quality.quality_grade }}">
+                                    Grade {{ quality.quality_grade }} - {{ quality.risk_level|title }} ({{ quality.margin_percentage }}%)
+                                </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <!-- Calculate Button -->
+                    <button onclick="calculateLotSize()" class="btn btn-primary btn-block">
+                        Calculate Lot Size
+                    </button>
+                </div>
+
+                <!-- Result Section -->
+                <div>
+                    <!-- Result Display -->
+                    <div class="alert alert-info mb-4">
+                        <div>
+                            <h3 class="font-bold text-lg">Calculation Result</h3>
+                            <div class="mt-2" id="result-display">
+                                <p class="text-3xl font-bold" id="lot-size-result">-</p>
+                                <p class="text-sm mt-1">Recommended Lots</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Calculation Details -->
+                    <div class="bg-base-200 rounded-lg p-4">
+                        <h4 class="font-semibold mb-3">Calculation Details</h4>
+                        <div class="space-y-2 text-sm" id="calculation-details">
+                            <div class="flex justify-between">
+                                <span>Available Margin:</span>
+                                <span id="detail-available">₹ 0.00</span>
+                            </div>
+                            <div class="flex justify-between">
+                                <span>Quality Grade:</span>
+                                <span id="detail-quality">-</span>
+                            </div>
+                            <div class="flex justify-between">
+                                <span>Quality %:</span>
+                                <span id="detail-percentage">0%</span>
+                            </div>
+                            <div class="flex justify-between">
+                                <span>Effective Margin:</span>
+                                <span id="detail-effective">₹ 0.00</span>
+                            </div>
+                            <div class="divider my-2"></div>
+                            <div class="flex justify-between">
+                                <span>Margin per Lot:</span>
+                                <span id="detail-per-lot">₹ 0.00</span>
+                            </div>
+                            <div class="flex justify-between font-semibold">
+                                <span>Max Lots:</span>
+                                <span id="detail-max-lots">0</span>
+                            </div>
+                            <div class="flex justify-between">
+                                <span>Margin Required:</span>
+                                <span id="detail-required">₹ 0.00</span>
+                            </div>
+                            <div class="flex justify-between">
+                                <span>Margin Remaining:</span>
+                                <span id="detail-remaining">₹ 0.00</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Formula Display -->
+                    <div class="mt-4 p-3 bg-base-300 rounded text-sm font-mono" id="formula-display">
+                        Formula: Available × Quality% / Margin per Lot
+                    </div>
+
+                    <!-- Option Buying Note -->
+                    <div class="alert alert-info mt-4" id="option-buying-note" style="display: none;">
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="stroke-current shrink-0 w-6 h-6"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                        <span>For Option Buying, ₹20,000 per lot is used as default premium requirement. Actual premium varies based on strike price.</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Example Scenarios -->
+    <div class="card bg-base-100 shadow-xl mt-6">
+        <div class="card-body">
+            <h2 class="card-title mb-4">Example Scenarios</h2>
+
+            <div class="overflow-x-auto">
+                <table class="table table-zebra">
+                    <thead>
+                        <tr>
+                            <th>Available Margin</th>
+                            <th>Instrument</th>
+                            <th>Trade Type</th>
+                            <th>Quality</th>
+                            <th>Calculation</th>
+                            <th>Result</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>₹12,45,000</td>
+                            <td>NIFTY</td>
+                            <td>Sell CE & PE</td>
+                            <td>A (95%)</td>
+                            <td>12,45,000 × 0.95 / 3,20,000</td>
+                            <td><span class="badge badge-success">3 Lots</span></td>
+                        </tr>
+                        <tr>
+                            <td>₹8,00,000</td>
+                            <td>BANKNIFTY</td>
+                            <td>Sell CE/PE</td>
+                            <td>B (65%)</td>
+                            <td>8,00,000 × 0.65 / 2,50,000</td>
+                            <td><span class="badge badge-warning">2 Lots</span></td>
+                        </tr>
+                        <tr>
+                            <td>₹5,00,000</td>
+                            <td>SENSEX</td>
+                            <td>Futures</td>
+                            <td>C (36%)</td>
+                            <td>5,00,000 × 0.36 / 1,85,000</td>
+                            <td><span class="badge badge-error">0 Lots</span></td>
+                        </tr>
+                        <tr>
+                            <td>₹2,00,000</td>
+                            <td>NIFTY</td>
+                            <td>Option Buying</td>
+                            <td>A (95%)</td>
+                            <td>2,00,000 × 0.95 / 20,000</td>
+                            <td><span class="badge badge-success">9 Lots</span></td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- Multi-Trade Calculator -->
+    <div class="card bg-base-100 shadow-xl mt-6">
+        <div class="card-body">
+            <h2 class="card-title mb-4">Multi-Trade Scenario</h2>
+            <p class="text-sm text-base-content/70 mb-4">
+                Calculate lot sizes for multiple trades considering margin depletion after each trade.
+            </p>
+
+            <div class="alert alert-warning">
+                <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                </svg>
+                <span>When executing multiple trades, the available margin decreases after each trade, affecting subsequent lot calculations.</span>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    async function calculateLotSize() {
+        const availableMargin = parseFloat(document.getElementById('available-margin').value);
+        const instrument = document.getElementById('instrument-select').value;
+        const tradeType = document.getElementById('trade-type-select').value;
+        const qualityGrade = document.getElementById('quality-select').value;
+
+        if (!availableMargin || availableMargin <= 0) {
+            alert('Please enter a valid available margin amount');
+            return;
+        }
+
+        try {
+            const response = await fetch('/margin/calculate-lots', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': document.querySelector('meta[name="csrf-token"]').content
+                },
+                body: JSON.stringify({
+                    available_margin: availableMargin,
+                    instrument: instrument,
+                    trade_type: tradeType,
+                    quality_grade: qualityGrade
+                })
+            });
+
+            const data = await response.json();
+
+            if (data.status === 'success') {
+                displayResults(data.lot_size, data.details);
+            } else {
+                alert('Error: ' + (data.message || 'Calculation failed'));
+            }
+        } catch (error) {
+            console.error('Error calculating lots:', error);
+            alert('Failed to calculate lot size');
+        }
+    }
+
+    function displayResults(lotSize, details) {
+        // Update main result
+        document.getElementById('lot-size-result').textContent = lotSize + ' Lots';
+
+        // Update calculation details
+        document.getElementById('detail-available').textContent = '₹ ' + formatNumber(details.available_margin);
+        document.getElementById('detail-quality').textContent = details.quality_grade;
+        document.getElementById('detail-percentage').textContent = details.quality_percentage + '%';
+        document.getElementById('detail-effective').textContent = '₹ ' + formatNumber(details.effective_margin);
+        document.getElementById('detail-per-lot').textContent = '₹ ' + formatNumber(details.margin_per_lot);
+        document.getElementById('detail-max-lots').textContent = details.raw_lot_size.toFixed(3);
+        document.getElementById('detail-required').textContent = '₹ ' + formatNumber(details.margin_required);
+        document.getElementById('detail-remaining').textContent = '₹ ' + formatNumber(details.margin_remaining);
+
+        // Update formula display
+        if (details.calculation) {
+            document.getElementById('formula-display').textContent = details.calculation;
+        }
+
+        // Highlight result based on lot size
+        const resultElement = document.getElementById('lot-size-result');
+        resultElement.className = 'text-3xl font-bold';
+
+        if (lotSize === 0) {
+            resultElement.className += ' text-error';
+        } else if (lotSize <= 2) {
+            resultElement.className += ' text-warning';
+        } else {
+            resultElement.className += ' text-success';
+        }
+    }
+
+    function formatNumber(num) {
+        return num.toLocaleString('en-IN', {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2
+        });
+    }
+
+    function updateDisplay() {
+        // Show/hide option buying note based on trade type
+        const tradeType = document.getElementById('trade-type-select').value;
+        const instrument = document.getElementById('instrument-select').value;
+        const optionBuyingNote = document.getElementById('option-buying-note');
+
+        if (tradeType === 'buy') {
+            optionBuyingNote.style.display = 'flex';
+        } else {
+            optionBuyingNote.style.display = 'none';
+        }
+    }
+
+    // Initialize with formatted default value
+    document.addEventListener('DOMContentLoaded', function() {
+        const marginInput = document.getElementById('available-margin');
+        if (marginInput && marginInput.value) {
+            // Format the display value
+            updateDisplay();
+        }
+    });
+</script>
+{% endblock %}
