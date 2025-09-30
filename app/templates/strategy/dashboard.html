@@ -27,7 +27,7 @@
 
     <!-- Account Cards Grid -->
     <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
-        {% for account in accounts[:2] %}
+        {% for account in accounts %}
         <div class="card bg-base-100 shadow-lg">
             <div class="card-body">
                 <div class="flex justify-between items-start mb-2">
@@ -69,20 +69,6 @@
             </div>
         </div>
         {% endfor %}
-
-        <!-- Add More Accounts Card -->
-        {% if accounts|length < 3 %}
-        <div class="card bg-base-100 shadow-lg border-2 border-dashed border-base-300">
-            <div class="card-body flex items-center justify-center">
-                <a href="{{ url_for('accounts.add') }}" class="btn btn-ghost btn-circle btn-lg">
-                    <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path>
-                    </svg>
-                </a>
-                <p class="text-base-content/60 mt-2">Add Trading Account</p>
-            </div>
-        </div>
-        {% endif %}
     </div>
 
     <!-- Strategy Templates Section -->

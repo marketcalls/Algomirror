@@ -17,7 +17,8 @@
       "Bash(curl:*)",
       "Bash(dir migrations)",
       "Bash(del algomirror.db)",
-      "Bash(dir:*)"
+      "Bash(dir:*)",
+      "Bash(del check_accounts.py)"
     ],
     "deny": [],
     "ask": []
