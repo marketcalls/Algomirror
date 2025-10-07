@@ -1123,24 +1123,20 @@ class StrategyExecutor:
                 execution.exit_reason = reason
                 execution.realized_pnl = execution.unrealized_pnl
 
-                # Create a new execution record for the exit order
-                # This ensures the exit order appears in orderbook/tradebook/positions
-                exit_execution = StrategyExecution(
-                    strategy_id=self.strategy.id,
-                    leg_id=execution.leg_id,
-                    account_id=execution.account_id,
-                    symbol=execution.symbol,
-                    exchange=execution.exchange,
-                    quantity=execution.quantity,
+                # Fetch exit order details to get executed price
+                order_status_response = client.orderstatus(
                     order_id=exit_order_id,
-                    status='exit_pending',  # Mark as exit order
-                    entry_time=datetime.utcnow()
+                    strategy=f"Strategy_{self.strategy.id}"
                 )
 
-                db.session.add(exit_execution)
+                if order_status_response.get('status') == 'success':
+                    order_data = order_status_response.get('data', {})
+                    execution.exit_price = order_data.get('average_price')
+                    execution.broker_order_status = order_data.get('status')
+
                 db.session.commit()
 
-                logger.info(f"Exited position for {execution.symbol}: {reason}, Exit Order ID: {exit_order_id}")
+                logger.info(f"Exited position for {execution.symbol}: {reason}, Exit Order ID: {exit_order_id}, Exit Price: {execution.exit_price}")
 
         except Exception as e:
             logger.error(f"Error exiting position: {e}")

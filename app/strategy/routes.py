@@ -107,6 +107,18 @@ def builder(strategy_id=None):
 
             # Create or update strategy
             if not strategy:
+                # Check if a strategy with this name already exists
+                existing_strategy = Strategy.query.filter_by(
+                    user_id=current_user.id,
+                    name=data.get('name')
+                ).first()
+
+                if existing_strategy:
+                    return jsonify({
+                        'status': 'error',
+                        'message': 'A strategy with this name already exists. Please choose a different name.'
+                    }), 400
+
                 strategy = Strategy(user_id=current_user.id)
                 db.session.add(strategy)
 
