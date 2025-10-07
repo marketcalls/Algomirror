@@ -376,12 +376,15 @@ def option_chain():
         
         # Get available expiry dates if not specified
         if not expiry:
+            # Determine exchange based on underlying
+            exchange = 'BFO' if underlying == 'SENSEX' else 'NFO'
+
             expiry_response = client.expiry(
                 symbol=underlying,
-                exchange='NFO',
+                exchange=exchange,
                 instrumenttype='options'
             )
-            
+
             if expiry_response.get('status') == 'success':
                 expiries = expiry_response.get('data', [])
                 if expiries:
@@ -468,10 +471,10 @@ def option_chain_stream(underlying):
     
     # Get expiry from query params
     expiry = request.args.get('expiry')
-    
+
     # Log outside the generator where we have app context
-    # print(f"[SSE] Starting stream for {underlying} with expiry {expiry}")
-    # print(f"[SSE] Active managers: {list(option_chain_service.active_managers.keys())}")
+    current_app.logger.info(f"[SSE] Starting stream for {underlying} with expiry {expiry}")
+    current_app.logger.info(f"[SSE] Active managers: {list(option_chain_service.active_managers.keys())}")
     
     def generate():
         # Determine the manager key to use
@@ -521,15 +524,11 @@ def option_chain_stream(underlying):
                 
                 if manager:
                     chain_data = manager.get_option_chain()
-                    
-                    # Simple print for debugging
-                    # print(f"[SSE] Sending data for {underlying}, options count: {len(chain_data.get('options', []))}, expiry: {chain_data.get('expiry')}")
-                    
+
                     # Send as server-sent event
                     data_json = json.dumps(chain_data)
                     yield f"data: {data_json}\n\n"
                 else:
-                    # print(f"[SSE] Option chain not active for {underlying} with expiry {expiry}")
                     yield f"data: {json.dumps({'status': 'inactive', 'message': f'Option chain not active for {underlying} {expiry or ""}'})}\n\n"
                 
                 # Update every second
@@ -554,16 +553,61 @@ def option_chain_stream(underlying):
     return response
 
 
+@trading_bp.route('/api/option-chain/expiry/<underlying>')
+@login_required
+def get_expiry_dates(underlying):
+    """Get available expiry dates for an underlying"""
+
+    # Get primary account
+    primary_account = current_user.get_primary_account()
+
+    if not primary_account:
+        return jsonify({'status': 'error', 'message': 'No primary account configured'}), 400
+
+    try:
+        # Create API client
+        client = ExtendedOpenAlgoAPI(
+            api_key=primary_account.get_api_key(),
+            host=primary_account.host_url
+        )
+
+        # Determine exchange based on underlying
+        exchange = 'BFO' if underlying == 'SENSEX' else 'NFO'
+
+        # Fetch expiry dates
+        expiry_response = client.expiry(
+            symbol=underlying,
+            exchange=exchange,
+            instrumenttype='options'
+        )
+
+        if expiry_response.get('status') == 'success':
+            expiries = expiry_response.get('data', [])
+            return jsonify({
+                'status': 'success',
+                'data': expiries
+            })
+        else:
+            return jsonify({
+                'status': 'error',
+                'message': expiry_response.get('message', 'Failed to fetch expiry dates')
+            }), 500
+
+    except Exception as e:
+        current_app.logger.error(f"Error fetching expiry dates for {underlying}: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
 @trading_bp.route('/api/option-chain/status')
 @login_required
 def option_chain_status():
     """Check option chain monitoring status"""
     from app.utils.background_service import option_chain_service
-    
+
     try:
         nifty_manager = option_chain_service.active_managers.get('NIFTY')
         banknifty_manager = option_chain_service.active_managers.get('BANKNIFTY')
-        
+
         status = {
             'service_running': option_chain_service.is_running,
             'primary_account': option_chain_service.primary_account.account_name if option_chain_service.primary_account else None,
@@ -581,9 +625,9 @@ def option_chain_status():
                 'underlying_ltp': banknifty_manager.underlying_ltp if banknifty_manager else 0
             }
         }
-        
+
         return jsonify({'status': 'success', 'data': status})
-        
+
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
 

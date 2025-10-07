@@ -18,7 +18,8 @@
       "Bash(dir migrations)",
       "Bash(del algomirror.db)",
       "Bash(dir:*)",
-      "Bash(del check_accounts.py)"
+      "Bash(del check_accounts.py)",
+      "Read(//d/openalgo-multi/openalgo2/**)"
     ],
     "deny": [],
     "ask": []

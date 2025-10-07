@@ -192,43 +192,149 @@
 <script>
 let eventSource = null;
 let previousData = {};
+let expiryCache = {}; // Cache for all expiry dates
 
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', function() {
-    // Always try to start real-time updates
-    startRealTimeUpdates();
-    
+    // Preload expiry dates for all underlyings
+    preloadAllExpiries();
+
     // Handle underlying change
     document.getElementById('underlyingSelect').addEventListener('change', function() {
+        const underlying = this.value;
+        console.log('[UNDERLYING CHANGE] Switching to:', underlying);
+
+        // Update expiry dropdown from cache
+        updateExpiryDropdown(underlying);
+
+        // Refresh option chain
         refreshOptionChain();
-        startRealTimeUpdates(); // Restart SSE with new underlying
+        startRealTimeUpdates();
     });
-    
+
     // Handle expiry change
     document.getElementById('expirySelect').addEventListener('change', function() {
-        refreshOptionChain();
-        startRealTimeUpdates(); // Restart SSE with new expiry
+        const expiry = this.value;
+        console.log('[EXPIRY CHANGE] Changed to:', expiry);
+
+        // Just restart SSE with new expiry - no need to reload page
+        startRealTimeUpdates();
     });
 });
+
+// Preload expiry dates for all underlyings
+async function preloadAllExpiries() {
+    const underlyings = ['NIFTY', 'BANKNIFTY', 'SENSEX'];
+    console.log('[EXPIRY PRELOAD] Loading expiry dates for all underlyings...');
+
+    // Get currently selected values from server-rendered dropdown (before we replace it)
+    const currentUnderlying = document.getElementById('underlyingSelect').value;
+    const currentExpiry = document.getElementById('expirySelect').value;
+    console.log('[EXPIRY PRELOAD] Preserving current selection:', currentUnderlying, currentExpiry);
+
+    try {
+        // Fetch all expiries in parallel
+        const promises = underlyings.map(underlying =>
+            fetch(`/trading/api/option-chain/expiry/${underlying}`)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.status === 'success' && data.data) {
+                        expiryCache[underlying] = data.data;
+                        console.log(`[EXPIRY PRELOAD] Loaded ${data.data.length} expiries for ${underlying}`);
+                    } else {
+                        expiryCache[underlying] = [];
+                        console.error(`[EXPIRY PRELOAD] Failed to load expiries for ${underlying}:`, data);
+                    }
+                })
+                .catch(error => {
+                    expiryCache[underlying] = [];
+                    console.error(`[EXPIRY PRELOAD] Error loading expiries for ${underlying}:`, error);
+                })
+        );
+
+        await Promise.all(promises);
+        console.log('[EXPIRY PRELOAD] All expiries loaded:', expiryCache);
+
+        // Update expiry dropdown, preserving the server-rendered selection
+        updateExpiryDropdown(currentUnderlying, currentExpiry);
+
+        // Start real-time updates
+        startRealTimeUpdates();
+
+    } catch (error) {
+        console.error('[EXPIRY PRELOAD] Error preloading expiries:', error);
+    }
+}
+
+// Update expiry dropdown from cache
+function updateExpiryDropdown(underlying, preserveExpiry = null) {
+    const expirySelect = document.getElementById('expirySelect');
+    const expiries = expiryCache[underlying] || [];
+
+    // Use preserved expiry if provided, otherwise try to get current value
+    const targetExpiry = preserveExpiry || expirySelect.value;
+
+    console.log(`[EXPIRY UPDATE] Updating dropdown for ${underlying} with ${expiries.length} expiries, target expiry:`, targetExpiry);
+
+    if (expiries.length > 0) {
+        // Clear and populate
+        expirySelect.innerHTML = '';
+
+        let expiryFound = false;
+
+        expiries.forEach((expiry, index) => {
+            const option = document.createElement('option');
+            option.value = expiry;
+            option.textContent = expiry;
+
+            // Select the target expiry if it matches, otherwise select first
+            if (expiry === targetExpiry) {
+                option.selected = true;
+                expiryFound = true;
+                console.log('[EXPIRY UPDATE] Selected expiry:', expiry);
+            } else if (index === 0 && !targetExpiry) {
+                option.selected = true;
+                console.log('[EXPIRY UPDATE] Selected first expiry (no target):', expiry);
+            }
+
+            expirySelect.appendChild(option);
+        });
+
+        // If target expiry wasn't found, select the first one
+        if (!expiryFound && targetExpiry && expiries.length > 0) {
+            console.log('[EXPIRY UPDATE] Target expiry not found, selecting first:', expiries[0]);
+            expirySelect.value = expiries[0];
+        }
+
+        expirySelect.disabled = false;
+    } else {
+        expirySelect.innerHTML = '<option>No expiry dates available</option>';
+        expirySelect.disabled = true;
+    }
+}
 
 function startRealTimeUpdates() {
     // Close existing connection if any
     if (eventSource) {
         eventSource.close();
     }
-    
+
     const underlying = document.getElementById('underlyingSelect').value;
     const expiry = document.getElementById('expirySelect').value;
-    
+
+    console.log('[SSE START] Underlying:', underlying, 'Expiry:', expiry);
+
     // Update status to connecting
     updateStatus('Connecting...', 'badge-warning');
-    
+
     // Create SSE connection - using the /stream/<underlying> endpoint with credentials
     // Include expiry as query parameter if available
-    const sseUrl = expiry ? 
-        `/trading/api/option-chain/stream/${underlying}?expiry=${encodeURIComponent(expiry)}` : 
+    const sseUrl = expiry ?
+        `/trading/api/option-chain/stream/${underlying}?expiry=${encodeURIComponent(expiry)}` :
         `/trading/api/option-chain/stream/${underlying}`;
-    
+
+    console.log('[SSE START] Connecting to:', sseUrl);
+
     eventSource = new EventSource(sseUrl, {
         withCredentials: true
     });
