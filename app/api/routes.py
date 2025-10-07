@@ -264,3 +264,63 @@ def get_account_pnl(account_id):
             'status': 'error',
             'message': f'Failed to get P&L: {str(e)}'
         }), 500
+
+@api_bp.route('/trading-hours/status')
+@login_required
+def get_trading_hours_status():
+    """Get current trading hours status"""
+    try:
+        from app.utils.background_service import option_chain_service
+        from datetime import datetime
+        import pytz
+
+        # Get current time in IST
+        ist = pytz.timezone('Asia/Kolkata')
+        now = datetime.now(ist)
+
+        # Check if within trading hours
+        is_trading_hours = option_chain_service.is_trading_hours()
+        is_holiday = option_chain_service.is_holiday()
+
+        # Get next session info
+        sessions = option_chain_service.get_trading_sessions()
+        next_session = None
+
+        if not is_trading_hours and sessions:
+            # Find next session
+            current_day = now.weekday()
+            current_time = now.time()
+
+            for session in sessions:
+                if session['is_active']:
+                    if session['day_of_week'] == current_day and session['start_time'] > current_time:
+                        next_session = {
+                            'day': ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'][session['day_of_week']],
+                            'start_time': session['start_time'].strftime('%H:%M'),
+                            'end_time': session['end_time'].strftime('%H:%M')
+                        }
+                        break
+                    elif session['day_of_week'] > current_day:
+                        next_session = {
+                            'day': ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'][session['day_of_week']],
+                            'start_time': session['start_time'].strftime('%H:%M'),
+                            'end_time': session['end_time'].strftime('%H:%M')
+                        }
+                        break
+
+        return jsonify({
+            'status': 'success',
+            'data': {
+                'is_trading_hours': is_trading_hours,
+                'is_holiday': is_holiday,
+                'current_time': now.strftime('%Y-%m-%d %H:%M:%S'),
+                'timezone': 'Asia/Kolkata',
+                'next_session': next_session
+            }
+        })
+
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'message': f'Failed to get trading hours status: {str(e)}'
+        }), 500

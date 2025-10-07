@@ -10,12 +10,26 @@
             <h1 class="text-3xl font-bold">Multi-Strategy Trading Platform</h1>
             <p class="text-base-content/70 mt-1">Manage unlimited strategies across multiple accounts</p>
         </div>
-        <div class="flex gap-3">
+        <div class="flex gap-3 items-center">
+            <!-- Market Status Indicator -->
+            <div id="marketStatusBadge" class="badge badge-lg gap-2" style="display: none;">
+                <span class="loading loading-spinner loading-xs"></span>
+                <span id="marketStatusText">Checking...</span>
+            </div>
+
             <select class="select select-bordered" id="marketCondition">
                 <option value="">Market Condition: All</option>
                 <option value="non_expiry">Non-Expiry</option>
                 <option value="expiry">Expiry Day</option>
             </select>
+
+            <!-- Manual Refresh Button -->
+            <button onclick="manualRefresh()" class="btn btn-ghost btn-sm" title="Refresh data manually">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+                </svg>
+            </button>
+
             <a href="{{ url_for('strategy.builder') }}" class="btn btn-primary">
                 <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path>
@@ -168,8 +182,24 @@
 </div>
 
 <script>
+// Trading hours management
+let isTradingHours = false;
+let pollingIntervals = {
+    metrics: null,
+    funds: null,
+    pnl: null,
+    tradingHoursCheck: null
+};
+
 // Execute Strategy
 function executeStrategy(strategyId) {
+    // Check if market is open
+    if (!isTradingHours) {
+        if (!confirm('⚠️ Market is currently closed. Do you still want to execute this strategy? Orders may be queued until market opens.')) {
+            return;
+        }
+    }
+
     if (confirm('Are you sure you want to execute this strategy?')) {
         fetch(`/strategy/execute/${strategyId}`, {
             method: 'POST',
@@ -183,6 +213,10 @@ function executeStrategy(strategyId) {
             // Handle different execution statuses
             if (data.status === 'success') {
                 showNotification(data.message || 'Strategy executed successfully', 'success');
+                // Manually refresh data immediately
+                loadStrategyMetrics();
+                loadAccountFunds();
+                loadAccountPnL();
                 setTimeout(() => location.reload(), 1500);
             } else if (data.status === 'warning') {
                 // Orders were skipped (e.g., insufficient margin)
@@ -204,6 +238,14 @@ function executeStrategy(strategyId) {
             console.error('Error:', error);
         });
     }
+}
+
+// Manual refresh (works even outside trading hours)
+function manualRefresh() {
+    showNotification('Refreshing data...', 'info');
+    loadStrategyMetrics();
+    loadAccountFunds();
+    loadAccountPnL();
 }
 
 // Load strategy positions and P&L data
@@ -381,16 +423,126 @@ async function loadAccountPnL() {
     }
 }
 
-// Load metrics on page load
-document.addEventListener('DOMContentLoaded', function() {
+// Check trading hours status
+async function checkTradingHours() {
+    try {
+        const response = await fetch('/api/trading-hours/status');
+        const data = await response.json();
+
+        if (data.status === 'success') {
+            const wasTradingHours = isTradingHours;
+            isTradingHours = data.data.is_trading_hours;
+
+            // If trading hours status changed, update polling
+            if (wasTradingHours !== isTradingHours) {
+                if (isTradingHours) {
+                    console.log('📈 Market opened - Starting real-time updates');
+                    startPolling();
+                } else {
+                    console.log('📉 Market closed - Stopping real-time updates');
+                    stopPolling();
+                }
+            }
+
+            // Update UI indicator
+            updateMarketStatusIndicator(data.data);
+        }
+    } catch (error) {
+        console.error('Error checking trading hours:', error);
+        // On error, assume trading hours (fail-safe)
+        if (!isTradingHours) {
+            isTradingHours = true;
+            startPolling();
+        }
+    }
+}
+
+// Start polling intervals
+function startPolling() {
+    // Clear existing intervals first
+    stopPolling();
+
+    // Load data immediately
     loadStrategyMetrics();
     loadAccountFunds();
     loadAccountPnL();
 
-    // Auto-refresh intervals
-    setInterval(loadStrategyMetrics, 10000);  // Strategy metrics every 10 seconds
-    setInterval(loadAccountFunds, 30000);     // Funds every 30 seconds
-    setInterval(loadAccountPnL, 5000);        // P&L every 5 seconds (real-time)
+    // Set up polling intervals
+    pollingIntervals.metrics = setInterval(loadStrategyMetrics, 10000);  // 10 seconds
+    pollingIntervals.funds = setInterval(loadAccountFunds, 30000);       // 30 seconds
+    pollingIntervals.pnl = setInterval(loadAccountPnL, 5000);            // 5 seconds (real-time)
+}
+
+// Stop polling intervals
+function stopPolling() {
+    if (pollingIntervals.metrics) {
+        clearInterval(pollingIntervals.metrics);
+        pollingIntervals.metrics = null;
+    }
+    if (pollingIntervals.funds) {
+        clearInterval(pollingIntervals.funds);
+        pollingIntervals.funds = null;
+    }
+    if (pollingIntervals.pnl) {
+        clearInterval(pollingIntervals.pnl);
+        pollingIntervals.pnl = null;
+    }
+}
+
+// Update market status indicator
+function updateMarketStatusIndicator(tradingData) {
+    const badge = document.getElementById('marketStatusBadge');
+    const text = document.getElementById('marketStatusText');
+
+    if (!badge || !text) return;
+
+    // Show the badge
+    badge.style.display = 'inline-flex';
+
+    if (tradingData.is_trading_hours) {
+        // Market is OPEN
+        badge.className = 'badge badge-lg badge-success gap-2';
+        badge.innerHTML = `
+            <svg class="w-3 h-3 fill-current" viewBox="0 0 12 12">
+                <circle cx="6" cy="6" r="6" class="animate-pulse"/>
+            </svg>
+            <span>Market Open - Live Updates</span>
+        `;
+        console.log('📈 Market Status: OPEN - Live updates active');
+    } else {
+        // Market is CLOSED
+        if (tradingData.is_holiday) {
+            badge.className = 'badge badge-lg badge-error gap-2';
+            badge.innerHTML = `
+                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                </svg>
+                <span>Market Holiday</span>
+            `;
+            console.log('📅 Market Status: CLOSED - Holiday');
+        } else {
+            badge.className = 'badge badge-lg badge-warning gap-2';
+            const nextSessionText = tradingData.next_session
+                ? ` - Next: ${tradingData.next_session.day} ${tradingData.next_session.start_time}`
+                : '';
+            badge.innerHTML = `
+                <svg class="w-3 h-3" fill="currentColor" viewBox="0 0 24 24">
+                    <circle cx="12" cy="12" r="10" opacity="0.3"/>
+                </svg>
+                <span>Market Closed${nextSessionText}</span>
+            `;
+            console.log(`📉 Market Status: CLOSED${nextSessionText}`);
+        }
+    }
+}
+
+// Load metrics on page load
+document.addEventListener('DOMContentLoaded', function() {
+    // Initial trading hours check
+    checkTradingHours();
+
+    // Check trading hours every minute to detect market open/close
+    pollingIntervals.tradingHoursCheck = setInterval(checkTradingHours, 60000);
 });
 
 // Toggle Strategy Active Status
@@ -456,6 +608,8 @@ function showNotification(message, type) {
         alertClass = 'alert-error';
     } else if (type === 'warning') {
         alertClass = 'alert-warning';
+    } else if (type === 'info') {
+        alertClass = 'alert-info';
     }
 
     toast.innerHTML = `
@@ -464,7 +618,8 @@ function showNotification(message, type) {
         </div>
     `;
     document.body.appendChild(toast);
-    setTimeout(() => toast.remove(), 5000);  // Show for 5 seconds for important messages
+    const duration = type === 'info' ? 2000 : 5000;  // Show info for 2 seconds, others for 5 seconds
+    setTimeout(() => toast.remove(), duration);
 }
 
 // Load active positions
