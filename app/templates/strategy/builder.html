@@ -772,34 +772,29 @@ function saveStrategy(execute = false) {
                 .then(execData => {
                     // Handle different execution statuses
                     if (execData.status === 'success' || execData.status === 'partial') {
-                        showNotification(execData.message || 'Orders placed successfully! Redirecting...', 'success');
-                        // Redirect to strategy dashboard after 1.5 seconds
-                        setTimeout(() => window.location.href = '/strategy', 1500);
+                        showNotification(execData.message || 'Orders placed successfully!', 'success');
+                        // Stay on the same page - no redirect
                     } else if (execData.status === 'warning') {
                         // Orders were skipped due to insufficient margin
-                        showNotification(execData.message || 'Strategy execution skipped. Redirecting...', 'warning');
+                        showNotification(execData.message || 'Strategy execution skipped', 'warning');
                         // Show details if available
                         if (execData.results && execData.results.length > 0) {
                             console.log('Execution details:', execData.results);
                         }
-                        // Redirect to strategy dashboard after 2 seconds to show warning
-                        setTimeout(() => window.location.href = '/strategy', 2000);
+                        // Stay on the same page - no redirect
                     } else {
                         // Error status
-                        showNotification(execData.message || 'Strategy execution failed. Redirecting...', 'error');
-                        // Redirect to strategy dashboard after 2 seconds to show error
-                        setTimeout(() => window.location.href = '/strategy', 2000);
+                        showNotification(execData.message || 'Strategy execution failed', 'error');
+                        // Stay on the same page - no redirect
                     }
                 })
                 .catch(error => {
-                    showNotification('Error executing strategy. Redirecting...', 'error');
+                    showNotification('Error executing strategy', 'error');
                     console.error('Error:', error);
-                    // Redirect even on execution error
-                    setTimeout(() => window.location.href = '/strategy', 2000);
+                    // Stay on the same page - no redirect
                 });
-            } else {
-                setTimeout(() => window.location.href = '/strategy', 1500);
             }
+            // Stay on the same page after save (no redirect)
         } else {
             showNotification(data.message || 'Failed to save strategy', 'error');
         }
