@@ -5,11 +5,18 @@ from app.strategy import strategy_bp
 from app.models import Strategy, StrategyLeg, StrategyExecution, TradingAccount
 from app.utils.rate_limiter import api_rate_limit, heavy_rate_limit
 from app.utils.strategy_executor import StrategyExecutor
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
 import logging
 
 logger = logging.getLogger(__name__)
+
+def utc_to_ist(utc_time):
+    """Convert UTC datetime to IST (UTC+5:30)"""
+    if not utc_time:
+        return None
+    ist_offset = timedelta(hours=5, minutes=30)
+    return utc_time + ist_offset
 
 @strategy_bp.route('/')
 @login_required
@@ -550,8 +557,12 @@ def strategy_orderbook(strategy_id):
 
     orders = []
     for execution in executions:
-        # Use actual broker order status if available, otherwise map from execution status
-        if hasattr(execution, 'broker_order_status') and execution.broker_order_status:
+        # Determine order status for display
+        # If order has entry_price, it's definitely filled (override broker status)
+        if execution.entry_price and execution.entry_price > 0:
+            order_status = 'complete'
+        # Otherwise use actual broker order status if available
+        elif hasattr(execution, 'broker_order_status') and execution.broker_order_status:
             order_status = execution.broker_order_status
         else:
             # Fallback to mapping from execution status
@@ -579,7 +590,7 @@ def strategy_orderbook(strategy_id):
             'pricetype': execution.leg.order_type or 'MARKET',
             'order_status': order_status,
             'trigger_price': 0.0,
-            'timestamp': execution.entry_time.strftime('%d-%b-%Y %H:%M:%S') if execution.entry_time else ""
+            'timestamp': utc_to_ist(execution.entry_time).strftime('%d-%b-%Y %H:%M:%S') if execution.entry_time else ""
         })
 
         # If position was exited, add the exit order as a separate order
@@ -598,7 +609,7 @@ def strategy_orderbook(strategy_id):
                 'pricetype': 'MARKET',
                 'order_status': 'complete',
                 'trigger_price': 0.0,
-                'timestamp': execution.exit_time.strftime('%d-%b-%Y %H:%M:%S') if execution.exit_time else ""
+                'timestamp': utc_to_ist(execution.exit_time).strftime('%d-%b-%Y %H:%M:%S') if execution.exit_time else ""
             })
 
     # Calculate statistics like OpenAlgo
@@ -634,12 +645,22 @@ def strategy_tradebook(strategy_id):
     ).join(TradingAccount).join(StrategyLeg).all()
 
     # Filter to show only successfully executed trades
-    # Exclude: failed status, or any problematic broker status
+    # Exclude: failed/pending status, or rejected/cancelled/open/pending broker status
+    # BUT: If trade has entry_price, it's filled - include it regardless of broker status
+    # Note: 'open' broker status means order not yet filled
+    # Note: 'pending' is legacy (not valid OpenAlgo status) but kept for backward compatibility
     trades = [
         trade for trade in trades
-        if trade.status != 'failed'
-        and not (hasattr(trade, 'broker_order_status') and
-                 trade.broker_order_status in ['rejected', 'cancelled', 'pending', 'open'])
+        if (
+            # Include if has entry_price (definitely filled)
+            (trade.entry_price and trade.entry_price > 0)
+            # OR include if status is good AND broker status is good
+            or (
+                trade.status not in ['failed', 'pending']
+                and not (hasattr(trade, 'broker_order_status') and
+                        trade.broker_order_status in ['rejected', 'cancelled', 'open', 'pending'])
+            )
+        )
     ]
 
     data = []
@@ -656,7 +677,7 @@ def strategy_tradebook(strategy_id):
             'product': trade.leg.product_type.upper() if trade.leg.product_type else 'MIS',
             'quantity': 0.0,  # OpenAlgo format shows 0.0 for executed trades
             'average_price': trade.entry_price or 0.0,
-            'timestamp': trade.entry_time.strftime('%H:%M:%S') if trade.entry_time else "",
+            'timestamp': utc_to_ist(trade.entry_time).strftime('%H:%M:%S') if trade.entry_time else "",
             'trade_value': entry_value
         })
 
@@ -674,7 +695,7 @@ def strategy_tradebook(strategy_id):
                 'product': trade.leg.product_type.upper() if trade.leg.product_type else 'MIS',
                 'quantity': 0.0,  # OpenAlgo format shows 0.0 for executed trades
                 'average_price': trade.exit_price,
-                'timestamp': trade.exit_time.strftime('%H:%M:%S') if trade.exit_time else "",
+                'timestamp': utc_to_ist(trade.exit_time).strftime('%H:%M:%S') if trade.exit_time else "",
                 'trade_value': exit_value
             })
 
@@ -702,12 +723,21 @@ def strategy_positions(strategy_id):
 
     data = []
     for position in positions:
-        # Skip orders that were failed or have problematic broker status
-        if position.status == 'failed':
-            continue
-        # Skip if broker status indicates order is not successfully filled
-        if hasattr(position, 'broker_order_status') and position.broker_order_status in ['rejected', 'cancelled', 'pending', 'open']:
-            continue
+        # Skip orders that were failed, pending, or have problematic broker status
+        # BUT: If position has entry_price, it's filled - include it regardless of status
+
+        # If has entry_price, it's definitely filled - include it
+        has_entry_price = position.entry_price and position.entry_price > 0
+
+        if not has_entry_price:
+            # Only apply status checks if no entry price
+            if position.status in ['failed', 'pending']:
+                continue
+            # Skip if broker status indicates order is not successfully filled
+            # 'open' broker status means order placed but not yet filled
+            # 'pending' is legacy (not valid OpenAlgo status) but kept for backward compatibility
+            if hasattr(position, 'broker_order_status') and position.broker_order_status in ['rejected', 'cancelled', 'open', 'pending']:
+                continue
         # Get current price for P&L calculation
         try:
             client = ExtendedOpenAlgoAPI(

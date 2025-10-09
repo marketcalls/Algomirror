@@ -267,14 +267,26 @@ class StrategyExecutor:
                 order_status_data = self._get_order_status(client, order_id, self.strategy.name)
 
                 # Determine execution status based on broker order status
-                broker_order_status = order_status_data.get('order_status', 'pending') if order_status_data else 'pending'
+                # OpenAlgo valid statuses: 'complete', 'open', 'rejected', 'cancelled'
+                broker_order_status = order_status_data.get('order_status', 'open') if order_status_data else 'open'
 
-                # If broker rejected/cancelled the order, mark execution as failed
+                # Map OpenAlgo broker status to our internal execution status
                 if broker_order_status in ['rejected', 'cancelled']:
+                    # Rejected/cancelled orders are marked as failed
                     execution_status = 'failed'
                     logger.warning(f"Order {order_id} was {broker_order_status} by broker for {symbol} on {account_name}")
-                else:
+                elif broker_order_status == 'complete':
+                    # Completed orders are marked as entered (position opened)
                     execution_status = 'entered'
+                    logger.info(f"Order {order_id} completed successfully for {symbol} on {account_name}")
+                elif broker_order_status == 'open':
+                    # Open orders (not yet filled) are marked as pending
+                    execution_status = 'pending'
+                    logger.info(f"Order {order_id} is open (pending fill) for {symbol} on {account_name}")
+                else:
+                    # Unknown status - mark as pending with warning
+                    execution_status = 'pending'
+                    logger.warning(f"Unknown broker order status '{broker_order_status}' for order {order_id}, defaulting to pending")
 
                 # Create execution record with app context for thread safety
                 with self.app.app_context():
@@ -316,7 +328,7 @@ class StrategyExecutor:
                                     db.session.rollback()
                                     raise
 
-                        # Report status based on whether broker accepted or rejected
+                        # Report status based on execution status
                         if execution_status == 'failed':
                             results.append({
                                 'account': account_name,
@@ -327,7 +339,17 @@ class StrategyExecutor:
                                 'order_status': broker_order_status,
                                 'leg': leg.leg_number
                             })
-                        else:
+                        elif execution_status == 'pending':
+                            results.append({
+                                'account': account_name,
+                                'symbol': symbol,
+                                'order_id': order_id,
+                                'status': 'pending',
+                                'message': 'Order placed but not yet filled',
+                                'order_status': broker_order_status,
+                                'leg': leg.leg_number
+                            })
+                        else:  # execution_status == 'entered'
                             results.append({
                                 'account': account_name,
                                 'symbol': symbol,
@@ -338,12 +360,14 @@ class StrategyExecutor:
                                 'leg': leg.leg_number
                             })
 
-                            # Start monitoring for exits only for successfully entered positions
+                            # Start monitoring for exits only for successfully filled positions
                             self._start_exit_monitoring(execution)
 
                 # Log appropriate message based on execution status
                 if execution_status == 'failed':
                     logger.warning(f"[THREAD REJECTED] Leg {leg.leg_number} was {broker_order_status} by broker on {account_name}, order_id: {order_id}")
+                elif execution_status == 'pending':
+                    logger.info(f"[THREAD PENDING] Leg {leg.leg_number} order placed but not yet filled on {account_name}, order_id: {order_id}")
                 else:
                     logger.info(f"[THREAD SUCCESS] Leg {leg.leg_number} executed successfully on {account_name}, order_id: {order_id}")
 
