@@ -795,15 +795,28 @@ async function checkExpiredExecutions() {
 
 // Delete Strategy (with force option for expired positions)
 function deleteStrategy(strategyId, forceDelete = false) {
+    console.log('deleteStrategy called:', strategyId, 'force:', forceDelete);
+
+    // Get CSRF token
+    const csrfToken = document.querySelector('meta[name="csrf-token"]');
+    if (!csrfToken) {
+        showNotification('CSRF token not found. Please refresh the page.', 'error');
+        console.error('CSRF token meta tag not found');
+        return;
+    }
+
     // First attempt - check if there are active positions
     fetch(`/strategy/delete/${strategyId}${forceDelete ? '?force=true' : ''}`, {
         method: 'DELETE',
         headers: {
             'Content-Type': 'application/json',
-            'X-CSRFToken': document.querySelector('meta[name="csrf-token"]').content
+            'X-CSRFToken': csrfToken.content
         }
     })
     .then(response => {
+        // Log response for debugging
+        console.log('Delete response status:', response.status);
+
         // Check if it's a 409 Conflict (has active positions)
         if (response.status === 409) {
             return response.json().then(data => {
@@ -902,6 +915,20 @@ function deleteStrategy(strategyId, forceDelete = false) {
                 return null;
             });
         }
+
+        // Handle other error responses
+        if (!response.ok) {
+            return response.json().then(data => {
+                showNotification(data.message || `Error: ${response.status} ${response.statusText}`, 'error');
+                console.error('Delete failed:', response.status, data);
+                return null;
+            }).catch(err => {
+                showNotification(`Error: ${response.status} ${response.statusText}`, 'error');
+                console.error('Delete failed:', response.status, err);
+                return null;
+            });
+        }
+
         return response.json();
     })
     .then(data => {
