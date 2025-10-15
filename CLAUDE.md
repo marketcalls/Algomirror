@@ -9,6 +9,50 @@ AlgoMirror is a **proprietary** enterprise-grade multi-account management platfo
 ## Key Commands
 
 ### Development Setup
+
+#### Method 1: Using UV (Recommended - Faster)
+```bash
+# Install UV (if not already installed)
+# Windows PowerShell
+powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
+
+# macOS/Linux
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Create and activate virtual environment
+uv venv
+
+# Activate virtual environment (Windows)
+.venv\Scripts\activate
+
+# Activate virtual environment (macOS/Linux)
+source .venv/bin/activate
+
+# Install dependencies from pyproject.toml (10-100x faster than pip)
+uv pip install -e .
+
+# Install with development dependencies
+uv pip install -e ".[dev]"
+
+# Install with production dependencies
+uv pip install -e ".[production]"
+
+# Install Node dependencies and build CSS
+npm install
+npm run build-css
+
+# Configure environment
+cp .env.example .env
+# Edit .env with appropriate values
+
+# Initialize database
+python init_db.py
+
+# Run application (port 8000)
+python app.py
+```
+
+#### Method 2: Using pip (Traditional)
 ```bash
 # Create and activate virtual environment (Windows)
 python -m venv venv
@@ -35,6 +79,8 @@ python init_db.py
 # Run application (port 8000)
 python app.py
 ```
+
+**Note**: UV is 10-100x faster than pip. See `UV_SETUP.md` for detailed UV usage guide.
 
 ### Database Management
 ```bash
