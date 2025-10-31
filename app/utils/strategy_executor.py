@@ -808,6 +808,19 @@ class StrategyExecutor:
     def _find_strike_by_premium(self, leg: StrategyLeg, atm_strike: int, strike_step: int) -> str:
         """Find strike with premium closest to target value"""
         try:
+            from datetime import datetime, time as dt_time
+
+            # INFO: Check if market is open
+            # Indian market hours: 9:15 AM - 3:30 PM IST
+            current_time = datetime.now().time()
+            market_open = dt_time(9, 15)
+            market_close = dt_time(15, 30)
+
+            if not (market_open <= current_time <= market_close):
+                logger.info(f"[PREMIUM INFO] Executing after market hours ({current_time.strftime('%H:%M')})")
+                logger.info(f"[PREMIUM INFO] Using closing prices - illiquid OTM strikes may have stale LTP")
+                logger.info(f"[PREMIUM INFO] For best results, execute premium-based strategies during market hours")
+
             target_premium = leg.premium_value if leg.premium_value else 50
 
             # Check strikes around ATM to find closest premium
@@ -820,6 +833,7 @@ class StrategyExecutor:
             # BANKNIFTY: Now checks ATM ± 2000 points instead of ±1000
             strikes_checked = 0
             strikes_with_data = 0
+            strikes_no_data = []  # Track strikes with no data
             premiums_found = []  # Track all premiums for debugging
 
             logger.info(f"[PREMIUM SEARCH] Target premium: {target_premium}, ATM Strike: {atm_strike}, Strike step: {strike_step}")
@@ -842,33 +856,68 @@ class StrategyExecutor:
                     strikes_checked += 1
 
                     try:
-                        response = client.quotes(symbol=symbol, exchange=exchange)
+                        # IMPROVED: Retry failed API calls up to 2 times
+                        max_retries = 2
+                        response = None
 
-                        if response.get('status') == 'success':
+                        for retry in range(max_retries):
+                            try:
+                                response = client.quotes(symbol=symbol, exchange=exchange)
+                                if response and response.get('status') == 'success':
+                                    break  # Success, exit retry loop
+                                elif retry < max_retries - 1:
+                                    import time
+                                    time.sleep(0.1)  # Brief pause before retry
+                            except Exception as retry_error:
+                                if retry < max_retries - 1:
+                                    import time
+                                    time.sleep(0.1)
+                                else:
+                                    raise  # Re-raise on final attempt
+
+                        if response and response.get('status') == 'success':
                             premium = response.get('data', {}).get('ltp', 0)
 
                             # Only consider strikes with premium > 0 (valid trading data)
                             if premium > 0:
                                 strikes_with_data += 1
+
+                                # IMPROVED: Use weighted difference that prefers premiums closer to target
+                                # If both are equidistant, prefer the one UNDER target (conservative approach)
                                 diff = abs(premium - target_premium)
-                                premiums_found.append((strike, premium, diff))
 
-                                logger.debug(f"[PREMIUM] Strike {strike}: Premium={premium:.2f}, Diff={diff:.2f}")
+                                # Add small penalty for premiums OVER target (prefer under)
+                                if premium > target_premium:
+                                    weighted_diff = diff * 1.1  # 10% penalty for being over target
+                                else:
+                                    weighted_diff = diff
 
-                                if diff < best_diff:
-                                    best_diff = diff
+                                premiums_found.append((strike, premium, diff, weighted_diff))
+
+                                logger.debug(f"[PREMIUM] Strike {strike}: Premium={premium:.2f}, Diff={diff:.2f}, Weighted={weighted_diff:.2f}")
+
+                                # Use weighted diff for comparison
+                                if weighted_diff < best_diff:
+                                    best_diff = weighted_diff
                                     best_strike = strike
                                     best_premium = premium
 
                                     # Only stop early if match is very close (within 2% or 2 points)
                                     threshold = max(2, target_premium * 0.02)
-                                    if diff < threshold:
+                                    if diff < threshold:  # Use actual diff, not weighted
                                         logger.info(f"[PREMIUM] Early exit: Found excellent match at strike {strike}")
                                         break
+                            else:
+                                # Track strikes with no data (premium = 0)
+                                strikes_no_data.append(strike)
+                                logger.debug(f"[PREMIUM] Strike {strike}: No premium data (LTP=0)")
                         else:
-                            logger.debug(f"[PREMIUM] API call failed for strike {strike}: {response.get('message', 'Unknown error')}")
+                            # Track strikes with failed API calls
+                            strikes_no_data.append(strike)
+                            logger.debug(f"[PREMIUM] API call failed for strike {strike}: {response.get('message', 'Unknown error') if response else 'No response'}")
 
                     except Exception as api_error:
+                        strikes_no_data.append(strike)
                         logger.debug(f"[PREMIUM] Exception fetching premium for strike {strike}: {api_error}")
                         continue
 
@@ -877,15 +926,22 @@ class StrategyExecutor:
                 percent_diff = abs(best_premium - target_premium) / target_premium * 100
 
                 logger.info(f"[PREMIUM SEARCH RESULT] Checked {strikes_checked} strikes, found {strikes_with_data} with valid data")
+
+                # Log strikes with no data if significant number missing
+                if strikes_no_data:
+                    logger.info(f"[PREMIUM SEARCH RESULT] {len(strikes_no_data)} strikes had no data: {strikes_no_data[:10]}" +
+                               (f"... and {len(strikes_no_data)-10} more" if len(strikes_no_data) > 10 else ""))
+
                 logger.info(f"[PREMIUM SEARCH RESULT] Target: {target_premium}, Found: {best_premium} at strike {best_strike}")
                 logger.info(f"[PREMIUM SEARCH RESULT] Difference: {best_diff:.2f} ({percent_diff:.1f}%)")
 
                 # Log top 5 closest matches for debugging
                 if premiums_found:
-                    premiums_found.sort(key=lambda x: x[2])  # Sort by diff
-                    logger.info(f"[PREMIUM] Top 5 closest matches:")
-                    for strike, premium, diff in premiums_found[:5]:
-                        logger.info(f"  Strike {strike}: Premium {premium:.2f}, Diff {diff:.2f}")
+                    premiums_found.sort(key=lambda x: x[3])  # Sort by weighted_diff
+                    logger.info(f"[PREMIUM] Top 5 closest matches (sorted by weighted preference):")
+                    for strike, premium, diff, weighted_diff in premiums_found[:5]:
+                        direction = "OVER" if premium > target_premium else "UNDER"
+                        logger.info(f"  Strike {strike}: Premium {premium:.2f}, Diff {diff:.2f}, Weighted {weighted_diff:.2f} ({direction} target)")
 
                 # WARNING: If difference is too large (>30%), log warning
                 if percent_diff > 30:
