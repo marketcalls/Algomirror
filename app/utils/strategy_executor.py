@@ -823,22 +823,18 @@ class StrategyExecutor:
 
             target_premium = leg.premium_value if leg.premium_value else 50
 
-            # Check strikes around ATM to find closest premium
-            best_strike = atm_strike
-            best_diff = float('inf')
-            best_premium = None
-
-            # IMPROVED: Extended range from ±10 to ±20 strikes for better coverage
-            # NIFTY: Now checks ATM ± 1000 points instead of ±500
-            # BANKNIFTY: Now checks ATM ± 2000 points instead of ±1000
+            # IMPROVED: Collect ALL premiums first, then find best match
+            # This ensures we don't miss better options due to search order
             strikes_checked = 0
             strikes_with_data = 0
             strikes_no_data = []  # Track strikes with no data
-            premiums_found = []  # Track all premiums for debugging
+            all_premiums = []  # Collect ALL valid premiums
 
             logger.info(f"[PREMIUM SEARCH] Target premium: {target_premium}, ATM Strike: {atm_strike}, Strike step: {strike_step}")
 
-            for i in range(-20, 21):  # Extended range: ±20 strikes
+            # PHASE 1: Collect all premium data (don't select yet)
+            # Range: ±20 strikes (NIFTY: ATM ± 1000 points | BANKNIFTY: ATM ± 2000 points)
+            for i in range(-20, 21):  # ±20 strikes = 41 total strikes to check
                 strike = atm_strike + (i * strike_step)
 
                 # Build option symbol for this strike
@@ -856,7 +852,7 @@ class StrategyExecutor:
                     strikes_checked += 1
 
                     try:
-                        # IMPROVED: Retry failed API calls up to 2 times
+                        # Retry failed API calls up to 2 times
                         max_retries = 2
                         response = None
 
@@ -881,38 +877,21 @@ class StrategyExecutor:
                             # Only consider strikes with premium > 0 (valid trading data)
                             if premium > 0:
                                 strikes_with_data += 1
-
-                                # IMPROVED: Use weighted difference that prefers premiums closer to target
-                                # If both are equidistant, prefer the one UNDER target (conservative approach)
                                 diff = abs(premium - target_premium)
 
-                                # Add small penalty for premiums OVER target (prefer under)
-                                if premium > target_premium:
-                                    weighted_diff = diff * 1.1  # 10% penalty for being over target
-                                else:
-                                    weighted_diff = diff
+                                # Store all valid premiums for analysis
+                                all_premiums.append({
+                                    'strike': strike,
+                                    'premium': premium,
+                                    'diff': diff,
+                                    'direction': 'OVER' if premium > target_premium else 'UNDER' if premium < target_premium else 'EXACT'
+                                })
 
-                                premiums_found.append((strike, premium, diff, weighted_diff))
-
-                                logger.debug(f"[PREMIUM] Strike {strike}: Premium={premium:.2f}, Diff={diff:.2f}, Weighted={weighted_diff:.2f}")
-
-                                # Use weighted diff for comparison
-                                if weighted_diff < best_diff:
-                                    best_diff = weighted_diff
-                                    best_strike = strike
-                                    best_premium = premium
-
-                                    # Only stop early if match is very close (within 2% or 2 points)
-                                    threshold = max(2, target_premium * 0.02)
-                                    if diff < threshold:  # Use actual diff, not weighted
-                                        logger.info(f"[PREMIUM] Early exit: Found excellent match at strike {strike}")
-                                        break
+                                logger.debug(f"[PREMIUM] Strike {strike}: Premium={premium:.2f}, Diff={diff:.2f}")
                             else:
-                                # Track strikes with no data (premium = 0)
                                 strikes_no_data.append(strike)
                                 logger.debug(f"[PREMIUM] Strike {strike}: No premium data (LTP=0)")
                         else:
-                            # Track strikes with failed API calls
                             strikes_no_data.append(strike)
                             logger.debug(f"[PREMIUM] API call failed for strike {strike}: {response.get('message', 'Unknown error') if response else 'No response'}")
 
@@ -921,36 +900,83 @@ class StrategyExecutor:
                         logger.debug(f"[PREMIUM] Exception fetching premium for strike {strike}: {api_error}")
                         continue
 
+            # PHASE 2: Find the best match from collected data
+            if not all_premiums:
+                logger.error(f"[PREMIUM ERROR] No valid premium data found!")
+                return str(atm_strike)
+
+            # Sort by difference (ascending), then prefer UNDER target for ties
+            all_premiums.sort(key=lambda x: (x['diff'], 1 if x['direction'] == 'OVER' else 0))
+
+            # Select the best match
+            best_match = all_premiums[0]
+            best_strike = best_match['strike']
+            best_premium = best_match['premium']
+            best_diff = best_match['diff']
+
             # VALIDATION: Check if the found premium is acceptable
-            if best_premium is not None:
-                percent_diff = abs(best_premium - target_premium) / target_premium * 100
+            percent_diff = abs(best_premium - target_premium) / target_premium * 100
 
-                logger.info(f"[PREMIUM SEARCH RESULT] Checked {strikes_checked} strikes, found {strikes_with_data} with valid data")
+            logger.info(f"[PREMIUM SEARCH RESULT] Checked {strikes_checked} strikes, found {strikes_with_data} with valid data")
 
-                # Log strikes with no data if significant number missing
-                if strikes_no_data:
-                    logger.info(f"[PREMIUM SEARCH RESULT] {len(strikes_no_data)} strikes had no data: {strikes_no_data[:10]}" +
-                               (f"... and {len(strikes_no_data)-10} more" if len(strikes_no_data) > 10 else ""))
+            # Log strikes with no data if significant number missing
+            if strikes_no_data:
+                logger.info(f"[PREMIUM SEARCH RESULT] {len(strikes_no_data)} strikes had no data: {strikes_no_data[:10]}" +
+                           (f"... and {len(strikes_no_data)-10} more" if len(strikes_no_data) > 10 else ""))
 
-                logger.info(f"[PREMIUM SEARCH RESULT] Target: {target_premium}, Found: {best_premium} at strike {best_strike}")
-                logger.info(f"[PREMIUM SEARCH RESULT] Difference: {best_diff:.2f} ({percent_diff:.1f}%)")
+            logger.info(f"[PREMIUM SEARCH RESULT] ⭐ SELECTED ⭐")
+            logger.info(f"[PREMIUM SEARCH RESULT] Target: {target_premium} → Found: {best_premium} at strike {best_strike}")
+            logger.info(f"[PREMIUM SEARCH RESULT] Direction: {best_match['direction']} target by {best_diff:.2f} ({percent_diff:.1f}%)")
 
-                # Log top 5 closest matches for debugging
-                if premiums_found:
-                    premiums_found.sort(key=lambda x: x[3])  # Sort by weighted_diff
-                    logger.info(f"[PREMIUM] Top 5 closest matches (sorted by weighted preference):")
-                    for strike, premium, diff, weighted_diff in premiums_found[:5]:
-                        direction = "OVER" if premium > target_premium else "UNDER"
-                        logger.info(f"  Strike {strike}: Premium {premium:.2f}, Diff {diff:.2f}, Weighted {weighted_diff:.2f} ({direction} target)")
+            # Create a visual premium distribution map
+            if all_premiums and len(all_premiums) > 1:
+                logger.info(f"[PREMIUM MAP] Distribution of {len(all_premiums)} valid premiums:")
 
-                # WARNING: If difference is too large (>30%), log warning
-                if percent_diff > 30:
-                    logger.warning(f"[PREMIUM WARNING] Best match is {percent_diff:.1f}% away from target!")
-                    logger.warning(f"[PREMIUM WARNING] Found premium {best_premium} vs target {target_premium}")
-                    logger.warning(f"[PREMIUM WARNING] Consider expanding search range or adjusting target premium")
+                # Group premiums by ranges for visual clarity
+                ranges = [
+                    (0, target_premium * 0.5, "FAR BELOW"),
+                    (target_premium * 0.5, target_premium * 0.9, "BELOW"),
+                    (target_premium * 0.9, target_premium * 1.1, "NEAR TARGET"),
+                    (target_premium * 1.1, target_premium * 1.5, "ABOVE"),
+                    (target_premium * 1.5, float('inf'), "FAR ABOVE")
+                ]
+
+                for low, high, label in ranges:
+                    in_range = [p for p in all_premiums if low <= p['premium'] < high]
+                    if in_range:
+                        count = len(in_range)
+                        strikes_str = ', '.join([str(p['strike']) for p in in_range[:5]])
+                        if len(in_range) > 5:
+                            strikes_str += f" ... (+{len(in_range)-5} more)"
+                        logger.info(f"  {label}: {count} strikes - {strikes_str}")
+
+                # Show top 15 closest matches
+                logger.info(f"[PREMIUM] Top 15 closest matches to target {target_premium}:")
+                for i, match in enumerate(all_premiums[:15], 1):
+                    marker = " ← SELECTED" if match['strike'] == best_strike else ""
+                    logger.info(f"  {i:2d}. Strike {match['strike']:5d}: Premium {match['premium']:7.2f}, Diff {match['diff']:6.2f} ({match['direction']:5s}){marker}")
+
+            # WARNING: If difference is too large, log warning with threshold based on target
+            # For small premiums (<50): warn if >20% away
+            # For medium premiums (50-100): warn if >15% away
+            # For large premiums (>100): warn if >10% away
+            if target_premium < 50:
+                warning_threshold = 20
+            elif target_premium < 100:
+                warning_threshold = 15
             else:
-                logger.error(f"[PREMIUM ERROR] No valid premium data found in {strikes_checked} strikes checked!")
-                logger.error(f"[PREMIUM ERROR] Returning ATM strike {atm_strike} as fallback")
+                warning_threshold = 10
+
+            if percent_diff > warning_threshold:
+                logger.warning(f"[PREMIUM WARNING] Best match is {percent_diff:.1f}% away from target (threshold: {warning_threshold}%)")
+                logger.warning(f"[PREMIUM WARNING] Found premium {best_premium} vs target {target_premium}")
+                logger.warning(f"[PREMIUM WARNING] Consider expanding search range or adjusting target premium")
+
+                # Suggest possible reasons
+                if len(strikes_no_data) > 10:
+                    logger.warning(f"[PREMIUM WARNING] Many strikes ({len(strikes_no_data)}) had no data - try during market hours")
+                if strikes_with_data < 10:
+                    logger.warning(f"[PREMIUM WARNING] Only {strikes_with_data} strikes with valid data - limited options available")
 
             return str(best_strike)
 
