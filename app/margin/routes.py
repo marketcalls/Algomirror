@@ -503,3 +503,64 @@ def validate_strategy():
             'status': 'error',
             'message': str(e)
         }), 400
+
+@margin_bp.route('/update-quality/<string:quality_grade>', methods=['POST'])
+@login_required
+@api_rate_limit()
+def update_trade_quality(quality_grade):
+    """Update trade quality settings"""
+    try:
+        data = request.get_json()
+
+        # Validate quality grade
+        if quality_grade not in ['A', 'B', 'C']:
+            return jsonify({
+                'status': 'error',
+                'message': 'Invalid quality grade'
+            }), 400
+
+        # Get the trade quality record
+        quality = TradeQuality.query.filter_by(
+            user_id=current_user.id,
+            quality_grade=quality_grade
+        ).first()
+
+        if not quality:
+            return jsonify({
+                'status': 'error',
+                'message': 'Quality grade not found'
+            }), 404
+
+        # Update fields
+        if 'margin_percentage' in data:
+            margin_pct = float(data['margin_percentage'])
+            if margin_pct < 0 or margin_pct > 100:
+                return jsonify({
+                    'status': 'error',
+                    'message': 'Margin percentage must be between 0 and 100'
+                }), 400
+            quality.margin_percentage = margin_pct
+
+        if 'risk_level' in data:
+            quality.risk_level = data['risk_level']
+
+        if 'description' in data:
+            quality.description = data['description']
+
+        quality.updated_at = datetime.utcnow()
+        db.session.commit()
+
+        logger.info(f"Updated trade quality {quality_grade} for user {current_user.id}")
+
+        return jsonify({
+            'status': 'success',
+            'message': f'Grade {quality_grade} settings updated successfully'
+        })
+
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f"Error updating trade quality: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 400

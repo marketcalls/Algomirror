@@ -1639,6 +1639,9 @@ def close_leg_all_accounts(strategy_id):
             """Worker function to close a leg position in parallel"""
             import time
 
+            # Store position ID for reloading in this thread's session
+            position_id = position.id
+
             # Add staggered delay to prevent race condition
             delay = thread_index * 0.3
             if delay > 0:
@@ -1650,6 +1653,14 @@ def close_leg_all_accounts(strategy_id):
 
             with app.app_context():
                 try:
+                    # CRITICAL FIX: Reload position in this thread's session
+                    # The position object passed from main thread is attached to a different session
+                    # We must reload it here to ensure changes persist when committed
+                    position = StrategyExecution.query.get(position_id)
+                    if not position:
+                        logger.error(f"[THREAD] Position {position_id} not found in database")
+                        return
+
                     logger.info(f"[THREAD] Closing leg position: {position.symbol} on account {position.account.account_name}, leg {position.leg.leg_number}")
 
                     # Create API client

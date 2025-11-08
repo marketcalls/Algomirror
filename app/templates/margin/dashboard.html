@@ -183,8 +183,16 @@
                     <div class="card-body p-4">
                         <div class="flex items-center justify-between mb-2">
                             <h3 class="font-bold">Grade {{ quality.quality_grade }}</h3>
-                            <div class="badge badge-{{ 'success' if quality.quality_grade == 'A' else 'warning' if quality.quality_grade == 'B' else 'error' }}">
-                                {{ quality.margin_percentage }}%
+                            <div class="flex items-center gap-2">
+                                <div class="badge badge-{{ 'success' if quality.quality_grade == 'A' else 'warning' if quality.quality_grade == 'B' else 'error' }}">
+                                    {{ quality.margin_percentage }}%
+                                </div>
+                                <button onclick="openEditQualityModal('{{ quality.quality_grade }}', {{ quality.margin_percentage }}, '{{ quality.risk_level }}', '{{ quality.description }}')"
+                                        class="btn btn-ghost btn-xs">
+                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path>
+                                    </svg>
+                                </button>
                             </div>
                         </div>
                         <p class="text-sm text-base-content/70">{{ quality.risk_level|title }}</p>
@@ -195,6 +203,57 @@
             </div>
         </div>
     </div>
+
+    <!-- Edit Quality Modal -->
+    <dialog id="edit_quality_modal" class="modal">
+        <div class="modal-box">
+            <h3 class="font-bold text-lg mb-4">Edit Trade Quality Settings</h3>
+            <form id="editQualityForm">
+                <input type="hidden" id="edit_quality_grade">
+
+                <div class="form-control mb-4">
+                    <label class="label">
+                        <span class="label-text">Quality Grade</span>
+                    </label>
+                    <input type="text" id="edit_quality_grade_display" class="input input-bordered" readonly>
+                </div>
+
+                <div class="form-control mb-4">
+                    <label class="label">
+                        <span class="label-text">Margin Percentage (%)</span>
+                    </label>
+                    <input type="number" id="edit_margin_percentage" class="input input-bordered"
+                           min="0" max="100" step="0.1" required>
+                </div>
+
+                <div class="form-control mb-4">
+                    <label class="label">
+                        <span class="label-text">Risk Level</span>
+                    </label>
+                    <select id="edit_risk_level" class="select select-bordered">
+                        <option value="conservative">Conservative</option>
+                        <option value="moderate">Moderate</option>
+                        <option value="aggressive">Aggressive</option>
+                    </select>
+                </div>
+
+                <div class="form-control mb-4">
+                    <label class="label">
+                        <span class="label-text">Description</span>
+                    </label>
+                    <textarea id="edit_description" class="textarea textarea-bordered" rows="3"></textarea>
+                </div>
+
+                <div class="modal-action">
+                    <button type="button" onclick="closeEditQualityModal()" class="btn">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Save Changes</button>
+                </div>
+            </form>
+        </div>
+        <form method="dialog" class="modal-backdrop">
+            <button onclick="closeEditQualityModal()">close</button>
+        </form>
+    </dialog>
 </div>
 
 <script>
@@ -250,6 +309,60 @@ document.addEventListener('visibilitychange', () => {
         refreshInterval = setInterval(() => {
             // You can add auto-refresh logic here if needed
         }, 30000);
+    }
+});
+
+// Trade Quality Edit Functions
+function openEditQualityModal(grade, marginPct, riskLevel, description) {
+    document.getElementById('edit_quality_grade').value = grade;
+    document.getElementById('edit_quality_grade_display').value = `Grade ${grade}`;
+    document.getElementById('edit_margin_percentage').value = marginPct;
+    document.getElementById('edit_risk_level').value = riskLevel;
+    document.getElementById('edit_description').value = description;
+
+    document.getElementById('edit_quality_modal').showModal();
+}
+
+function closeEditQualityModal() {
+    document.getElementById('edit_quality_modal').close();
+}
+
+document.getElementById('editQualityForm').addEventListener('submit', async function(e) {
+    e.preventDefault();
+
+    const grade = document.getElementById('edit_quality_grade').value;
+    const marginPct = document.getElementById('edit_margin_percentage').value;
+    const riskLevel = document.getElementById('edit_risk_level').value;
+    const description = document.getElementById('edit_description').value;
+
+    try {
+        const response = await fetch(`/margin/update-quality/${grade}`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': document.querySelector('meta[name="csrf-token"]').content
+            },
+            body: JSON.stringify({
+                margin_percentage: parseFloat(marginPct),
+                risk_level: riskLevel,
+                description: description
+            })
+        });
+
+        const data = await response.json();
+
+        if (data.status === 'success') {
+            showNotification(data.message, 'success');
+            closeEditQualityModal();
+            setTimeout(() => {
+                window.location.reload();
+            }, 1000);
+        } else {
+            showNotification(data.message || 'Failed to update quality settings', 'error');
+        }
+    } catch (error) {
+        showNotification('Error updating quality settings', 'error');
+        console.error('Error:', error);
     }
 });
 </script>

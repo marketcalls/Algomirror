@@ -17,12 +17,6 @@
                 <span id="marketStatusText">Checking...</span>
             </div>
 
-            <select class="select select-bordered" id="marketCondition">
-                <option value="">Market Condition: All</option>
-                <option value="non_expiry">Non-Expiry</option>
-                <option value="expiry">Expiry Day</option>
-            </select>
-
             <!-- Manual Refresh Button -->
             <button onclick="manualRefresh()" class="btn btn-ghost btn-sm" title="Refresh data manually">
                 <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -85,11 +79,11 @@
         {% endfor %}
     </div>
 
-    <!-- Strategy Templates Section -->
+    <!-- Strategy Positions Section -->
     <div class="card bg-base-100 shadow-lg mb-6">
         <div class="card-body">
             <div class="flex justify-between items-center mb-4">
-                <h2 class="card-title">Strategy Templates</h2>
+                <h2 class="card-title">Strategy Positions</h2>
                 <div class="flex gap-2">
                     <button onclick="checkExpiredExecutions()" class="btn btn-ghost btn-sm" title="Check for expired positions">
                         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -168,17 +162,6 @@
                 </table>
             </div>
             {% endif %}
-        </div>
-    </div>
-
-    <!-- Active Positions Section -->
-    <div class="card bg-base-100 shadow-lg">
-        <div class="card-body">
-            <h2 class="card-title mb-4">Active Positions</h2>
-
-            <div id="activePositions" class="text-center py-8 text-base-content/60">
-                <p>No active positions</p>
-            </div>
         </div>
     </div>
 </div>

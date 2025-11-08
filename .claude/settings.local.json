@@ -2,7 +2,11 @@
   "permissions": {
     "allow": [
       "Bash(.venv/Scripts/python.exe:*)",
-      "Bash(set:*)"
+      "Bash(set:*)",
+      "Bash(powershell -Command \"Get-Content ''D:\\openalgo-multi\\algomirror\\app\\templates\\margin\\dashboard.html'' -Tail 20\")",
+      "Bash(netstat:*)",
+      "Bash(findstr:*)",
+      "Bash(powershell -Command \"Stop-Process -Id 303780,287564 -Force\")"
     ],
     "deny": [],
     "ask": []
