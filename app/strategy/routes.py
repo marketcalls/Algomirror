@@ -666,9 +666,9 @@ def modify_leg_orders(strategy_id, leg_id):
                 )
 
                 if response.get('status') == 'success':
-                    # DO NOT set entry_price here - it should only be set when order is FILLED
-                    # entry_price is the execution price, not the limit price
-                    # Order is still pending after modification
+                    # Update entry_price to new limit price for display in orderbook
+                    # This will be updated to actual filled price by the order status poller when order fills
+                    execution.entry_price = new_price
                     modified_count += 1
                     logger.info(f"Modified order {execution.order_id} for leg {leg_id} to price {new_price}")
                 else:
@@ -713,6 +713,140 @@ def modify_leg_orders(strategy_id, leg_id):
 
     except Exception as e:
         logger.error(f"Error modifying leg orders: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+
+@strategy_bp.route('/<int:strategy_id>/leg/<int:leg_id>/convert-to-market', methods=['POST'])
+@login_required
+@api_rate_limit()
+def convert_leg_to_market(strategy_id, leg_id):
+    """Convert pending limit orders to market orders (cancel + place market order)"""
+    try:
+        from app.utils.openalgo_client import ExtendedOpenAlgoAPI
+        from app.utils.order_status_poller import order_status_poller
+
+        strategy = Strategy.query.filter_by(
+            id=strategy_id,
+            user_id=current_user.id
+        ).first_or_404()
+
+        leg = StrategyLeg.query.filter_by(
+            id=leg_id,
+            strategy_id=strategy_id
+        ).first_or_404()
+
+        # Get all executions for this leg with status 'pending' (open orders)
+        pending_executions = StrategyExecution.query.filter_by(
+            strategy_id=strategy_id,
+            leg_id=leg_id,
+            status='pending'
+        ).all()
+
+        # Also check for 'entered' status with broker_order_status='open'
+        entered_executions = StrategyExecution.query.filter_by(
+            strategy_id=strategy_id,
+            leg_id=leg_id,
+            status='entered'
+        ).filter(StrategyExecution.broker_order_status == 'open').all()
+
+        all_pending = pending_executions + entered_executions
+
+        if not all_pending:
+            return jsonify({
+                'status': 'error',
+                'message': 'No pending orders found for this leg'
+            }), 400
+
+        converted_count = 0
+        failed_count = 0
+        errors = []
+
+        for execution in all_pending:
+            try:
+                # Step 0: Remove from order status poller to prevent it from marking as failed
+                order_status_poller.remove_order(execution.id)
+                logger.info(f"Removed execution {execution.id} (order {execution.order_id}) from poller before converting to market")
+
+                account = execution.account
+                client = ExtendedOpenAlgoAPI(
+                    api_key=account.get_api_key(),
+                    host=account.host_url
+                )
+
+                # Step 1: Cancel the existing limit order
+                cancel_response = client.cancelorder(
+                    order_id=execution.order_id,
+                    strategy=f"Strategy_{strategy.id}"
+                )
+
+                if cancel_response.get('status') != 'success':
+                    failed_count += 1
+                    error_msg = cancel_response.get('message', 'Failed to cancel order')
+                    errors.append(f"Order {execution.order_id}: {error_msg}")
+                    logger.error(f"Failed to cancel order {execution.order_id}: {error_msg}")
+                    continue
+
+                logger.info(f"Cancelled order {execution.order_id} for leg {leg_id}")
+
+                # Step 2: Place a new market order
+                market_response = client.placeorder(
+                    strategy=f"Strategy_{strategy.id}",
+                    symbol=execution.symbol,
+                    action=leg.action,
+                    exchange=execution.exchange,
+                    price_type='MARKET',
+                    product=strategy.product_order_type,
+                    quantity=execution.quantity
+                )
+
+                if market_response.get('status') == 'success':
+                    # Update execution with new market order ID
+                    new_order_id = market_response.get('orderid')
+                    execution.order_id = new_order_id
+                    execution.broker_order_status = 'complete'  # Market orders execute immediately
+                    execution.status = 'entered'  # Order is now entered
+                    converted_count += 1
+                    logger.info(f"Placed market order {new_order_id} for leg {leg_id} (converted from limit order)")
+                else:
+                    failed_count += 1
+                    error_msg = market_response.get('message', 'Failed to place market order')
+                    errors.append(f"Account {account.account_name}: {error_msg}")
+                    logger.error(f"Failed to place market order for account {account.account_name}: {error_msg}")
+
+            except Exception as e:
+                failed_count += 1
+                errors.append(f"Order {execution.order_id}: {str(e)}")
+                logger.error(f"Exception converting order {execution.order_id}: {e}")
+
+        db.session.commit()
+
+        if converted_count > 0 and failed_count == 0:
+            return jsonify({
+                'status': 'success',
+                'message': f'Converted {converted_count} order(s) for leg {leg.leg_number} to market orders',
+                'converted': converted_count
+            })
+        elif converted_count > 0:
+            return jsonify({
+                'status': 'partial',
+                'message': f'Converted {converted_count} order(s), {failed_count} failed',
+                'converted': converted_count,
+                'failed': failed_count,
+                'errors': errors
+            })
+        else:
+            return jsonify({
+                'status': 'error',
+                'message': f'Failed to convert all orders',
+                'converted': 0,
+                'failed': failed_count,
+                'errors': errors
+            }), 500
+
+    except Exception as e:
+        logger.error(f"Error converting leg to market orders: {e}")
         return jsonify({
             'status': 'error',
             'message': str(e)

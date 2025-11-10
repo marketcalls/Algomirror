@@ -343,6 +343,13 @@ class StrategyExecutor:
                     # Background poller will update status asynchronously
                     logger.info(f"[ORDER PLACED] Order ID: {order_id} for {symbol} on {account_name} (will poll status)")
 
+                    # Determine entry price based on order type
+                    # For LIMIT orders, set to limit price initially (will be updated to actual filled price by poller)
+                    # For MARKET orders, leave as None (will be set to filled price by poller)
+                    initial_entry_price = None
+                    if leg.order_type == 'LIMIT' and leg.limit_price:
+                        initial_entry_price = leg.limit_price
+
                     # Create execution record (already in app context from _execute_leg_parallel)
                     execution = StrategyExecution(
                         strategy_id=self.strategy.id,
@@ -355,7 +362,7 @@ class StrategyExecutor:
                         status='pending',  # Will be updated by background poller
                         broker_order_status='open',  # Assume open until poller updates
                         entry_time=datetime.utcnow(),
-                        entry_price=None  # Will be set when filled
+                        entry_price=initial_entry_price  # Set to limit price for LIMIT orders, None for MARKET
                     )
 
                     with self.lock:

@@ -442,6 +442,9 @@
                 <button type="button" onclick="modifyLegPrice(this)" class="btn btn-warning btn-sm leg-modify-btn" style="display:none;">
                     Modify Price
                 </button>
+                <button type="button" onclick="convertToMarket(this)" class="btn btn-success btn-sm leg-convert-btn" style="display:none;">
+                    Convert to Market
+                </button>
                 <button type="button" onclick="cancelLegOrder(this)" class="btn btn-error btn-sm leg-cancel-btn" style="display:none;">
                     Cancel Order
                 </button>
@@ -764,11 +767,15 @@ function freezeLeg(legItem, isExecuted, isPending = false) {
                 limitPriceField.classList.remove('cursor-not-allowed');
             }
 
-            // Show modify and cancel buttons for pending orders
+            // Show modify, convert to market, and cancel buttons for pending orders
             const modifyBtn = legItem.querySelector('.leg-modify-btn');
+            const convertBtn = legItem.querySelector('.leg-convert-btn');
             const cancelBtn = legItem.querySelector('.leg-cancel-btn');
             if (modifyBtn) {
                 modifyBtn.style.display = 'inline-block';
+            }
+            if (convertBtn) {
+                convertBtn.style.display = 'inline-block';
             }
             if (cancelBtn) {
                 cancelBtn.style.display = 'inline-block';
@@ -943,6 +950,56 @@ async function modifyLegPrice(button) {
     } catch (error) {
         console.error('Error modifying order:', error);
         showNotification('Failed to modify order price', 'error');
+    }
+}
+
+// Convert pending limit order to market order
+async function convertToMarket(button) {
+    const legItem = button.closest('.leg-item');
+    const legNumber = legItem.querySelector('.leg-number').textContent;
+
+    if (!confirm(`Convert Leg ${legNumber} to Market Order? This will cancel the current pending order and place a market order for immediate execution.`)) {
+        return;
+    }
+
+    try {
+        // Get leg ID from execution data
+        const legId = legItem.dataset.legId;
+        if (!legId) {
+            showNotification('Cannot find leg ID for conversion', 'error');
+            return;
+        }
+
+        const strategyId = {{ strategy.id if strategy else 'null' }};
+        if (!strategyId) {
+            showNotification('Strategy ID not found', 'error');
+            return;
+        }
+
+        const response = await fetch(`/strategy/${strategyId}/leg/${legId}/convert-to-market`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': document.querySelector('meta[name="csrf-token"]').content
+            }
+        });
+
+        const data = await response.json();
+
+        if (data.status === 'success' || data.status === 'partial') {
+            showNotification(data.message || 'Order converted to market and executed', 'success');
+            // Reload strategy data to refresh everything
+            loadStrategyData();
+            checkAndFreezePendingLegs();
+        } else {
+            showNotification(data.message || 'Failed to convert to market order', 'error');
+            if (data.errors && data.errors.length > 0) {
+                console.error('Conversion errors:', data.errors);
+            }
+        }
+    } catch (error) {
+        console.error('Error converting to market order:', error);
+        showNotification('Failed to convert to market order', 'error');
     }
 }
 

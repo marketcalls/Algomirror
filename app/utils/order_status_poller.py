@@ -74,6 +74,16 @@ class OrderStatusPoller:
             logger.info(f"[POLLER] Added order {order_id} (execution {execution_id}) to polling queue. "
                        f"Queue size: {len(self.pending_orders)}")
 
+    def remove_order(self, execution_id: int):
+        """Remove an order from the polling queue"""
+        with self._lock:
+            order_info = self.pending_orders.pop(execution_id, None)
+            if order_info:
+                logger.info(f"[POLLER] Removed order {order_info['order_id']} (execution {execution_id}) from polling queue. "
+                           f"Queue size: {len(self.pending_orders)}")
+                return True
+            return False
+
     def _poll_loop(self):
         """Main polling loop - runs in background thread"""
         from app import create_app

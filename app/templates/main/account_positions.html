@@ -1,0 +1,390 @@
+{% extends "layout.html" %}
+
+{% block title %}Account Positions - AlgoMirror{% endblock %}
+
+{% block content %}
+<div class="container mx-auto px-4 py-6">
+    <!-- Header -->
+    <div class="flex justify-between items-center mb-6">
+        <div>
+            <h1 class="text-3xl font-bold">Account Positions</h1>
+            <p class="text-base-content/70 mt-1">
+                {{ "Showing positions for selected account" if single_account else "Manage open positions across all accounts" }}
+            </p>
+        </div>
+        <div class="flex gap-3">
+            <!-- Account Filter Dropdown -->
+            {% if all_accounts|length > 1 %}
+            <select class="select select-bordered select-sm h-9 min-w-[180px]" onchange="window.location.href = this.value">
+                <option value="{{ url_for('main.account_positions') }}" {{ 'selected' if not single_account else '' }}>All Accounts</option>
+                {% for account in all_accounts %}
+                <option value="{{ url_for('main.account_positions', account=account.id) }}" {{ 'selected' if single_account and selected_account_id == account.id else '' }}>
+                    {{ account.account_name }}
+                </option>
+                {% endfor %}
+            </select>
+            {% endif %}
+
+            <a href="{{ url_for('main.dashboard') }}" class="btn btn-ghost btn-sm gap-1">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path>
+                </svg>
+                Back
+            </a>
+        </div>
+    </div>
+
+    {% if accounts|length == 0 %}
+    <div class="card bg-base-100 shadow-lg">
+        <div class="card-body text-center py-12">
+            <svg class="w-16 h-16 mx-auto text-base-content/30 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4"></path>
+            </svg>
+            <h3 class="text-xl font-semibold mb-2">No Accounts Found</h3>
+            <p class="text-base-content/60 mb-4">Add a trading account to get started</p>
+            <a href="{{ url_for('accounts.add') }}" class="btn btn-primary">Add Account</a>
+        </div>
+    </div>
+    {% else %}
+    <!-- Account Cards -->
+    <div class="space-y-6">
+        {% for account in accounts %}
+        <div class="card bg-base-100 shadow-lg hover:shadow-xl transition-shadow">
+            <div class="card-body">
+                <!-- Account Header -->
+                <div class="mb-6 pb-6 border-b border-base-300">
+                    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-5">
+                        <div class="flex items-center gap-3">
+                            <h2 class="text-2xl font-bold">{{ account.account_name }}</h2>
+                            <span class="badge badge-success">{{ account.broker_name }}</span>
+                        </div>
+
+                        {% if account.total_positions > 0 %}
+                        <button onclick="closeAllAccountPositions({{ account.id }}, '{{ account.account_name }}')" class="btn btn-error btn-sm gap-2 self-start sm:self-center">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                            </svg>
+                            Close All
+                        </button>
+                        {% endif %}
+                    </div>
+
+                    <!-- Stats Grid -->
+                    <div class="grid grid-cols-2 gap-6">
+                        <div class="bg-base-200 rounded-lg p-4">
+                            <div class="flex items-center gap-2 mb-2">
+                                <svg class="w-5 h-5 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path>
+                                </svg>
+                                <span class="text-sm text-base-content/60">Positions</span>
+                            </div>
+                            <div class="text-2xl font-bold">{{ account.total_positions }}</div>
+                        </div>
+
+                        <div class="bg-base-200 rounded-lg p-4">
+                            <div class="flex items-center gap-2 mb-2">
+                                <svg class="w-5 h-5 {% if account.total_unrealized_pnl >= 0 %}text-success{% else %}text-error{% endif %}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                                </svg>
+                                <span class="text-sm text-base-content/60">Unrealized P&L</span>
+                            </div>
+                            <div class="text-2xl font-bold {% if account.total_unrealized_pnl >= 0 %}text-success{% else %}text-error{% endif %}">
+                                {% if account.total_unrealized_pnl >= 0 %}+{% endif %}₹{{ "%.2f"|format(account.total_unrealized_pnl) }}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                {% if account.strategies|length == 0 %}
+                <div class="text-center py-8">
+                    <svg class="w-12 h-12 mx-auto text-base-content/30 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                    </svg>
+                    <p class="text-base-content/60">No open positions in this account</p>
+                </div>
+                {% else %}
+                <!-- Horizontal Strategy Cards with Scroll -->
+                <div class="mb-4">
+                    <h3 class="font-semibold text-lg mb-4 flex items-center gap-2">
+                        <svg class="w-5 h-5 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"></path>
+                        </svg>
+                        Active Strategies
+                    </h3>
+                </div>
+
+                <!-- Horizontal Scroll Container -->
+                <div class="overflow-x-auto pb-4">
+                    <div class="flex gap-5 {{ 'min-w-max' if not single_account else '' }}">
+                        {% set badge_colors = ['badge-primary', 'badge-secondary', 'badge-accent', 'badge-info', 'badge-warning', 'badge-success'] %}
+                        {% for strategy in account.strategies %}
+                        {% set color_class = badge_colors[loop.index0 % badge_colors|length] %}
+
+                        <!-- Strategy Card -->
+                        <div class="card bg-base-200 shadow-lg hover:shadow-xl transition-all {{ 'w-96' if not single_account else 'flex-1' }} flex-shrink-0">
+                            <div class="card-body p-5">
+                                <!-- Strategy Header -->
+                                <div class="mb-4">
+                                    <span class="badge {{ color_class }} badge-lg gap-2 py-3">
+                                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"></path>
+                                        </svg>
+                                        {{ strategy.name }}
+                                    </span>
+                                </div>
+
+                                <!-- Strategy Stats -->
+                                <div class="grid grid-cols-2 gap-3 mb-4">
+                                    <div class="bg-base-100 rounded-lg p-3">
+                                        <div class="text-xs text-base-content/60 mb-1">Positions</div>
+                                        <div class="text-xl font-bold">{{ strategy.position_count }}</div>
+                                    </div>
+                                    <div class="bg-base-100 rounded-lg p-3">
+                                        <div class="text-xs text-base-content/60 mb-1">P&L</div>
+                                        <div class="text-xl font-bold {% if strategy.total_pnl >= 0 %}text-success{% else %}text-error{% endif %}">
+                                            {% if strategy.total_pnl >= 0 %}+{% endif %}₹{{ "%.2f"|format(strategy.total_pnl) }}
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="divider my-3"></div>
+
+                                <!-- Position List (Compact) -->
+                                <div class="space-y-2.5 {{ 'max-h-96' if single_account else 'max-h-64' }} overflow-y-auto mb-4">
+                                    {% for execution in strategy.executions %}
+                                    <div class="bg-base-100 rounded-lg p-3 hover:bg-base-300 transition-colors">
+                                        <div class="flex justify-between items-center mb-2">
+                                            <span class="font-mono font-bold text-sm">{{ execution.symbol }}</span>
+                                            <span class="badge badge-outline badge-xs">{{ execution.exchange }}</span>
+                                        </div>
+                                        <div class="flex justify-between text-xs text-base-content/70 mb-2">
+                                            <span>Qty: {{ execution.quantity }}</span>
+                                            <span>Entry: ₹{{ "%.2f"|format(execution.entry_price) }}</span>
+                                        </div>
+                                        <div class="flex justify-between items-center">
+                                            <span class="text-xs text-base-content/60">
+                                                {% if execution.entry_time %}
+                                                {{ execution.entry_time.strftime('%d %b, %H:%M') }}
+                                                {% else %}
+                                                -
+                                                {% endif %}
+                                            </span>
+                                            <span class="font-semibold text-sm {% if execution.unrealized_pnl >= 0 %}text-success{% else %}text-error{% endif %}">
+                                                {% if execution.unrealized_pnl >= 0 %}+{% endif %}₹{{ "%.2f"|format(execution.unrealized_pnl) }}
+                                            </span>
+                                        </div>
+                                    </div>
+                                    {% endfor %}
+                                </div>
+
+                                <!-- Action Buttons -->
+                                <div class="flex gap-2">
+                                    <button onclick="showStrategyDetails({{ account.id }}, {{ strategy.id }})" class="btn btn-ghost btn-sm flex-1 gap-2">
+                                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path>
+                                        </svg>
+                                        View
+                                    </button>
+                                    <button onclick="closeStrategyPositions({{ strategy.id }}, '{{ strategy.name }}')" class="btn btn-error btn-sm flex-1 gap-2">
+                                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                                        </svg>
+                                        Close
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+</div>
+
+<!-- Strategy Details Modals (One per strategy) -->
+{% for account in accounts %}
+    {% for strategy in account.strategies %}
+    <dialog id="strategyDetailsModal{{ account.id }}_{{ strategy.id }}" class="modal">
+        <div class="modal-box max-w-4xl">
+            <form method="dialog">
+                <button class="btn btn-sm btn-circle btn-ghost absolute right-2 top-2">✕</button>
+            </form>
+            <h3 class="font-bold text-lg mb-4">
+                <svg class="w-5 h-5 inline mr-2 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"></path>
+                </svg>
+                {{ strategy.name }} - Full Details
+            </h3>
+
+            <!-- Stats Summary -->
+            <div class="grid grid-cols-2 gap-4 mb-4">
+                <div class="stat bg-base-200 rounded-lg p-4">
+                    <div class="stat-title">Total Positions</div>
+                    <div class="stat-value text-2xl">{{ strategy.position_count }}</div>
+                </div>
+                <div class="stat bg-base-200 rounded-lg p-4">
+                    <div class="stat-title">Total P&L</div>
+                    <div class="stat-value text-2xl {% if strategy.total_pnl >= 0 %}text-success{% else %}text-error{% endif %}">
+                        {% if strategy.total_pnl >= 0 %}+{% endif %}₹{{ "%.2f"|format(strategy.total_pnl) }}
+                    </div>
+                </div>
+            </div>
+
+            <!-- Positions Table -->
+            <div class="overflow-x-auto">
+                <table class="table table-zebra">
+                    <thead>
+                        <tr>
+                            <th>Symbol</th>
+                            <th>Exchange</th>
+                            <th class="text-right">Quantity</th>
+                            <th class="text-right">Entry Price</th>
+                            <th>Entry Time</th>
+                            <th class="text-right">Unrealized P&L</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for execution in strategy.executions %}
+                        <tr>
+                            <td class="font-mono font-bold">{{ execution.symbol }}</td>
+                            <td><span class="badge badge-outline badge-xs">{{ execution.exchange }}</span></td>
+                            <td class="text-right">{{ execution.quantity }}</td>
+                            <td class="text-right">₹{{ "%.2f"|format(execution.entry_price) }}</td>
+                            <td class="text-sm">
+                                {% if execution.entry_time %}
+                                {{ execution.entry_time.strftime('%d %b %Y, %H:%M') }}
+                                {% else %}
+                                -
+                                {% endif %}
+                            </td>
+                            <td class="text-right font-bold {% if execution.unrealized_pnl >= 0 %}text-success{% else %}text-error{% endif %}">
+                                {% if execution.unrealized_pnl >= 0 %}+{% endif %}₹{{ "%.2f"|format(execution.unrealized_pnl) }}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        <form method="dialog" class="modal-backdrop">
+            <button>close</button>
+        </form>
+    </dialog>
+    {% endfor %}
+{% endfor %}
+
+<script>
+let currentAccountId = null;
+let currentStrategyId = null;
+
+// Show strategy details modal
+function showStrategyDetails(accountId, strategyId) {
+    const modalId = `strategyDetailsModal${accountId}_${strategyId}`;
+    const modal = document.getElementById(modalId);
+    if (modal) {
+        modal.showModal();
+    }
+}
+
+// Close all account positions directly with toast messages
+function closeAllAccountPositions(accountId, accountName) {
+    executeCloseAllPositions(accountId, accountName);
+}
+
+// Close strategy positions
+async function closeStrategyPositions(strategyId, strategyName) {
+    try {
+        showNotification(`Closing all positions for "${strategyName}"...`, 'info');
+
+        const response = await fetch(`/strategy/${strategyId}/close-all`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': document.querySelector('meta[name="csrf-token"]').content
+            }
+        });
+
+        const data = await response.json();
+
+        if (data.status === 'success') {
+            showNotification(`✓ Successfully closed all positions for "${strategyName}" | P&L: ₹${data.total_pnl.toFixed(2)}`, 'success');
+            setTimeout(() => location.reload(), 2000);
+        } else if (data.status === 'warning') {
+            showNotification(`⚠ ${data.message}`, 'warning');
+            setTimeout(() => location.reload(), 3000);
+        } else if (data.status === 'info') {
+            showNotification(`ℹ ${data.message}`, 'info');
+        } else {
+            showNotification(`✗ ${data.message || 'Failed to close positions'}`, 'error');
+        }
+    } catch (error) {
+        console.error('Error:', error);
+        showNotification(`✗ Error closing positions for "${strategyName}"`, 'error');
+    }
+}
+
+// Execute close all positions
+async function executeCloseAllPositions(accountId, accountName) {
+    try {
+        showNotification(`Closing all positions in account "${accountName}"...`, 'info');
+
+        const response = await fetch(`/account/${accountId}/close-all-positions`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': document.querySelector('meta[name="csrf-token"]').content
+            }
+        });
+
+        const data = await response.json();
+
+        if (data.status === 'success') {
+            showNotification(`✓ Successfully closed ${data.closed_count} position(s) in "${accountName}" | Total P&L: ₹${data.total_pnl.toFixed(2)}`, 'success');
+            setTimeout(() => location.reload(), 2000);
+        } else if (data.status === 'warning') {
+            showNotification(`⚠ ${data.message}`, 'warning');
+            if (data.errors && data.errors.length > 0) {
+                console.error('Errors:', data.errors);
+            }
+            setTimeout(() => location.reload(), 3000);
+        } else if (data.status === 'info') {
+            showNotification(`ℹ ${data.message}`, 'info');
+        } else {
+            showNotification(`✗ ${data.message || 'Failed to close positions'}`, 'error');
+            if (data.errors && data.errors.length > 0) {
+                console.error('Errors:', data.errors);
+            }
+        }
+    } catch (error) {
+        console.error('Error:', error);
+        showNotification(`✗ Error closing positions in account "${accountName}"`, 'error');
+    }
+}
+
+// Show notification
+function showNotification(message, type) {
+    const toast = document.createElement('div');
+    toast.className = `toast toast-end`;
+
+    let alertClass = 'alert-info';
+    if (type === 'success') alertClass = 'alert-success';
+    else if (type === 'error') alertClass = 'alert-error';
+    else if (type === 'warning') alertClass = 'alert-warning';
+
+    toast.innerHTML = `
+        <div class="alert ${alertClass}">
+            <span>${message}</span>
+        </div>
+    `;
+    document.body.appendChild(toast);
+
+    const duration = type === 'info' ? 2000 : 5000;
+    setTimeout(() => toast.remove(), duration);
+}
+</script>
+{% endblock %}

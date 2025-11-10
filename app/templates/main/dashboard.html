@@ -10,7 +10,7 @@
             <h1 class="text-3xl font-bold">Multi-Strategy Trading Platform</h1>
             <p class="text-base-content/70 mt-1">Manage unlimited strategies across multiple accounts</p>
         </div>
-        <div class="flex gap-3 items-center">
+        <div class="flex gap-3 items-center flex-wrap">
             <!-- Market Status Indicator -->
             <div id="marketStatusBadge" class="badge badge-lg gap-2" style="display: none;">
                 <span class="loading loading-spinner loading-xs"></span>
@@ -24,7 +24,15 @@
                 </svg>
             </button>
 
-            <a href="{{ url_for('strategy.create_new_strategy') }}" class="btn btn-primary">
+            <!-- Account Positions Link -->
+            <a href="{{ url_for('main.account_positions') }}" class="btn btn-secondary btn-sm">
+                <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path>
+                </svg>
+                Account Positions
+            </a>
+
+            <a href="{{ url_for('strategy.create_new_strategy') }}" class="btn btn-primary btn-sm">
                 <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path>
                 </svg>
@@ -68,8 +76,28 @@
 
                     <!-- Active Strategies -->
                     <div class="pt-2 border-t">
-                        <p class="text-sm text-base-content/60">Active Strategies</p>
-                        <p class="text-center py-2 text-sm text-base-content/50" id="active-strat-{{ account.id }}">0</p>
+                        <p class="text-sm text-base-content/60 mb-2">Active Strategies</p>
+                        <div class="space-y-1.5" id="active-strat-{{ account.id }}">
+                            {% if account_strategies[account.id]|length > 0 %}
+                                {% set badge_colors = ['badge-primary', 'badge-secondary', 'badge-accent', 'badge-success', 'badge-info', 'badge-warning'] %}
+                                {% for strategy in account_strategies[account.id] %}
+                                {% set color_class = badge_colors[loop.index0 % badge_colors|length] %}
+                                <div class="flex items-center gap-2">
+                                    <a href="{{ url_for('strategy.builder', strategy_id=strategy.id) }}" class="badge {{ color_class }} badge-sm flex-1 justify-between py-3 px-3 cursor-pointer hover:brightness-110 transition-all">
+                                        <div class="flex items-center gap-1.5 min-w-0">
+                                            <svg class="w-3 h-3 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"></path>
+                                            </svg>
+                                            <span class="truncate">{{ strategy.name }}</span>
+                                        </div>
+                                        <span class="badge badge-sm bg-base-100/20 border-0 ml-2 flex-shrink-0">{{ strategy.positions }}</span>
+                                    </a>
+                                </div>
+                                {% endfor %}
+                            {% else %}
+                                <p class="text-center py-2 text-xs text-base-content/50">No active strategies</p>
+                            {% endif %}
+                        </div>
                     </div>
                 </div>
 
@@ -516,12 +544,8 @@ async function loadAccountPnL() {
                     pnlEl.className = `font-bold ${colorClass}`;
                 }
 
-                const activeStratEl = document.getElementById(`active-strat-${account.id}`);
-                if (activeStratEl && pnlData.open_positions) {
-                    activeStratEl.textContent = `${pnlData.open_positions} open position${pnlData.open_positions !== 1 ? 's' : ''}`;
-                    activeStratEl.classList.remove('text-base-content/50');
-                    activeStratEl.classList.add('text-warning', 'font-semibold');
-                }
+                // Active Strategies section now displays static strategy names from server
+                // No dynamic update needed here
             } else {
                 const pnlEl = document.getElementById(`pnl-account-${account.id}`);
                 if (pnlEl) {
