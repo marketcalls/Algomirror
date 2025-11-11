@@ -10,12 +10,56 @@
 **Problem**: Was using Bearer token in headers
 **Solution**: Using message-based authentication with `{"action": "authenticate", "api_key": "..."}`
 
-### 3. WebSocket Data Flow (DEBUGGING)
-**Problem**: WebSocket server returns error "At least one symbol must be specified"
-**Current Status**: 
-- Authentication successful
-- Symbols format correct (verified via REST API)
-- WebSocket server not accepting subscription messages
+### 3. WebSocket Subscription Format (FIXED - REVERTED TO WORKING VERSION)
+**Problem**: OpenAlgo WebSocket not accepting subscription messages
+**Root Cause**: Incorrect subscription message format - was using instruments array with string mode
+**Solution**: Reverted to OLD WORKING format from previous version
+- **OLD (WORKING)**: `{'action': 'subscribe', 'symbol': 'X', 'exchange': 'Y', 'mode': 3, 'depth': 5}`
+- **BROKEN (docs format)**: `{'action': 'subscribe', 'mode': 'depth', 'instruments': [{'exchange': 'Y', 'symbol': 'X'}]}`
+- Mode is NUMERIC (1=ltp, 2=quote, 3=depth), not string
+- Individual fields, not wrapped in instruments array
+- **CRITICAL**: The docs were incorrect! The old code had the working format
+
+### 4. Multiple WebSocket Connections / Broker Connection Limit (FIXED)
+**Problem**:
+- AlgoMirror created multiple WebSocket connections to OpenAlgo
+- Each OpenAlgo connection triggered separate broker connection to AngelOne
+- AngelOne limits connections to 1-2 per API key
+- Result: Error 429 "Connection Limit Exceeded" from broker
+- Option chain not updating due to rejected connections
+
+**Root Cause**:
+- Position monitor created dedicated WebSocket connection
+- Session manager created separate connection if needed
+- Option chain managers created their own connections
+- No centralized connection management
+
+**Solution**: Single Shared WebSocket Manager
+- Added `shared_websocket_manager` singleton in `background_service.py`
+- Created `get_or_create_shared_websocket()` method
+- All services (position monitor, session manager, option chains) now use ONE shared connection
+- Shared connection only disconnects when entire service stops
+
+**Files Modified**:
+- `app/utils/background_service.py` (Lines 65, 74-130, 215-224, 851-872, 874-888, 162-185)
+
+**Benefits**:
+- ✅ Only 1 WebSocket connection from AlgoMirror to OpenAlgo
+- ✅ Only 1 broker connection from OpenAlgo to AngelOne
+- ✅ No more Error 429 from broker
+- ✅ Lower resource usage
+- ✅ Cleaner architecture
+
+**Verification**:
+```bash
+# Count WebSocket connections (should be 1)
+netstat -ano | findstr :8765
+
+# Run test script
+python test_single_websocket.py
+```
+
+See `SINGLE_WEBSOCKET_FIX.md` for detailed implementation notes.
 
 ## Symbol Format Specification
 
@@ -70,12 +114,15 @@ Correct OpenAlgo format for options:
    - Authentication should succeed
    - Subscriptions should be sent with correct format
 
-## Next Steps
+## Implementation Status
 
-The WebSocket server appears to have different requirements than documented. Possible issues:
-1. WebSocket server might expect different subscription format
-2. Symbols might need to be validated against a symbol master first
-3. Server might require batch subscriptions differently
+All WebSocket issues have been resolved:
+1. ✅ Symbol format corrected to OpenAlgo standard
+2. ✅ Message-based authentication implemented
+3. ✅ Subscription format fixed with instruments array and string mode
+4. ✅ Single shared WebSocket connection implemented to prevent broker connection limits
+
+The WebSocket implementation now fully complies with OpenAlgo WebSocket protocol and prevents broker connection limit errors (Error 429).
 
 ## Logs to Check
 

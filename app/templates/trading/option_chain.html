@@ -194,6 +194,10 @@ let eventSource = null;
 let previousData = {};
 let expiryCache = {}; // Cache for all expiry dates
 
+// NEW: Session management for on-demand WebSocket subscriptions
+let optionChainSessionId = null;
+let heartbeatInterval = null;
+
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', function() {
     // Preload expiry dates for all underlyings
@@ -207,6 +211,9 @@ document.addEventListener('DOMContentLoaded', function() {
         // Update expiry dropdown from cache
         updateExpiryDropdown(underlying);
 
+        // Destroy old session (will create new one after page refresh)
+        destroyOptionChainSession();
+
         // Refresh option chain
         refreshOptionChain();
         startRealTimeUpdates();
@@ -217,9 +224,19 @@ document.addEventListener('DOMContentLoaded', function() {
         const expiry = this.value;
         console.log('[EXPIRY CHANGE] Changed to:', expiry);
 
+        // Destroy old session and create new one
+        destroyOptionChainSession().then(() => {
+            createOptionChainSession();
+        });
+
         // Just restart SSE with new expiry - no need to reload page
         startRealTimeUpdates();
     });
+
+    // NEW: Create session on initial page load
+    setTimeout(() => {
+        createOptionChainSession();
+    }, 2000);  // Wait 2 seconds for expiries to load
 });
 
 // Preload expiry dates for all underlyings
@@ -556,12 +573,139 @@ function updateStatus(text, className) {
 function refreshOptionChain() {
     const underlying = document.getElementById('underlyingSelect').value;
     const expiry = document.getElementById('expirySelect').value;
-    
+
     window.location.href = `/trading/option-chain?underlying=${underlying}&expiry=${expiry}`;
+}
+
+// ==================== SESSION MANAGEMENT FOR ON-DEMAND WEBSOCKET ====================
+
+async function createOptionChainSession() {
+    const underlying = document.getElementById('underlyingSelect').value;
+    const expiry = document.getElementById('expirySelect').value;
+
+    if (!expiry) {
+        console.log('[SESSION] No expiry selected, skipping session creation');
+        return;
+    }
+
+    try {
+        console.log(`[SESSION] Creating session for ${underlying} ${expiry}...`);
+
+        const response = await fetch('/trading/api/option-chain-session/create', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                underlying: underlying,
+                expiry: expiry,
+                num_strikes: 20  // 20 ITM + 20 OTM strikes
+            })
+        });
+
+        const data = await response.json();
+
+        if (data.status === 'success') {
+            optionChainSessionId = data.session_id;
+            console.log(`[SESSION] Created session ${optionChainSessionId}, subscribed to ${data.subscribed_symbols} symbols`);
+
+            // Start heartbeat (every 30 seconds)
+            startHeartbeat();
+        } else {
+            console.error('[SESSION] Failed to create session:', data.message);
+        }
+    } catch (error) {
+        console.error('[SESSION] Error creating session:', error);
+    }
+}
+
+function startHeartbeat() {
+    // Clear existing heartbeat if any
+    if (heartbeatInterval) {
+        clearInterval(heartbeatInterval);
+    }
+
+    // Send heartbeat every 30 seconds
+    heartbeatInterval = setInterval(async () => {
+        if (!optionChainSessionId) {
+            return;
+        }
+
+        try {
+            const response = await fetch('/trading/api/option-chain-session/heartbeat', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    session_id: optionChainSessionId
+                })
+            });
+
+            const data = await response.json();
+
+            if (data.status === 'success') {
+                console.log('[SESSION] Heartbeat sent successfully');
+            } else {
+                console.warn('[SESSION] Heartbeat failed:', data.message);
+                // Session may have expired, stop heartbeat
+                clearInterval(heartbeatInterval);
+                heartbeatInterval = null;
+                optionChainSessionId = null;
+            }
+        } catch (error) {
+            console.error('[SESSION] Error sending heartbeat:', error);
+        }
+    }, 30000);  // 30 seconds
+
+    console.log('[SESSION] Heartbeat started (30-second interval)');
+}
+
+async function destroyOptionChainSession() {
+    if (!optionChainSessionId) {
+        return;
+    }
+
+    try {
+        console.log(`[SESSION] Destroying session ${optionChainSessionId}...`);
+
+        // Stop heartbeat
+        if (heartbeatInterval) {
+            clearInterval(heartbeatInterval);
+            heartbeatInterval = null;
+        }
+
+        // Destroy session on server
+        const response = await fetch('/trading/api/option-chain-session/destroy', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                session_id: optionChainSessionId
+            })
+        });
+
+        const data = await response.json();
+        console.log('[SESSION] Session destroyed:', data.message);
+
+        optionChainSessionId = null;
+    } catch (error) {
+        console.error('[SESSION] Error destroying session:', error);
+    }
 }
 
 // Cleanup on page unload
 window.addEventListener('beforeunload', function() {
+    // Destroy session (unsubscribe from symbols)
+    if (optionChainSessionId) {
+        // Use sendBeacon for reliable delivery during page unload
+        const data = JSON.stringify({ session_id: optionChainSessionId });
+        navigator.sendBeacon('/trading/api/option-chain-session/destroy', data);
+        console.log('[SESSION] Session destroy beacon sent');
+    }
+
+    // Close EventSource
     if (eventSource) {
         eventSource.close();
     }

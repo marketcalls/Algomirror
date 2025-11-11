@@ -15,7 +15,16 @@
       "Bash(powershell -Command \"Stop-Process -Id 38532 -Force\")",
       "Bash(powershell -Command \"Stop-Process -Id 19428,49484 -Force\")",
       "Bash(powershell -Command \"Stop-Process -Id 50056 -Force\")",
-      "Bash(powershell:*)"
+      "Bash(powershell:*)",
+      "Bash(timeout /t 3)",
+      "Bash(nul)",
+      "Bash(.venv/Scripts/pip install:*)",
+      "Bash(.venvScriptspip install requests websocket-client)",
+      "Bash(python test_option_chain_websocket.py:*)",
+      "Bash(timeout /t 5)",
+      "Bash(python:*)",
+      "Bash(npm run build-css:*)",
+      "Bash(npm install)"
     ],
     "deny": [],
     "ask": []

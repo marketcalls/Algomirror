@@ -7,6 +7,7 @@ from app.utils.openalgo_client import ExtendedOpenAlgoAPI
 from app.utils.option_chain import OptionChainManager
 from app.utils.websocket_manager import ProfessionalWebSocketManager
 from app.utils.background_service import option_chain_service
+from app.utils.session_manager import session_manager
 from datetime import datetime
 import json
 import time
@@ -1047,5 +1048,134 @@ def delete_special_session(session_id):
         db.session.rollback()
         current_app.logger.error(f'Error deleting special session: {e}')
         flash(f'Error deleting special session: {str(e)}', 'error')
-    
+
     return redirect(url_for('trading.trading_hours'))
+
+
+# ==================== OPTION CHAIN SESSION MANAGEMENT ====================
+# On-demand WebSocket subscriptions for option chain viewing
+
+@trading_bp.route('/api/option-chain-session/create', methods=['POST'])
+@login_required
+def create_option_chain_session():
+    """
+    Create a new option chain viewing session.
+    Subscribes to symbols on-demand when user visits option chain page.
+    """
+    try:
+        data = request.get_json()
+        underlying = data.get('underlying', 'NIFTY')
+        expiry = data.get('expiry')
+        num_strikes = data.get('num_strikes', 20)
+
+        if not expiry:
+            return jsonify({
+                'status': 'error',
+                'message': 'Expiry date required'
+            }), 400
+
+        # Create session
+        session = session_manager.create_session(
+            user_id=current_user.id,
+            underlying=underlying,
+            expiry=expiry,
+            num_strikes=num_strikes
+        )
+
+        if not session:
+            return jsonify({
+                'status': 'error',
+                'message': 'Failed to create session'
+            }), 500
+
+        return jsonify({
+            'status': 'success',
+            'session_id': session.session_id,
+            'expires_at': session.expires_at.isoformat() if session.expires_at else None,
+            'subscribed_symbols': len(session.subscribed_symbols)
+        })
+
+    except Exception as e:
+        current_app.logger.error(f'Error creating option chain session: {e}')
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+
+
+@trading_bp.route('/api/option-chain-session/heartbeat', methods=['POST'])
+@login_required
+def option_chain_session_heartbeat():
+    """
+    Update session heartbeat to keep it alive.
+    Called every 30 seconds from frontend.
+    """
+    try:
+        data = request.get_json()
+        session_id = data.get('session_id')
+
+        if not session_id:
+            return jsonify({
+                'status': 'error',
+                'message': 'Session ID required'
+            }), 400
+
+        # Update heartbeat
+        success = session_manager.update_heartbeat(session_id)
+
+        if not success:
+            return jsonify({
+                'status': 'error',
+                'message': 'Session not found or expired'
+            }), 404
+
+        return jsonify({
+            'status': 'success',
+            'message': 'Heartbeat updated'
+        })
+
+    except Exception as e:
+        current_app.logger.error(f'Error updating heartbeat: {e}')
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+
+
+@trading_bp.route('/api/option-chain-session/destroy', methods=['POST'])
+@login_required
+def destroy_option_chain_session():
+    """
+    Destroy option chain session and unsubscribe from all symbols.
+    Called when user leaves option chain page.
+    """
+    try:
+        data = request.get_json()
+        session_id = data.get('session_id')
+
+        if not session_id:
+            return jsonify({
+                'status': 'error',
+                'message': 'Session ID required'
+            }), 400
+
+        # Destroy session
+        success = session_manager.destroy_session(session_id)
+
+        if not success:
+            return jsonify({
+                'status': 'warning',
+                'message': 'Session not found (may already be expired)'
+            })
+
+        return jsonify({
+            'status': 'success',
+            'message': 'Session destroyed'
+        })
+
+    except Exception as e:
+        current_app.logger.error(f'Error destroying session: {e}')
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500

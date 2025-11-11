@@ -271,6 +271,13 @@ class Strategy(db.Model):
     max_profit = db.Column(db.Float)
     trailing_sl = db.Column(db.Float)
 
+    # Risk monitoring configuration
+    risk_monitoring_enabled = db.Column(db.Boolean, default=True)
+    risk_check_interval = db.Column(db.Integer, default=1)  # Seconds between checks
+    auto_exit_on_max_loss = db.Column(db.Boolean, default=True)
+    auto_exit_on_max_profit = db.Column(db.Boolean, default=True)
+    trailing_sl_type = db.Column(db.String(20), default='percentage')  # 'percentage', 'points', 'amount'
+
     # Supertrend-based exit
     supertrend_exit_enabled = db.Column(db.Boolean, default=False)
     supertrend_exit_type = db.Column(db.String(20))  # 'breakout' or 'breakdown'
@@ -456,6 +463,12 @@ class StrategyExecution(db.Model):
 
     # Error tracking
     error_message = db.Column(db.Text)
+
+    # Real-time monitoring (WebSocket optimization)
+    last_price = db.Column(db.Float)  # Latest price from WebSocket
+    last_price_updated = db.Column(db.DateTime)  # When price was last updated
+    websocket_subscribed = db.Column(db.Boolean, default=False)  # Is this position being monitored via WebSocket?
+    trailing_sl_triggered = db.Column(db.Float)  # Price at which trailing SL was triggered
 
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -776,6 +789,68 @@ class MarginTracker(db.Model):
 
     def __repr__(self):
         return f'<MarginTracker Account {self.account_id} - Free: {self.free_margin}>'
+
+class WebSocketSession(db.Model):
+    """
+    Tracks active WebSocket sessions for option chain viewing
+    Used for on-demand option chain loading
+    """
+    __tablename__ = 'websocket_sessions'
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    session_id = db.Column(db.String(64), unique=True, nullable=False)
+    underlying = db.Column(db.String(20), nullable=False)  # NIFTY, BANKNIFTY, SENSEX
+    expiry = db.Column(db.String(20), nullable=False)
+    subscribed_symbols = db.Column(db.JSON)  # List of subscribed symbols
+    is_active = db.Column(db.Boolean, default=True)
+    last_heartbeat = db.Column(db.DateTime)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    expires_at = db.Column(db.DateTime)  # Auto-cleanup old sessions
+
+    # Relationship
+    user = db.relationship('User', backref='websocket_sessions')
+
+    def __repr__(self):
+        return f'<WebSocketSession {self.session_id} - {self.underlying} {self.expiry}>'
+
+    def update_heartbeat(self):
+        """Update last heartbeat timestamp"""
+        self.last_heartbeat = datetime.utcnow()
+        # Extend expiry by 5 minutes from last heartbeat
+        from datetime import timedelta
+        self.expires_at = datetime.utcnow() + timedelta(minutes=5)
+
+    def is_expired(self):
+        """Check if session has expired"""
+        if not self.expires_at:
+            return False
+        return datetime.utcnow() > self.expires_at
+
+class RiskEvent(db.Model):
+    """
+    Audit log for risk threshold triggers
+    Tracks Max Loss, Max Profit, Trailing SL, and Supertrend exits
+    """
+    __tablename__ = 'risk_events'
+
+    id = db.Column(db.Integer, primary_key=True)
+    strategy_id = db.Column(db.Integer, db.ForeignKey('strategies.id'), nullable=False)
+    execution_id = db.Column(db.Integer, db.ForeignKey('strategy_executions.id'), nullable=True)
+    event_type = db.Column(db.String(50), nullable=False)  # 'max_loss', 'max_profit', 'trailing_sl', 'supertrend'
+    threshold_value = db.Column(db.Float)  # The threshold that was breached
+    current_value = db.Column(db.Float)  # Current P&L or price
+    action_taken = db.Column(db.String(50))  # 'close_all', 'close_partial', 'alert_only'
+    exit_order_ids = db.Column(db.JSON)  # List of exit orders placed
+    triggered_at = db.Column(db.DateTime, default=datetime.utcnow)
+    notes = db.Column(db.Text)
+
+    # Relationships
+    strategy = db.relationship('Strategy', backref='risk_events')
+    execution = db.relationship('StrategyExecution', backref='risk_events')
+
+    def __repr__(self):
+        return f'<RiskEvent {self.event_type} - Strategy {self.strategy_id} at {self.triggered_at}>'
 
 @login_manager.user_loader
 def load_user(user_id):

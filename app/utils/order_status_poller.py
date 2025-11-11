@@ -14,6 +14,12 @@ from app.utils.openalgo_client import ExtendedOpenAlgoAPI
 
 logger = logging.getLogger(__name__)
 
+# Import PositionMonitor for real-time position tracking
+def get_position_monitor():
+    """Lazy import to avoid circular dependency"""
+    from app.utils.position_monitor import position_monitor
+    return position_monitor
+
 
 class OrderStatusPoller:
     """
@@ -155,28 +161,68 @@ class OrderStatusPoller:
 
                     # Update based on broker status
                     if broker_status == 'complete':
-                        execution.status = 'entered'
-                        execution.broker_order_status = 'complete'
-                        execution.entry_price = avg_price
-                        if not execution.entry_time:
-                            execution.entry_time = datetime.utcnow()
+                        # Determine if this is entry or exit order
+                        is_entry_order = execution.status == 'pending'
+                        is_exit_order = execution.status == 'entered' or execution.exit_order_id == order_id
 
-                        # Mark leg as executed
-                        if execution.leg and not execution.leg.is_executed:
-                            execution.leg.is_executed = True
+                        if is_entry_order:
+                            execution.status = 'entered'
+                            execution.broker_order_status = 'complete'
+                            execution.entry_price = avg_price
+                            if not execution.entry_time:
+                                execution.entry_time = datetime.utcnow()
 
-                        db.session.commit()
+                            # Mark leg as executed
+                            if execution.leg and not execution.leg.is_executed:
+                                execution.leg.is_executed = True
+
+                            db.session.commit()
+
+                            # Notify PositionMonitor of new filled order
+                            try:
+                                position_monitor = get_position_monitor()
+                                position_monitor.on_order_filled(execution)
+                                logger.debug(f"[POSITION MONITOR] Notified of order fill: {order_id}")
+                            except Exception as e:
+                                logger.error(f"[POSITION MONITOR] Error notifying order fill: {e}")
+
+                            logger.info(f"[FILLED] Entry order {order_id} FILLED at Rs.{avg_price} ({order_info['account_name']})")
+
+                        elif is_exit_order:
+                            execution.status = 'exited'
+                            execution.broker_order_status = 'complete'
+                            execution.exit_price = avg_price
+                            if not execution.exit_time:
+                                execution.exit_time = datetime.utcnow()
+
+                            db.session.commit()
+
+                            # Notify PositionMonitor of position closure
+                            try:
+                                position_monitor = get_position_monitor()
+                                position_monitor.on_position_closed(execution)
+                                logger.debug(f"[POSITION MONITOR] Notified of position close: {order_id}")
+                            except Exception as e:
+                                logger.error(f"[POSITION MONITOR] Error notifying position close: {e}")
+
+                            logger.info(f"[CLOSED] Exit order {order_id} FILLED at Rs.{avg_price} ({order_info['account_name']})")
 
                         # Remove from polling queue
                         with self._lock:
                             self.pending_orders.pop(execution_id, None)
 
-                        logger.info(f"[FILLED] Order {order_id} FILLED at Rs.{avg_price} ({order_info['account_name']})")
-
                     elif broker_status in ['rejected', 'cancelled']:
                         execution.status = 'failed'
                         execution.broker_order_status = broker_status
                         db.session.commit()
+
+                        # Notify PositionMonitor of cancelled order
+                        try:
+                            position_monitor = get_position_monitor()
+                            position_monitor.on_order_cancelled(execution)
+                            logger.debug(f"[POSITION MONITOR] Notified of order cancel: {order_id}")
+                        except Exception as e:
+                            logger.error(f"[POSITION MONITOR] Error notifying order cancel: {e}")
 
                         # Remove from polling queue
                         with self._lock:

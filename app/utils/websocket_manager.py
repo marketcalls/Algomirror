@@ -451,7 +451,7 @@ class ProfessionalWebSocketManager:
     
     def subscribe_batch(self, instruments, mode='ltp'):
         """
-        Subscribe to multiple instruments by sending individual messages
+        Subscribe to multiple instruments using OpenAlgo format
         instruments: list of dicts with 'symbol' and 'exchange' keys
         mode: subscription mode ('ltp', 'quote', 'depth')
         """
@@ -459,7 +459,7 @@ class ProfessionalWebSocketManager:
             if not instruments:
                 logger.warning("[WS_BATCH] No instruments provided")
                 return False
-                
+
             # Check if authenticated
             if not self.authenticated:
                 logger.warning("[WS_BATCH] Not authenticated, queuing batch subscription")
@@ -472,7 +472,7 @@ class ProfessionalWebSocketManager:
                     }
                     self.subscriptions.add(json.dumps(subscription))
                 return False
-            
+
             if self.ws and self.ws.sock and self.ws.sock.connected:
                 # Map mode names to numbers
                 mode_map = {
@@ -480,20 +480,20 @@ class ProfessionalWebSocketManager:
                     'quote': 2,    # Mode 2 for Quote
                     'depth': 3     # Mode 3 for Market Depth
                 }
-                
+
                 mode_num = mode_map.get(mode, 1)  # Default to LTP
-                
+
                 logger.info(f"[WS_BATCH] Subscribing to {len(instruments)} instruments in {mode} mode")
-                
+
                 # Send individual subscription messages for each instrument
                 for inst in instruments:
                     symbol = inst.get('symbol')
                     exchange = inst.get('exchange')
-                    
+
                     if not symbol or not exchange:
                         logger.warning(f"[WS_BATCH] Skipping invalid instrument: {inst}")
                         continue
-                    
+
                     message = {
                         'action': 'subscribe',
                         'symbol': symbol,
@@ -501,9 +501,9 @@ class ProfessionalWebSocketManager:
                         'mode': mode_num,
                         'depth': 5  # Default depth level
                     }
-                    
+
                     self.ws.send(json.dumps(message))
-                    
+
                     # Add to subscriptions for tracking
                     subscription = {
                         'symbol': symbol,
@@ -511,15 +511,15 @@ class ProfessionalWebSocketManager:
                         'mode': mode
                     }
                     self.subscriptions.add(json.dumps(subscription))
-                    
+
                     # Minimal delay between subscriptions
                     # Removed to prevent blocking Flask startup
-                
+
                 return True
             else:
                 logger.warning("[WS_BATCH] WebSocket not connected")
                 return False
-                
+
         except Exception as e:
             logger.error(f"[WS_BATCH] Error: {e}")
             return False
@@ -530,20 +530,20 @@ class ProfessionalWebSocketManager:
             symbol = subscription.get('symbol')
             exchange = subscription.get('exchange')
             mode = subscription.get('mode', 'ltp')
-            
+
             # Validate required fields
             if not symbol or not exchange:
                 logger.error(f"[WS_SUBSCRIBE] Missing symbol or exchange: symbol={symbol}, exchange={exchange}")
                 return False
-            
+
             logger.info(f"[WS_SUBSCRIBE] Request: {symbol} on {exchange} in {mode} mode")
-            
+
             # Check if authenticated
             if not self.authenticated:
                 logger.warning(f"[WS_SUBSCRIBE] Not authenticated, queuing {symbol}")
                 self.subscriptions.add(json.dumps(subscription))
                 return False
-                
+
             if self.ws and self.ws.sock and self.ws.sock.connected:
                 # Use exact OpenAlgo subscription format - individual messages per symbol
                 # Map mode names to numbers
@@ -552,9 +552,9 @@ class ProfessionalWebSocketManager:
                     'quote': 2,    # Mode 2 for Quote
                     'depth': 3     # Mode 3 for Market Depth
                 }
-                
+
                 mode_num = mode_map.get(mode, 1)  # Default to LTP
-                
+
                 message = {
                     'action': 'subscribe',
                     'symbol': symbol,
@@ -562,11 +562,11 @@ class ProfessionalWebSocketManager:
                     'mode': mode_num,
                     'depth': 5  # Default depth level
                 }
-                
+
                 logger.info(f"[WS_SUBSCRIBE] Sending subscription for {symbol}")
                 self.ws.send(json.dumps(message))
                 self.subscriptions.add(json.dumps(subscription))
-                
+
                 # Small delay between subscriptions to avoid overwhelming server
                 time.sleep(0.05)  # 50ms delay
                 return True
@@ -574,7 +574,7 @@ class ProfessionalWebSocketManager:
                 logger.warning(f"[WS_SUBSCRIBE] WebSocket not connected, queuing {symbol}")
                 self.subscriptions.add(json.dumps(subscription))
                 return False
-                
+
         except Exception as e:
             logger.error(f"[WS_SUBSCRIBE] Error: {e}")
             return False

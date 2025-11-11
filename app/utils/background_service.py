@@ -18,6 +18,9 @@ from app.models import TradingAccount, TradingHoursTemplate, TradingSession, Mar
 from app.utils.option_chain import OptionChainManager
 from app.utils.websocket_manager import ProfessionalWebSocketManager
 from app.utils.openalgo_client import ExtendedOpenAlgoAPI
+from app.utils.position_monitor import position_monitor
+from app.utils.risk_manager import risk_manager
+from app.utils.session_manager import session_manager
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +45,7 @@ class OptionChainBackgroundService:
     def __init__(self):
         if self._initialized:
             return
-            
+
         self.scheduler = BackgroundScheduler(timezone=pytz.timezone('Asia/Kolkata'))
         self.active_managers = {}
         self.websocket_managers = {}
@@ -54,18 +57,107 @@ class OptionChainBackgroundService:
         self.cached_sessions = {}  # Cache trading sessions
         self.cached_special_sessions = {}  # Cache special sessions
         self.cache_refresh_time = None
-        
+
+        # NEW: Position monitoring and risk management
+        self.position_monitor_running = False
+        self.risk_manager_running = False
+        self.flask_app = None  # Store Flask app for app context in threads
+        self.shared_websocket_manager = None  # Single shared WebSocket manager for all services
+
         logger.info("Option Chain Background Service initialized")
-    
+
+    def set_flask_app(self, app):
+        """Store Flask app instance for use in background threads"""
+        self.flask_app = app
+        logger.info("Flask app instance registered with background service")
+
+    def get_or_create_shared_websocket(self):
+        """
+        Get or create the single shared WebSocket manager for all services.
+
+        This ensures only ONE WebSocket connection to OpenAlgo, which prevents
+        broker connection limit errors (e.g., AngelOne Error 429).
+
+        Returns:
+            ProfessionalWebSocketManager instance or None if creation fails
+        """
+        # Return existing if already created and connected
+        if self.shared_websocket_manager and \
+           self.shared_websocket_manager.authenticated:
+            logger.info("Using existing shared WebSocket manager")
+            return self.shared_websocket_manager
+
+        # Create new shared WebSocket manager if needed
+        if not self.primary_account:
+            logger.warning("No primary account available for WebSocket connection")
+            return None
+
+        try:
+            logger.info("Creating shared WebSocket manager for all services")
+
+            ws_manager = ProfessionalWebSocketManager()
+            ws_manager.create_connection_pool(
+                primary_account=self.primary_account,
+                backup_accounts=self.backup_accounts
+            )
+
+            if hasattr(self.primary_account, 'websocket_url'):
+                connected = ws_manager.connect(
+                    ws_url=self.primary_account.websocket_url,
+                    api_key=self.primary_account.get_api_key()
+                )
+
+                # Wait for authentication
+                auth_wait_time = 0
+                while not ws_manager.authenticated and auth_wait_time < 5:
+                    time_module.sleep(0.5)
+                    auth_wait_time += 0.5
+
+                if not ws_manager.authenticated:
+                    logger.error("Shared WebSocket authentication failed")
+                    return None
+
+                # Store as shared instance
+                self.shared_websocket_manager = ws_manager
+                logger.info("✅ Shared WebSocket manager created and authenticated")
+                return ws_manager
+            else:
+                logger.error("Primary account missing websocket_url")
+                return None
+
+        except Exception as e:
+            logger.error(f"Error creating shared WebSocket manager: {e}")
+            return None
+
     def start_service(self):
         """Start the background service"""
         if not self.is_running:
             self.scheduler.start()
             self.is_running = True
             logger.info("Background service started")
-            
+
             # Schedule market hours check
             self.schedule_market_hours()
+
+            # NEW: Schedule risk manager to run every 1 second
+            self.scheduler.add_job(
+                func=self.run_risk_checks,
+                trigger='interval',
+                seconds=1,
+                id='risk_manager_check',
+                replace_existing=True
+            )
+            logger.info("Risk manager scheduled (1-second interval)")
+
+            # NEW: Schedule session cleanup to run every minute
+            self.scheduler.add_job(
+                func=self.cleanup_sessions,
+                trigger='interval',
+                minutes=1,
+                id='session_cleanup',
+                replace_existing=True
+            )
+            logger.info("Session cleanup scheduled (1-minute interval)")
     
     def stop_service(self):
         """Stop the background service"""
@@ -73,7 +165,21 @@ class OptionChainBackgroundService:
             # Stop all option chain managers
             for underlying in list(self.active_managers.keys()):
                 self.stop_option_chain(underlying)
-            
+
+            # NEW: Stop position monitor and risk manager
+            self.stop_position_monitor()
+            self.stop_risk_manager()
+
+            # Disconnect shared WebSocket manager
+            if self.shared_websocket_manager:
+                try:
+                    self.shared_websocket_manager.disconnect()
+                    logger.info("Shared WebSocket manager disconnected")
+                except Exception as e:
+                    logger.error(f"Error disconnecting shared WebSocket: {e}")
+                finally:
+                    self.shared_websocket_manager = None
+
             self.scheduler.shutdown(wait=False)
             self.is_running = False
             logger.info("Background service stopped")
@@ -96,21 +202,46 @@ class OptionChainBackgroundService:
             
             # Check if within trading hours
             if self.is_trading_hours():
-                # Start option chains in background to avoid blocking Flask startup
+                # DISABLED: Automatic option chain loading (now on-demand via SessionManager)
+                # Option chains will load only when users visit /trading/option-chain
+                # This reduces WebSocket subscriptions from 1000+ to just open positions (5-50)
+
                 import threading
-                def start_chains():
+                def start_services():
                     time_module.sleep(2)  # Give Flask time to start
-                    # Start first 4 expiries for each index
-                    self.start_option_chain('NIFTY')  # Will load 4 expiries
-                    self.start_option_chain('BANKNIFTY')  # Will load 4 expiries
-                    self.start_option_chain('SENSEX')  # Will load 4 expiries
-                    logger.info("Option chains started automatically for NIFTY, BANKNIFTY, and SENSEX with 4 expiries each")
-                
-                thread = threading.Thread(target=start_chains)
+
+                    # Run services within Flask app context
+                    if self.flask_app:
+                        with self.flask_app.app_context():
+                            # COMMENTED OUT: Automatic option chain subscriptions
+                            # self.start_option_chain('NIFTY')  # Will load 4 expiries (328 symbols)
+                            # self.start_option_chain('BANKNIFTY')  # Will load 4 expiries (328 symbols)
+                            # self.start_option_chain('SENSEX')  # Will load 4 expiries (328 symbols)
+                            # Total: ~984 symbols subscribed automatically
+
+                            logger.info("Option chains DISABLED - using on-demand loading via SessionManager")
+
+                            # START: Position monitor and risk manager (essential services)
+                            self.start_position_monitor()
+                            self.start_risk_manager()
+
+                            # Initialize SessionManager with SHARED WebSocket manager
+                            # This ensures all services use the SAME connection
+                            if self.shared_websocket_manager:
+                                session_manager.set_websocket_manager(self.shared_websocket_manager)
+                                logger.info("✅ SessionManager initialized with shared WebSocket connection")
+                            else:
+                                logger.warning("No shared WebSocket manager available for SessionManager")
+
+                            logger.info("Position monitor and risk manager started")
+                    else:
+                        logger.error("Flask app not set - cannot start services")
+
+                thread = threading.Thread(target=start_services)
                 thread.daemon = True
                 thread.start()
             else:
-                logger.info("Outside trading hours, option chains will start at market open")
+                logger.info("Outside trading hours, services will start at market open")
                 
         except Exception as e:
             logger.error(f"Error starting option chains on account connection: {e}")
@@ -416,19 +547,40 @@ class OptionChainBackgroundService:
             self.schedule_default_hours()
     
     def on_pre_market_open(self):
-        """Called 15 minutes before market opens for WebSocket initialization"""
+        """Called 15 minutes before market opens for service initialization"""
         now = datetime.now(pytz.timezone('Asia/Kolkata'))
-        logger.info(f"Pre-market WebSocket start at {now.strftime('%H:%M:%S')} - Starting option chains")
-        
+        logger.info(f"Pre-market start at {now.strftime('%H:%M:%S')} - Starting services")
+
         if self.primary_account:
             if not self.is_holiday():
-                # Start WebSocket connections 15 minutes early
-                self.start_option_chain('NIFTY')
-                self.start_option_chain('BANKNIFTY')
-                self.start_option_chain('SENSEX')
-                logger.info("Option chains WebSocket started in pre-market session")
+                # Run services within Flask app context
+                if self.flask_app:
+                    with self.flask_app.app_context():
+                        # DISABLED: Automatic option chain subscriptions
+                        # Option chains now load on-demand only (via SessionManager)
+                        # self.start_option_chain('NIFTY')
+                        # self.start_option_chain('BANKNIFTY')
+                        # self.start_option_chain('SENSEX')
+
+                        logger.info("Option chains DISABLED - using on-demand loading")
+
+                        # START: Position monitor and risk manager (essential services)
+                        self.start_position_monitor()
+                        self.start_risk_manager()
+
+                        # Initialize SessionManager with WebSocket manager for on-demand option chains
+                        ws_manager = self.websocket_managers.get('POSITION_MONITOR') or self.websocket_managers.get('NIFTY')
+                        if ws_manager:
+                            session_manager.set_websocket_manager(ws_manager)
+                            logger.info("SessionManager initialized with WebSocket manager in pre-market")
+                        else:
+                            logger.warning("No WebSocket manager available for SessionManager in pre-market")
+
+                        logger.info("Position monitor and risk manager started in pre-market")
+                else:
+                    logger.error("Flask app not set - cannot start pre-market services")
             else:
-                logger.info("Market holiday - WebSocket not started")
+                logger.info("Market holiday - services not started")
     
     def on_market_open(self):
         """Called when market opens (legacy, kept for compatibility)"""
@@ -438,6 +590,10 @@ class OptionChainBackgroundService:
         """Called when market closes"""
         logger.info("Market closed - stopping option chains")
         self.stop_all_option_chains()
+
+        # NEW: Stop position monitor and risk manager
+        self.stop_position_monitor()
+        self.stop_risk_manager()
     
     def is_trading_hours(self) -> bool:
         """Check if current time is within trading hours (including 15-min pre-market)"""
@@ -669,7 +825,7 @@ class OptionChainBackgroundService:
         """Called when a special trading session ends"""
         logger.info(f"Special session ended: {session_name}")
         self.stop_all_option_chains()
-    
+
     def schedule_default_hours(self):
         """Fallback to schedule default NSE hours"""
         logger.info("Scheduling default NSE hours as fallback")
@@ -686,7 +842,7 @@ class OptionChainBackgroundService:
                 id=f"pre_market_open_{day}",
                 replace_existing=True
             )
-            
+
             # Schedule market close (3:30 PM)
             self.scheduler.add_job(
                 func=self.on_market_close,
@@ -699,6 +855,99 @@ class OptionChainBackgroundService:
                 id=f"market_close_{day}",
                 replace_existing=True
             )
+
+    # NEW METHODS FOR POSITION MONITORING AND RISK MANAGEMENT
+
+    def start_position_monitor(self):
+        """Start position monitoring (subscribes to open positions only)"""
+        if self.position_monitor_running:
+            logger.info("Position monitor already running")
+            return
+
+        try:
+            # Use the single shared WebSocket manager for all services
+            # This prevents creating multiple connections to OpenAlgo
+            ws_manager = self.get_or_create_shared_websocket()
+
+            if not ws_manager:
+                logger.error("Failed to get shared WebSocket manager for position monitor")
+                return
+
+            # Start position monitor with shared WebSocket manager
+            position_monitor.start(ws_manager)
+            self.position_monitor_running = True
+            logger.info("✅ Position monitor started with shared WebSocket connection")
+
+        except Exception as e:
+            logger.error(f"Error starting position monitor: {e}")
+
+    def stop_position_monitor(self):
+        """Stop position monitoring"""
+        if not self.position_monitor_running:
+            return
+
+        try:
+            position_monitor.stop()
+            self.position_monitor_running = False
+            logger.info("Position monitor stopped")
+
+            # DO NOT disconnect shared WebSocket - other services may be using it
+            # Shared WebSocket is only disconnected when service stops completely
+
+        except Exception as e:
+            logger.error(f"Error stopping position monitor: {e}")
+
+    def start_risk_manager(self):
+        """Start risk manager"""
+        if self.risk_manager_running:
+            logger.info("Risk manager already running")
+            return
+
+        try:
+            risk_manager.start()
+            self.risk_manager_running = True
+            logger.info("Risk manager started")
+        except Exception as e:
+            logger.error(f"Error starting risk manager: {e}")
+
+    def stop_risk_manager(self):
+        """Stop risk manager"""
+        if not self.risk_manager_running:
+            return
+
+        try:
+            risk_manager.stop()
+            self.risk_manager_running = False
+            logger.info("Risk manager stopped")
+        except Exception as e:
+            logger.error(f"Error stopping risk manager: {e}")
+
+    def run_risk_checks(self):
+        """Run risk checks (called by scheduler every 1 second)"""
+        if not self.risk_manager_running:
+            return
+
+        try:
+            # Run within Flask app context for database access
+            if self.flask_app:
+                with self.flask_app.app_context():
+                    risk_manager.run_risk_checks()
+            else:
+                logger.warning("Flask app not available for risk checks")
+        except Exception as e:
+            logger.error(f"Error running risk checks: {e}")
+
+    def cleanup_sessions(self):
+        """Clean up expired option chain sessions (called by scheduler every 1 minute)"""
+        try:
+            # Run within Flask app context for database access
+            if self.flask_app:
+                with self.flask_app.app_context():
+                    session_manager.cleanup_expired_sessions()
+            else:
+                logger.warning("Flask app not available for session cleanup")
+        except Exception as e:
+            logger.error(f"Error cleaning up sessions: {e}")
 
 
 # Global service instance

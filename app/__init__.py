@@ -248,6 +248,9 @@ def create_app(config_name=None):
             if backup_accounts:
                 app.logger.info(f'Found {len(backup_accounts)} backup accounts')
             
+            # Register Flask app with background service
+            option_chain_service.set_flask_app(app)
+
             # Set primary and backup accounts
             option_chain_service.primary_account = primary
             option_chain_service.backup_accounts = backup_accounts.copy()

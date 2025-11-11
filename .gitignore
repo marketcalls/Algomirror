@@ -63,3 +63,6 @@ secrets/
 # Application specific
 algomirror.db
 migrations/versions/*.pyc
+
+# Old reference implementation
+docs/Algomirror-master/
