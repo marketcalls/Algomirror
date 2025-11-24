@@ -244,7 +244,7 @@ def fetch_spread_historical_data(strategy, legs, interval='5m', days=3):
             StrategyExecution.symbol.isnot(None)
         ).all()
 
-        # Map leg_id to actual placed symbol
+        # Map leg_id to actual placed symbol (quantity will come from leg.lots)
         leg_symbols = {}
         for execution in executions:
             if execution.leg_id not in leg_symbols:
@@ -254,6 +254,7 @@ def fetch_spread_historical_data(strategy, legs, interval='5m', days=3):
                 }
 
         # Fetch historical data for each leg using actual placed symbols
+        # Store data with leg action (BUY/SELL) for proper spread calculation
         leg_data_dict = {}
 
         for leg in legs:
@@ -284,8 +285,17 @@ def fetch_spread_historical_data(strategy, legs, interval='5m', days=3):
                     # Verify we have required OHLC columns
                     required_cols = ['open', 'high', 'low', 'close']
                     if all(col in response.columns for col in required_cols):
-                        leg_data_dict[f"{leg.leg_number}_{symbol}"] = response
-                        logger.info(f"✓ Fetched REAL {len(response)} bars for leg {leg.leg_number} ({symbol}) - OHLC data from OpenAlgo")
+                        # Use lot size (number of lots) from leg, not quantity
+                        lots = leg.lots or 1  # Default to 1 lot if not set
+
+                        # Store data with leg action and lots for spread calculation
+                        leg_data_dict[f"{leg.leg_number}_{symbol}"] = {
+                            'data': response,
+                            'action': leg.action,  # BUY or SELL
+                            'lots': lots,  # Number of lots (NOT total quantity)
+                            'leg_number': leg.leg_number
+                        }
+                        logger.info(f"✓ Fetched REAL {len(response)} bars for leg {leg.leg_number} ({symbol}) - {leg.action} x{lots} lots - OHLC data from OpenAlgo")
                         logger.info(f"  Sample data - Open: {response['open'].iloc[-1]:.2f}, High: {response['high'].iloc[-1]:.2f}, Low: {response['low'].iloc[-1]:.2f}, Close: {response['close'].iloc[-1]:.2f}")
                     else:
                         logger.error(f"Missing OHLC columns in response for {symbol}. Columns: {response.columns.tolist()}")
@@ -309,7 +319,13 @@ def fetch_spread_historical_data(strategy, legs, interval='5m', days=3):
                             if isinstance(fallback_response, pd.DataFrame) and not fallback_response.empty:
                                 required_cols = ['open', 'high', 'low', 'close']
                                 if all(col in fallback_response.columns for col in required_cols):
-                                    leg_data_dict[f"{leg.leg_number}_{leg.instrument}"] = fallback_response
+                                    lots = leg.lots or 1
+                                    leg_data_dict[f"{leg.leg_number}_{leg.instrument}"] = {
+                                        'data': fallback_response,
+                                        'action': leg.action,
+                                        'lots': lots,
+                                        'leg_number': leg.leg_number
+                                    }
                                     logger.info(f"✓ Fetched {len(fallback_response)} bars for leg {leg.leg_number} using fallback instrument ({leg.instrument})")
                         except Exception as fallback_error:
                             logger.error(f"Fallback to base instrument also failed: {fallback_error}")
@@ -325,27 +341,80 @@ def fetch_spread_historical_data(strategy, legs, interval='5m', days=3):
             logger.error("❌ No real data fetched from OpenAlgo - Cannot proceed without real market data")
             return None
 
-        # Combine OHLC data from multiple legs into combined spread
-        # Each OHLC component is summed across all legs to create the spread values
-        logger.info(f"Combining OHLC data from {len(leg_data_dict)} legs...")
-        combined_df = None
+        # Combine OHLC data from multiple legs into spread using proper formula:
+        # Spread = |SELL premiums × quantities - BUY premiums × quantities|
+        logger.info(f"Calculating spread from {len(leg_data_dict)} legs...")
 
-        for leg_name, df in leg_data_dict.items():
-            if combined_df is None:
-                # First leg - start with a copy
-                combined_df = df[['open', 'high', 'low', 'close']].copy()
-                logger.info(f"  Starting with {leg_name} as base")
+        # Separate SELL and BUY legs
+        sell_dfs = []
+        buy_dfs = []
+
+        for leg_name, leg_info in leg_data_dict.items():
+            df = leg_info['data']
+            action = leg_info['action']
+            lots = leg_info['lots']  # Number of lots (not total quantity)
+
+            # For line chart, we only need close values (not OHLC)
+            # Multiply close price by number of lots for this leg
+            weighted_df = df[['close']].copy()
+            weighted_df['close'] = weighted_df['close'] * lots
+
+            if action == 'SELL':
+                sell_dfs.append(weighted_df)
+                logger.info(f"  SELL leg {leg_info['leg_number']} × {lots} lots added")
+            else:  # BUY
+                buy_dfs.append(weighted_df)
+                logger.info(f"  BUY leg {leg_info['leg_number']} × {lots} lots added")
+
+        # Sum all SELL legs (close values only for line chart)
+        sell_total = None
+        if sell_dfs:
+            sell_total = sell_dfs[0].copy()
+            for df in sell_dfs[1:]:
+                sell_total['close'] = sell_total['close'].add(df['close'], fill_value=0)
+            logger.info(f"  Total SELL premium calculated from {len(sell_dfs)} legs")
+
+        # Sum all BUY legs (close values only for line chart)
+        buy_total = None
+        if buy_dfs:
+            buy_total = buy_dfs[0].copy()
+            for df in buy_dfs[1:]:
+                buy_total['close'] = buy_total['close'].add(df['close'], fill_value=0)
+            logger.info(f"  Total BUY premium calculated from {len(buy_dfs)} legs")
+
+        # Calculate spread = SELL - BUY (for line chart, only close values matter)
+        if sell_total is not None and buy_total is not None:
+            # Both SELL and BUY legs exist - calculate net spread
+            spread_close = sell_total['close'] - buy_total['close']
+
+            # If spread is negative (debit spread), flip to make it positive
+            if spread_close.iloc[-1] < 0:
+                spread_close = -spread_close
+                logger.info(f"  ✓ Combined Premium = BUY - SELL (debit spread, flipped to positive)")
             else:
-                # Subsequent legs - add OHLC values
-                # Align indices and sum each OHLC component
-                combined_df['open'] = combined_df['open'].add(df['open'], fill_value=0)
-                combined_df['high'] = combined_df['high'].add(df['high'], fill_value=0)
-                combined_df['low'] = combined_df['low'].add(df['low'], fill_value=0)
-                combined_df['close'] = combined_df['close'].add(df['close'], fill_value=0)
-                logger.info(f"  Added {leg_name} to spread")
+                logger.info(f"  ✓ Combined Premium = SELL - BUY (credit spread, already positive)")
+        elif sell_total is not None:
+            # Only SELL legs - use SELL total as spread
+            spread_close = sell_total['close']
+            logger.info(f"  ✓ Combined Premium = SELL total (credit spread)")
+        elif buy_total is not None:
+            # Only BUY legs - use BUY total as spread
+            spread_close = buy_total['close']
+            logger.info(f"  ✓ Combined Premium = BUY total (debit spread)")
+        else:
+            logger.error("❌ No valid leg data found")
+            return None
+
+        # Create OHLC DataFrame from close values for compatibility (line chart uses close only)
+        combined_df = pd.DataFrame({
+            'open': spread_close,
+            'high': spread_close,
+            'low': spread_close,
+            'close': spread_close
+        })
 
         if combined_df is None or combined_df.empty:
-            logger.error("❌ Failed to combine leg data")
+            logger.error("❌ Failed to calculate spread")
             return None
 
         logger.info(f"✓ Successfully combined {len(leg_data_dict)} legs into spread OHLC with {len(combined_df)} bars (REAL DATA)")
