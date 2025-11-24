@@ -1521,7 +1521,7 @@ def risk_status_stream():
                 # Get the strategy
                 strategy = Strategy.query.get(strategy_id)
                 if not strategy:
-                    print(f"[RISK MONITOR] ERROR: Strategy not found for execution {execution_id}", flush=True)
+                    app.logger.error(f"[RISK MONITOR] Strategy not found for execution {execution_id}")
                     return False
 
                 # Get primary account
@@ -1532,7 +1532,7 @@ def risk_status_stream():
                 ).first()
 
                 if not primary_account:
-                    print(f"[RISK MONITOR] ERROR: No primary account found for user {strategy.user_id}", flush=True)
+                    app.logger.error(f"[RISK MONITOR] No primary account found for user {strategy.user_id}")
                     return False
 
                 # Initialize OpenAlgo client
@@ -1546,7 +1546,7 @@ def risk_status_stream():
                 exit_action = 'SELL' if entry_action == 'BUY' else 'BUY'
 
                 # Place exit order using keyword arguments
-                print(f"[RISK MONITOR] Placing exit order: symbol={symbol}, action={exit_action}, qty={quantity}", flush=True)
+                app.logger.info(f"[RISK MONITOR] Placing exit order: symbol={symbol}, action={exit_action}, qty={quantity}")
                 response = client.placeorder(
                     strategy=strategy.name,
                     symbol=symbol,
@@ -1806,11 +1806,11 @@ def risk_status_stream():
                             entry_price = execution.entry_price or 0
                             action = leg.action if leg else 'BUY'
 
-                            # Debug logging for SL/TP
+                            # Debug logging for SL/TP (now at DEBUG level to reduce log flooding)
                             if leg:
-                                print(f"[RISK SSE DEBUG] Execution {execution.id}: leg_id={leg.id}, SL_type={leg.stop_loss_type}, SL_value={leg.stop_loss_value}, TP_type={leg.take_profit_type}, TP_value={leg.take_profit_value}", flush=True)
+                                current_app.logger.debug(f"[RISK SSE] Execution {execution.id}: leg_id={leg.id}, SL_type={leg.stop_loss_type}, SL_value={leg.stop_loss_value}, TP_type={leg.take_profit_type}, TP_value={leg.take_profit_value}")
                             else:
-                                print(f"[RISK SSE DEBUG] Execution {execution.id}: NO LEG FOUND (leg_id={execution.leg_id})", flush=True)
+                                current_app.logger.debug(f"[RISK SSE] Execution {execution.id}: NO LEG FOUND (leg_id={execution.leg_id})")
 
                             # Determine price source and LTP
                             # Priority: WebSocket-updated last_price > option chain > calculated

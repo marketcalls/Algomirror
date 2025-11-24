@@ -195,7 +195,7 @@
                                         </svg>
                                         View
                                     </button>
-                                    <button onclick="closeStrategyPositions({{ strategy.id }}, '{{ strategy.name }}')" class="btn btn-error btn-sm flex-1 gap-2">
+                                    <button onclick="closeStrategyPositions({{ strategy.id }}, '{{ strategy.name }}', {{ account.id }}, '{{ account.account_name }}')" class="btn btn-error btn-sm flex-1 gap-2">
                                         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
                                         </svg>
@@ -323,23 +323,30 @@ function closeAllAccountPositions(accountId, accountName) {
     executeCloseAllPositions(accountId, accountName);
 }
 
-// Close strategy positions
-async function closeStrategyPositions(strategyId, strategyName) {
+// Close strategy positions (optionally for a specific account)
+async function closeStrategyPositions(strategyId, strategyName, accountId = null, accountName = null) {
     try {
-        showNotification(`Closing all positions for "${strategyName}"...`, 'info');
+        // If accountId provided, show account-specific message
+        const messagePrefix = accountId ? `"${strategyName}" in account "${accountName}"` : `"${strategyName}" in all accounts`;
+        showNotification(`Closing positions for ${messagePrefix}...`, 'info');
+
+        // Build request body with optional account_id
+        const requestBody = accountId ? { account_id: accountId } : {};
 
         const response = await fetch(`/strategy/${strategyId}/close-all`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
                 'X-CSRFToken': document.querySelector('meta[name="csrf-token"]').content
-            }
+            },
+            body: JSON.stringify(requestBody)
         });
 
         const data = await response.json();
 
         if (data.status === 'success') {
-            showNotification(`✓ Successfully closed all positions for "${strategyName}" | P&L: ₹${data.total_pnl.toFixed(2)}`, 'success');
+            const accountInfo = accountName ? ` in "${accountName}"` : '';
+            showNotification(`✓ Successfully closed positions for "${strategyName}"${accountInfo} | P&L: ₹${data.total_pnl.toFixed(2)}`, 'success');
             setTimeout(() => location.reload(), 2000);
         } else if (data.status === 'warning') {
             showNotification(`⚠ ${data.message}`, 'warning');
@@ -351,7 +358,8 @@ async function closeStrategyPositions(strategyId, strategyName) {
         }
     } catch (error) {
         console.error('Error:', error);
-        showNotification(`✗ Error closing positions for "${strategyName}"`, 'error');
+        const accountInfo = accountName ? ` in "${accountName}"` : '';
+        showNotification(`✗ Error closing positions for "${strategyName}"${accountInfo}`, 'error');
     }
 }
 

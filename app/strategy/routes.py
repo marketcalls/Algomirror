@@ -1213,9 +1213,9 @@ def strategy_positions(strategy_id):
         StrategyExecution.status.in_(['entered', 'exit_pending', 'exited'])
     ).join(TradingAccount).join(StrategyLeg).all()
 
-    logger.info(f"[POSITIONS DEBUG] Found {len(positions)} positions for strategy {strategy_id}")
+    logger.debug(f"[POSITIONS] Found {len(positions)} positions for strategy {strategy_id}")
     for pos in positions:
-        logger.info(f"[POSITIONS DEBUG] Position ID {pos.id}: symbol={pos.symbol}, status={pos.status}, qty={pos.quantity}, leg={pos.leg.leg_number if pos.leg else None}")
+        logger.debug(f"[POSITIONS] Position ID {pos.id}: symbol={pos.symbol}, status={pos.status}, qty={pos.quantity}, leg={pos.leg.leg_number if pos.leg else None}")
 
     from app.utils.openalgo_client import ExtendedOpenAlgoAPI
 
@@ -1310,7 +1310,10 @@ def strategy_positions(strategy_id):
 @login_required
 @api_rate_limit()
 def close_all_positions(strategy_id):
-    """Close all open positions for a strategy - PARALLEL EXECUTION"""
+    """Close all open positions for a strategy - PARALLEL EXECUTION
+
+    Optional: Pass account_id in request body to close positions for specific account only
+    """
     import threading
 
     try:
@@ -1319,11 +1322,26 @@ def close_all_positions(strategy_id):
             user_id=current_user.id
         ).first_or_404()
 
-        # Get all open positions (exclude rejected/cancelled)
-        open_positions = StrategyExecution.query.filter_by(
+        # Check if account_id is provided in request (for account-specific closing)
+        # Use silent=True to avoid errors when no JSON body is sent
+        request_data = request.get_json(silent=True) or {}
+        account_id = request_data.get('account_id') if request_data else None
+
+        # Build query for open positions
+        query = StrategyExecution.query.filter_by(
             strategy_id=strategy_id,
             status='entered'
-        ).all()
+        )
+
+        # If account_id provided, filter by that account only
+        if account_id:
+            query = query.filter_by(account_id=account_id)
+            logger.info(f"Closing strategy {strategy_id} positions for account {account_id} only")
+        else:
+            logger.info(f"Closing strategy {strategy_id} positions for ALL accounts")
+
+        # Get all open positions (exclude rejected/cancelled)
+        open_positions = query.all()
 
         # Filter out rejected/cancelled orders
         open_positions = [
