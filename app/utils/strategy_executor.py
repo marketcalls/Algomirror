@@ -50,6 +50,20 @@ class StrategyExecutor:
             0.65  # Default to 65% if risk_profile is not set or is 'fixed_lots'
         )
 
+        # Determine is_expiry based on market_condition setting
+        # 'expiry' -> True (use expiry margins)
+        # 'non_expiry' -> False (use non-expiry margins)
+        # 'any' or None -> None (auto-detect based on today's date)
+        market_condition = strategy.market_condition
+        if market_condition == 'expiry':
+            self.is_expiry_override = True
+        elif market_condition == 'non_expiry':
+            self.is_expiry_override = False
+        else:  # 'any' or None
+            self.is_expiry_override = None
+
+        logger.info(f"Strategy {strategy.id}: market_condition='{market_condition}', is_expiry_override={self.is_expiry_override}")
+
         # Store app reference for thread context
         from flask import current_app
         self.app = current_app._get_current_object()
@@ -1058,12 +1072,14 @@ class StrategyExecutor:
             logger.info(f"[QTY CALC DEBUG] Risk profile: {self.strategy.risk_profile}, Margin %: {self.margin_percentage*100}%")
 
             # Calculate optimal lot size based on margin with custom percentage
+            # Pass is_expiry based on strategy's market_condition setting
             optimal_lots, details = self.margin_calculator.calculate_lot_size_custom(
                 account=account,
                 instrument=leg.instrument,
                 trade_type=trade_type,
                 margin_percentage=self.margin_percentage,
-                available_margin=available_margin
+                available_margin=available_margin,
+                is_expiry=self.is_expiry_override
             )
 
             logger.info(f"[QTY CALC DEBUG] Calculated optimal lots: {optimal_lots}")

@@ -99,11 +99,11 @@ class MarginCalculator:
 
         # Standard expiry days
         if instrument == 'NIFTY':
-            return day_of_week == 3  # Thursday
+            return day_of_week == 1  # Tuesday
         elif instrument == 'BANKNIFTY':
-            return day_of_week == 2  # Wednesday
+            return day_of_week == 1  # Tuesday
         elif instrument == 'SENSEX':
-            return day_of_week == 4  # Friday
+            return day_of_week == 3  # Thursday
         else:
             return False
 
@@ -253,7 +253,8 @@ class MarginCalculator:
                                   instrument: str,
                                   trade_type: str,
                                   margin_percentage: float,
-                                  available_margin: Optional[float] = None) -> Tuple[int, Dict]:
+                                  available_margin: Optional[float] = None,
+                                  is_expiry: Optional[bool] = None) -> Tuple[int, Dict]:
         """
         Calculate optimal lot size with custom margin percentage (for risk profiles)
 
@@ -263,6 +264,7 @@ class MarginCalculator:
             trade_type: 'sell_c_p', 'sell_c_and_p', 'buy', 'futures'
             margin_percentage: Percentage of margin to use (0.0 to 1.0, e.g., 0.65 for 65%)
             available_margin: Override available margin if provided
+            is_expiry: Override expiry day detection (True=expiry, False=non-expiry, None=auto-detect)
 
         Returns:
             Tuple of (lot_size, calculation_details)
@@ -283,9 +285,9 @@ class MarginCalculator:
             else:
                 logger.info(f"[LOT CALC DEBUG] Using provided available margin: ₹{available_margin:,.2f}")
 
-            # Get margin requirement per lot
-            margin_per_lot = self.get_margin_requirement(instrument, trade_type)
-            logger.info(f"[LOT CALC DEBUG] Margin per lot: ₹{margin_per_lot:,.2f}")
+            # Get margin requirement per lot (use is_expiry override if provided)
+            margin_per_lot = self.get_margin_requirement(instrument, trade_type, is_expiry=is_expiry)
+            logger.info(f"[LOT CALC DEBUG] Margin per lot: ₹{margin_per_lot:,.2f} (is_expiry={is_expiry})")
 
             # Special case for option buying - no margin blocked
             if margin_per_lot == 0:
