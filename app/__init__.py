@@ -279,14 +279,15 @@ def create_app(config_name=None):
                         app.logger.info(f"Authentication successful, starting option chains in background")
                         # Start option chains in a background thread to avoid blocking worker startup
                         import threading
-                        def delayed_start():
+                        def delayed_start(flask_app, primary_acct):
                             import time
                             time.sleep(2)  # Wait for app to fully initialize
                             try:
-                                option_chain_service.on_primary_account_connected(primary)
+                                with flask_app.app_context():
+                                    option_chain_service.on_primary_account_connected(primary_acct)
                             except Exception as e:
-                                app.logger.error(f"Error starting option chains: {e}")
-                        threading.Thread(target=delayed_start, daemon=True).start()
+                                flask_app.logger.error(f"Error starting option chains: {e}")
+                        threading.Thread(target=delayed_start, args=(app, primary), daemon=True).start()
                     else:
                         # Authentication failed - update connection status
                         app.logger.warning(f"Primary account {primary.account_name} authentication failed: {ping_response.get('message', 'Unknown error')}")
