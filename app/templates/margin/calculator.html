@@ -83,6 +83,21 @@
                         </select>
                     </div>
 
+                    <!-- Expiry Day Selection -->
+                    <div class="form-control">
+                        <label class="label">
+                            <span class="label-text font-semibold">Day Type</span>
+                            <span class="label-text-alt">Margin varies by day type</span>
+                        </label>
+                        <select id="expiry-select" class="select select-bordered w-full" onchange="updateDisplay()">
+                            <option value="non_expiry">Non-Expiry Day (Higher Margin)</option>
+                            <option value="expiry">Expiry Day (Lower Margin)</option>
+                        </select>
+                        <label class="label">
+                            <span class="label-text-alt text-info" id="expiry-hint">Expiry days typically require less margin</span>
+                        </label>
+                    </div>
+
                     <!-- Calculate Button -->
                     <button onclick="calculateLotSize()" class="btn btn-primary btn-block">
                         Calculate Lot Size
@@ -119,6 +134,10 @@
                                 <span id="detail-percentage">0%</span>
                             </div>
                             <div class="flex justify-between">
+                                <span>Day Type:</span>
+                                <span id="detail-day-type">-</span>
+                            </div>
+                            <div class="flex justify-between">
                                 <span>Effective Margin:</span>
                                 <span id="detail-effective">₹ 0.00</span>
                             </div>
@@ -128,7 +147,7 @@
                                 <span id="detail-per-lot">₹ 0.00</span>
                             </div>
                             <div class="flex justify-between font-semibold">
-                                <span>Max Lots:</span>
+                                <span>Max Lots (Rounded Down):</span>
                                 <span id="detail-max-lots">0</span>
                             </div>
                             <div class="flex justify-between">
@@ -237,6 +256,8 @@
         const instrument = document.getElementById('instrument-select').value;
         const tradeType = document.getElementById('trade-type-select').value;
         const qualityGrade = document.getElementById('quality-select').value;
+        const expirySelect = document.getElementById('expiry-select').value;
+        const isExpiry = expirySelect === 'expiry';
 
         if (!availableMargin || availableMargin <= 0) {
             alert('Please enter a valid available margin amount');
@@ -254,14 +275,15 @@
                     available_margin: availableMargin,
                     instrument: instrument,
                     trade_type: tradeType,
-                    quality_grade: qualityGrade
+                    quality_grade: qualityGrade,
+                    is_expiry: isExpiry
                 })
             });
 
             const data = await response.json();
 
             if (data.status === 'success') {
-                displayResults(data.lot_size, data.details);
+                displayResults(data.lot_size, data.details, isExpiry);
             } else {
                 alert('Error: ' + (data.message || 'Calculation failed'));
             }
@@ -271,7 +293,7 @@
         }
     }
 
-    function displayResults(lotSize, details) {
+    function displayResults(lotSize, details, isExpiry) {
         // Update main result
         document.getElementById('lot-size-result').textContent = lotSize + ' Lots';
 
@@ -279,9 +301,10 @@
         document.getElementById('detail-available').textContent = '₹ ' + formatNumber(details.available_margin);
         document.getElementById('detail-quality').textContent = details.quality_grade;
         document.getElementById('detail-percentage').textContent = details.quality_percentage + '%';
+        document.getElementById('detail-day-type').textContent = isExpiry ? 'Expiry Day' : 'Non-Expiry Day';
         document.getElementById('detail-effective').textContent = '₹ ' + formatNumber(details.effective_margin);
         document.getElementById('detail-per-lot').textContent = '₹ ' + formatNumber(details.margin_per_lot);
-        document.getElementById('detail-max-lots').textContent = details.raw_lot_size.toFixed(3);
+        document.getElementById('detail-max-lots').textContent = details.raw_lot_size.toFixed(3) + ' (floor: ' + lotSize + ')';
         document.getElementById('detail-required').textContent = '₹ ' + formatNumber(details.margin_required);
         document.getElementById('detail-remaining').textContent = '₹ ' + formatNumber(details.margin_remaining);
 

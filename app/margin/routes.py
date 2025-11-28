@@ -295,6 +295,7 @@ def calculate_lots():
         instrument = data.get('instrument')
         trade_type = data.get('trade_type')
         quality_grade = data.get('quality_grade')
+        is_expiry = data.get('is_expiry', False)  # Default to non-expiry day
 
         # Validate inputs
         if not available_margin or available_margin <= 0:
@@ -315,13 +316,30 @@ def calculate_lots():
 
         dummy_account = DummyAccount(available_margin)
 
-        lot_size, details = calculator.calculate_lot_size(
+        # Get quality percentage from quality grade
+        quality = calculator.trade_qualities.get(quality_grade)
+        if not quality:
+            return jsonify({
+                'status': 'error',
+                'message': 'Invalid quality grade'
+            }), 400
+
+        margin_percentage = quality.margin_percentage / 100
+
+        # Use calculate_lot_size_custom which supports is_expiry parameter
+        lot_size, details = calculator.calculate_lot_size_custom(
             account=dummy_account,
             instrument=instrument,
             trade_type=trade_type,
-            quality_grade=quality_grade,
-            available_margin=available_margin  # Pass margin directly
+            margin_percentage=margin_percentage,
+            available_margin=available_margin,
+            is_expiry=is_expiry
         )
+
+        # Add quality_grade to details for display
+        details['quality_grade'] = quality_grade
+        details['quality_percentage'] = quality.margin_percentage
+        details['is_expiry'] = is_expiry
 
         return jsonify({
             'status': 'success',
