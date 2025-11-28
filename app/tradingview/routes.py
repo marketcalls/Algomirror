@@ -394,9 +394,9 @@ def fetch_spread_historical_data(strategy, legs, interval='5m', days=3):
                 spread_close = spread_close.add(aligned_df['close'], fill_value=0)
 
         # Combined Premium = SELL premiums - BUY premiums
-        # Positive value = net credit (receiving premium)
-        # Negative value = net debit (paying premium)
-        logger.info(f"  Combined Premium calculated: SELL - BUY (net credit/debit)")
+        # Take absolute value - spread cannot be negative
+        spread_close = spread_close.abs()
+        logger.info(f"  Combined Premium calculated with absolute value (always positive)")
 
         # Create OHLC DataFrame from close values for compatibility (line chart uses close only)
         combined_df = pd.DataFrame({

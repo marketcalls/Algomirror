@@ -410,7 +410,8 @@ class SupertrendExitService:
                     buy_total['low'] = buy_total['low'].add(df['low'], fill_value=0)
                     buy_total['close'] = buy_total['close'].add(df['close'], fill_value=0)
 
-            # Calculate spread = SELL - BUY
+            # Calculate spread = SELL - BUY, then take absolute value
+            # Spread values should always be positive
             if sell_total is not None and buy_total is not None:
                 combined_df = sell_total.copy()
                 combined_df['open'] = sell_total['open'] - buy_total['open']
@@ -418,15 +419,19 @@ class SupertrendExitService:
                 combined_df['low'] = sell_total['low'] - buy_total['low']
                 combined_df['close'] = sell_total['close'] - buy_total['close']
 
-                # Flip if negative (debit spread)
-                if combined_df['close'].iloc[-1] < 0:
-                    combined_df['open'] = -combined_df['open']
-                    combined_df['high'] = -combined_df['high']
-                    combined_df['low'] = -combined_df['low']
-                    combined_df['close'] = -combined_df['close']
-                    logger.info(f"  Spread = BUY - SELL (debit spread, flipped)")
-                else:
-                    logger.info(f"  Spread = SELL - BUY (credit spread)")
+                # Take absolute value of all OHLC - spread cannot be negative
+                combined_df['open'] = combined_df['open'].abs()
+                combined_df['high'] = combined_df['high'].abs()
+                combined_df['low'] = combined_df['low'].abs()
+                combined_df['close'] = combined_df['close'].abs()
+
+                # Ensure high >= low (swap if needed after abs())
+                high_vals = combined_df['high'].copy()
+                low_vals = combined_df['low'].copy()
+                combined_df['high'] = pd.concat([high_vals, low_vals], axis=1).max(axis=1)
+                combined_df['low'] = pd.concat([high_vals, low_vals], axis=1).min(axis=1)
+
+                logger.info(f"  Spread calculated with absolute values (always positive)")
             elif sell_total is not None:
                 combined_df = sell_total
             elif buy_total is not None:
