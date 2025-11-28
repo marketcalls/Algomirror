@@ -1288,12 +1288,14 @@ class StrategyExecutor:
         available_margin = self.account_margins[account.id]
 
         # Calculate using 'sell_c_and_p' margin (covers both legs)
+        # Pass is_expiry based on strategy's market_condition setting for consistency
         optimal_lots, details = self.margin_calculator.calculate_lot_size_custom(
             account=account,
             instrument=instrument,
             trade_type='sell_c_and_p',  # Combined margin for CE+PE
             margin_percentage=self.margin_percentage,
-            available_margin=available_margin
+            available_margin=available_margin,
+            is_expiry=self.is_expiry_override
         )
 
         if optimal_lots > 0:
@@ -1338,12 +1340,14 @@ class StrategyExecutor:
         available_margin = self.account_margins[account.id]
 
         # Calculate using 'sell_c_p' margin (single option selling)
+        # Pass is_expiry based on strategy's market_condition setting for consistency
         optimal_lots, details = self.margin_calculator.calculate_lot_size_custom(
             account=account,
             instrument=instrument,
             trade_type='sell_c_p',
             margin_percentage=self.margin_percentage,
-            available_margin=available_margin
+            available_margin=available_margin,
+            is_expiry=self.is_expiry_override
         )
 
         if optimal_lots > 0:
