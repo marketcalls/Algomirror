@@ -343,68 +343,82 @@ def fetch_spread_historical_data(strategy, legs, interval='5m', days=3):
             logger.error("No real data fetched from OpenAlgo - Cannot proceed without real market data")
             return None
 
-        # Combine OHLC data from multiple legs into spread using proper formula:
-        # Combined Premium = Sum of all leg premiums (SELL as positive, BUY as negative)
-        # This represents the net premium for the spread strategy
-        logger.info(f"Calculating combined premium from {len(leg_data_dict)} legs...")
+        # Combine OHLC data from multiple legs into spread
+        # For Supertrend to work correctly, we need proper high/low values, not just close
+        logger.info(f"Calculating combined spread OHLC from {len(leg_data_dict)} legs...")
 
-        # Collect all leg dataframes with their signs
-        # SELL legs contribute positive premium (credit received)
-        # BUY legs contribute negative premium (debit paid)
-        all_dfs = []
+        # Initialize combined OHLC
         common_index = None
+        combined_open = None
+        combined_high = None
+        combined_low = None
+        combined_close = None
 
         for leg_name, leg_info in leg_data_dict.items():
             df = leg_info['data']
             action = leg_info['action']
             leg_number = leg_info['leg_number']
 
-            # Use raw close prices (don't multiply by lots - we want per-lot spread value)
-            leg_df = df[['close']].copy()
+            # Get OHLC data
+            leg_open = df['open'].copy()
+            leg_high = df['high'].copy()
+            leg_low = df['low'].copy()
+            leg_close = df['close'].copy()
 
             # Apply sign based on action: SELL = positive, BUY = negative
             if action == 'BUY':
-                leg_df['close'] = -leg_df['close']
+                leg_open = -leg_open
+                leg_high = -leg_high
+                leg_low = -leg_low
+                leg_close = -leg_close
                 logger.info(f"  Leg {leg_number}: BUY (negative contribution)")
             else:
                 logger.info(f"  Leg {leg_number}: SELL (positive contribution)")
 
-            all_dfs.append(leg_df)
-
             # Build common index (intersection of all timestamps)
             if common_index is None:
                 common_index = df.index
+                combined_open = leg_open
+                combined_high = leg_high
+                combined_low = leg_low
+                combined_close = leg_close
             else:
                 common_index = common_index.intersection(df.index)
+                combined_open = combined_open.add(leg_open, fill_value=0)
+                combined_high = combined_high.add(leg_high, fill_value=0)
+                combined_low = combined_low.add(leg_low, fill_value=0)
+                combined_close = combined_close.add(leg_close, fill_value=0)
 
-        if not all_dfs or common_index is None or len(common_index) == 0:
+        if common_index is None or len(common_index) == 0:
             logger.error("No valid leg data found or no common timestamps")
             return None
 
-        # Align all dataframes to common index and sum
-        logger.info(f"  Aligning {len(all_dfs)} legs to {len(common_index)} common timestamps")
+        # Reindex to common timestamps
+        combined_open = combined_open.reindex(common_index)
+        combined_high = combined_high.reindex(common_index)
+        combined_low = combined_low.reindex(common_index)
+        combined_close = combined_close.reindex(common_index)
 
-        # Reindex all dataframes to common index and sum
-        spread_close = None
-        for leg_df in all_dfs:
-            aligned_df = leg_df.reindex(common_index)
-            if spread_close is None:
-                spread_close = aligned_df['close'].copy()
-            else:
-                spread_close = spread_close.add(aligned_df['close'], fill_value=0)
+        # Take absolute values for spread (spread value should be positive)
+        combined_open = combined_open.abs()
+        combined_high = combined_high.abs()
+        combined_low = combined_low.abs()
+        combined_close = combined_close.abs()
 
-        # Combined Premium = SELL premiums - BUY premiums
-        # Take absolute value - spread cannot be negative
-        spread_close = spread_close.abs()
-        logger.info(f"  Combined Premium calculated with absolute value (always positive)")
+        # Ensure high >= low after abs() transformation
+        # After taking absolute value, the original high/low relationship might be inverted
+        actual_high = pd.concat([combined_high, combined_low], axis=1).max(axis=1)
+        actual_low = pd.concat([combined_high, combined_low], axis=1).min(axis=1)
 
-        # Create OHLC DataFrame from close values for compatibility (line chart uses close only)
+        # Create OHLC DataFrame with proper high/low for ATR calculation
         combined_df = pd.DataFrame({
-            'open': spread_close,
-            'high': spread_close,
-            'low': spread_close,
-            'close': spread_close
+            'open': combined_open,
+            'high': actual_high,
+            'low': actual_low,
+            'close': combined_close
         })
+
+        logger.info(f"  Combined spread OHLC with proper high/low values for Supertrend")
 
         if combined_df is None or combined_df.empty:
             logger.error("Failed to calculate spread")

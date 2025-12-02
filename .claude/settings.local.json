@@ -18,7 +18,9 @@
       "Bash(del test_supertrend.py)",
       "Bash(git -C:*)",
       "Bash(git -C \"D:\\openalgo-multi\\algomirror\" commit -m \"$(cat <<''EOF''\nFix Supertrend NaN handling for proper calculation\n\n- Added first valid index detection (skip ATR warmup period)\n- Initialize first valid bar with direction=1 (bearish) per Pine Script\n- Handle NaN comparisons by checking previous bar validity\n- Fixed band adjustment to only apply when previous values are valid\n- Supertrend now correctly calculates after ATR period warmup\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude <noreply@anthropic.com>\nEOF\n)\")",
-      "Bash(.venvScriptspython.exe -c \"from app import create_app; print(''OK'')\")"
+      "Bash(.venvScriptspython.exe -c \"from app import create_app; print(''OK'')\")",
+      "Bash(.venvScriptspython.exe test_supertrend_validation.py)",
+      "Bash(del test_supertrend_validation.py)"
     ],
     "deny": [],
     "ask": []
