@@ -1018,11 +1018,35 @@ function updateLegNumbers() {
 function toggleOptionFields(select) {
     const legItem = select.closest('.leg-item');
     const optionFields = legItem.querySelectorAll('.option-field');
+    const expirySelect = legItem.querySelector('.leg-expiry');
 
     if (select.value === 'futures') {
+        // Hide option-specific fields for futures
         optionFields.forEach(field => field.style.display = 'none');
+
+        // Hide weekly expiry options for futures (no weekly futures exist)
+        if (expirySelect) {
+            const currentWeekOpt = expirySelect.querySelector('option[value="current_week"]');
+            const nextWeekOpt = expirySelect.querySelector('option[value="next_week"]');
+            if (currentWeekOpt) currentWeekOpt.style.display = 'none';
+            if (nextWeekOpt) nextWeekOpt.style.display = 'none';
+
+            // If currently selected weekly, switch to current_month
+            if (expirySelect.value === 'current_week' || expirySelect.value === 'next_week') {
+                expirySelect.value = 'current_month';
+            }
+        }
     } else {
+        // Show option-specific fields for options
         optionFields.forEach(field => field.style.display = 'block');
+
+        // Show weekly expiry options for options
+        if (expirySelect) {
+            const currentWeekOpt = expirySelect.querySelector('option[value="current_week"]');
+            const nextWeekOpt = expirySelect.querySelector('option[value="next_week"]');
+            if (currentWeekOpt) currentWeekOpt.style.display = '';
+            if (nextWeekOpt) nextWeekOpt.style.display = '';
+        }
     }
 }
 

@@ -23,7 +23,8 @@
       "Bash(del test_supertrend_validation.py)",
       "Bash(.venvScriptspython.exe -c \"from app.utils.strategy_executor import StrategyExecutor; print(''OK'')\")",
       "Bash(D:openalgo-multialgomirror.venvScriptspython.exe -c \"from app.utils.strategy_executor import StrategyExecutor; print(''OK'')\")",
-      "WebFetch(domain:docs.openalgo.in)"
+      "WebFetch(domain:docs.openalgo.in)",
+      "Bash(npm run build-css:*)"
     ],
     "deny": [],
     "ask": []
