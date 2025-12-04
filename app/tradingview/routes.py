@@ -5,7 +5,7 @@ Spread monitoring with Supertrend indicator
 from flask import render_template, request, jsonify
 from flask_login import login_required, current_user
 from app.tradingview import tradingview_bp
-from app.models import Strategy, StrategyLeg
+from app.models import Strategy, StrategyLeg, StrategyExecution
 from app.utils.rate_limiter import api_rate_limit
 from app.utils.supertrend import calculate_supertrend
 import logging
@@ -109,14 +109,58 @@ def get_chart_data(strategy_id):
         if days < 1 or days > 5:
             days = 3
 
-        # Get strategy legs
-        legs = StrategyLeg.query.filter_by(strategy_id=strategy_id).all()
+        # Get all strategy legs
+        all_legs = StrategyLeg.query.filter_by(strategy_id=strategy_id).all()
 
-        if not legs:
+        if not all_legs:
             return jsonify({
                 'status': 'error',
                 'message': 'No legs found for strategy'
             }), 400
+
+        # Filter to only legs with OPEN positions (status='entered')
+        # This ensures closed legs don't affect the combined premium calculation
+        open_positions = StrategyExecution.query.filter_by(
+            strategy_id=strategy_id,
+            status='entered'
+        ).all()
+
+        # Filter out rejected/cancelled orders
+        open_positions = [
+            pos for pos in open_positions
+            if not (hasattr(pos, 'broker_order_status') and pos.broker_order_status in ['rejected', 'cancelled'])
+        ]
+
+        # Get leg IDs that have open positions
+        open_leg_ids = set(pos.leg_id for pos in open_positions if pos.leg_id)
+
+        # Filter legs to only include those with open positions
+        if open_leg_ids:
+            legs = [leg for leg in all_legs if leg.id in open_leg_ids]
+            logger.info(f"Strategy {strategy_id}: Filtered from {len(all_legs)} to {len(legs)} legs with open positions (leg_ids: {open_leg_ids})")
+        else:
+            # No open positions - return zero combined premium
+            logger.info(f"Strategy {strategy_id}: All positions closed, returning zero combined premium")
+            return jsonify({
+                'status': 'success',
+                'data': [{
+                    'time': int(datetime.now().timestamp()) + 19800,  # IST offset
+                    'open': 0.0,
+                    'high': 0.0,
+                    'low': 0.0,
+                    'close': 0.0,
+                    'supertrend': None,
+                    'direction': 0
+                }],
+                'signal': 'CLOSED',
+                'strategy_name': strategy.name,
+                'legs_count': 0,
+                'total_legs': len(all_legs),
+                'active_legs': 0,
+                'all_positions_closed': True,
+                'period': period,
+                'multiplier': multiplier
+            })
 
         # Fetch real historical data from OpenAlgo (no simulation fallback)
         spread_data = fetch_spread_historical_data(strategy, legs, interval, days)
@@ -164,7 +208,7 @@ def get_chart_data(strategy_id):
         else:
             signal = 'SELL'
 
-        logger.info(f"Returning {len(chart_data)} bars of REAL OHLC data to frontend with Supertrend signal: {signal}")
+        logger.info(f"Returning {len(chart_data)} bars of REAL OHLC data to frontend with Supertrend signal: {signal} (active legs: {len(legs)}/{len(all_legs)})")
 
         return jsonify({
             'status': 'success',
@@ -172,6 +216,8 @@ def get_chart_data(strategy_id):
             'signal': signal,
             'strategy_name': strategy.name,
             'legs_count': len(legs),
+            'total_legs': len(all_legs),
+            'active_legs': len(open_leg_ids) if open_leg_ids else 0,
             'period': period,
             'multiplier': multiplier
         })

@@ -2386,6 +2386,9 @@ async function fetchCombinedPremium() {
         const result = await response.json();
 
         if (result.status === 'success' && result.data && result.data.length > 0) {
+            // Check if all positions are closed
+            const allPositionsClosed = result.all_positions_closed === true;
+
             // Get the latest data point
             const latestData = result.data[result.data.length - 1];
             const combinedPremium = latestData.close;
@@ -2394,8 +2397,13 @@ async function fetchCombinedPremium() {
 
             // Update connection status
             if (connectionEl) {
-                connectionEl.innerHTML = '<span class="relative flex h-2 w-2"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-success opacity-75"></span><span class="relative inline-flex rounded-full h-2 w-2 bg-success"></span></span>';
-                connectionEl.className = 'badge badge-sm badge-success';
+                if (allPositionsClosed) {
+                    connectionEl.innerHTML = 'Closed';
+                    connectionEl.className = 'badge badge-sm badge-warning';
+                } else {
+                    connectionEl.innerHTML = '<span class="relative flex h-2 w-2"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-success opacity-75"></span><span class="relative inline-flex rounded-full h-2 w-2 bg-success"></span></span>';
+                    connectionEl.className = 'badge badge-sm badge-success';
+                }
             }
 
             // Update combined premium
@@ -2408,7 +2416,10 @@ async function fetchCombinedPremium() {
 
             // Update signal
             if (signalEl) {
-                if (direction === 1) {
+                if (allPositionsClosed) {
+                    signalEl.textContent = 'CLOSED';
+                    signalEl.className = 'badge badge-warning badge-sm ml-1';
+                } else if (direction === 1) {
                     signalEl.textContent = 'BUY';
                     signalEl.className = 'badge badge-success badge-sm ml-1';
                 } else if (direction === -1) {
