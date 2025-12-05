@@ -60,11 +60,11 @@
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
                 </svg>
             </div>
-            <div class="stat-title">Total Available Cash</div>
+            <div class="stat-title">Total Cash</div>
             <div class="stat-value text-secondary text-2xl lg:text-4xl" id="total-available-cash">
                 <span class="loading loading-spinner loading-md"></span>
             </div>
-            <div class="stat-desc">Combined cash across all accounts</div>
+            <div class="stat-desc">Available Cash - Collateral</div>
         </div>
 
         <div class="stat">
@@ -73,17 +73,30 @@
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"></path>
                 </svg>
             </div>
-            <div class="stat-title">Total M2M P&L</div>
+            <div class="stat-title">Account M2M P&L</div>
             <div class="stat-value text-2xl lg:text-4xl" id="total-m2m-pnl">
                 <span class="loading loading-spinner loading-md"></span>
             </div>
-            <div class="stat-desc">Realized + Unrealized P&L</div>
+            <div class="stat-desc">Broker reported P&L</div>
         </div>
 
         <div class="stat">
             <div class="stat-figure text-accent">
                 <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path>
+                </svg>
+            </div>
+            <div class="stat-title">Strategy P&L</div>
+            <div class="stat-value text-2xl lg:text-4xl" id="total-strategy-pnl">
+                <span class="loading loading-spinner loading-md"></span>
+            </div>
+            <div class="stat-desc">AlgoMirror tracked P&L</div>
+        </div>
+
+        <div class="stat">
+            <div class="stat-figure text-accent">
+                <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path>
                 </svg>
             </div>
             <div class="stat-title">Total Strategies</div>
@@ -121,6 +134,12 @@
                     <div class="flex justify-between">
                         <span class="text-sm">Used Margin:</span>
                         <span class="font-semibold" id="margin-{{ account.id }}">
+                            <span class="loading loading-spinner loading-xs"></span>
+                        </span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span class="text-sm">Cash:</span>
+                        <span class="font-semibold" id="cash-{{ account.id }}">
                             <span class="loading loading-spinner loading-xs"></span>
                         </span>
                     </div>
@@ -403,6 +422,7 @@ function confirmExecuteStrategy() {
             loadStrategyMetrics();
             loadAccountFunds();
             loadAccountPnL();
+            loadStrategyPnL();
             setTimeout(() => location.reload(), 1500);
         } else if (data.status === 'warning') {
             showNotification(data.message || 'Strategy execution skipped', 'warning');
@@ -427,6 +447,7 @@ function manualRefresh() {
     loadStrategyMetrics();
     loadAccountFunds();
     loadAccountPnL();
+    loadStrategyPnL();
 }
 
 // Load strategy positions and P&L data
@@ -525,7 +546,7 @@ async function confirmClosePositions() {
 // Load account funds data - fetch all accounts in PARALLEL for faster loading
 async function loadAccountFunds() {
     const accounts = {{ accounts_json|tojson }};
-    let totalAvailableCash = 0;
+    let totalCash = 0;  // Cash = Available Cash - Collateral
 
     // Add cache-busting timestamp to prevent stale data
     const timestamp = Date.now();
@@ -548,11 +569,13 @@ async function loadAccountFunds() {
             if (success && data.status === 'success' && data.data) {
                 const funds = data.data;
 
+                const available = parseFloat(funds.availablecash) || 0;
+                const collateral = parseFloat(funds.collateral) || 0;
+                const cash = available - collateral;  // Cash = Available Cash - Collateral
+
                 const availableEl = document.getElementById(`available-${account.id}`);
                 if (availableEl) {
-                    const available = parseFloat(funds.availablecash) || 0;
                     availableEl.textContent = `₹${available.toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
-                    totalAvailableCash += available;
                 }
 
                 const marginEl = document.getElementById(`margin-${account.id}`);
@@ -563,17 +586,25 @@ async function loadAccountFunds() {
 
                 const collateralEl = document.getElementById(`collateral-${account.id}`);
                 if (collateralEl) {
-                    const collateral = parseFloat(funds.collateral) || 0;
                     collateralEl.textContent = `₹${collateral.toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
                 }
+
+                const cashEl = document.getElementById(`cash-${account.id}`);
+                if (cashEl) {
+                    cashEl.textContent = `₹${cash.toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+                }
+
+                totalCash += cash;
             } else {
                 const availableEl = document.getElementById(`available-${account.id}`);
                 const marginEl = document.getElementById(`margin-${account.id}`);
                 const collateralEl = document.getElementById(`collateral-${account.id}`);
+                const cashEl = document.getElementById(`cash-${account.id}`);
 
                 if (availableEl) availableEl.textContent = '₹0.00';
                 if (marginEl) marginEl.textContent = '₹0.00';
                 if (collateralEl) collateralEl.textContent = '₹0.00';
+                if (cashEl) cashEl.textContent = '₹0.00';
             }
         } else {
             // Promise rejected
@@ -584,22 +615,24 @@ async function loadAccountFunds() {
                 const availableEl = document.getElementById(`available-${account.id}`);
                 const marginEl = document.getElementById(`margin-${account.id}`);
                 const collateralEl = document.getElementById(`collateral-${account.id}`);
+                const cashEl = document.getElementById(`cash-${account.id}`);
 
                 if (availableEl) availableEl.textContent = 'Error';
                 if (marginEl) marginEl.textContent = 'Error';
                 if (collateralEl) collateralEl.textContent = 'Error';
+                if (cashEl) cashEl.textContent = 'Error';
             }
         }
     }
 
-    // Update total available cash
+    // Update total cash (Available Cash - Collateral)
     const totalCashEl = document.getElementById('total-available-cash');
     if (totalCashEl) {
-        totalCashEl.textContent = `₹ ${totalAvailableCash.toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+        totalCashEl.textContent = `₹ ${totalCash.toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
     }
 }
 
-// Load account P&L data (realized + unrealized) - fetch all accounts in PARALLEL
+// Load account P&L data from broker's M2M (realized + unrealized) - fetch all accounts in PARALLEL
 async function loadAccountPnL() {
     const accounts = {{ accounts_json|tojson }};
     let totalM2MPnL = 0;
@@ -607,9 +640,9 @@ async function loadAccountPnL() {
     // Add cache-busting timestamp to prevent stale data
     const timestamp = Date.now();
 
-    // Fetch all accounts in parallel using Promise.allSettled
+    // Fetch all accounts' funds data in parallel (contains broker's M2M P&L)
     const fetchPromises = accounts.map(account =>
-        fetch(`/api/accounts/${account.id}/pnl?_t=${timestamp}`, { signal: AbortSignal.timeout(10000) })
+        fetch(`/api/accounts/${account.id}/funds?_t=${timestamp}`, { signal: AbortSignal.timeout(10000) })
             .then(response => response.json())
             .then(data => ({ account, data, success: true }))
             .catch(error => ({ account, error, success: false }))
@@ -623,20 +656,20 @@ async function loadAccountPnL() {
             const { account, data, success } = result.value;
 
             if (success && data.status === 'success' && data.data) {
-                const pnlData = data.data;
-                const totalPnl = parseFloat(pnlData.total_pnl) || 0;
+                const fundsData = data.data;
+                // Calculate M2M P&L from broker's data (same as accounts/manage page)
+                const m2mRealized = parseFloat(fundsData.m2mrealized) || 0;
+                const m2mUnrealized = parseFloat(fundsData.m2munrealized) || 0;
+                const accountPnl = m2mRealized + m2mUnrealized;
 
                 const pnlEl = document.getElementById(`pnl-account-${account.id}`);
                 if (pnlEl) {
-                    const sign = totalPnl >= 0 ? '+' : '';
-                    const colorClass = totalPnl >= 0 ? 'text-success' : 'text-error';
-                    pnlEl.textContent = `${sign}₹${totalPnl.toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+                    const sign = accountPnl >= 0 ? '+' : '';
+                    const colorClass = accountPnl >= 0 ? 'text-success' : 'text-error';
+                    pnlEl.textContent = `${sign}₹${accountPnl.toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
                     pnlEl.className = `font-bold ${colorClass}`;
-                    totalM2MPnL += totalPnl;
+                    totalM2MPnL += accountPnl;
                 }
-
-                // Active Strategies section now displays static strategy names from server
-                // No dynamic update needed here
             } else {
                 const pnlEl = document.getElementById(`pnl-account-${account.id}`);
                 if (pnlEl) {
@@ -659,13 +692,54 @@ async function loadAccountPnL() {
         }
     }
 
-    // Update total M2M P&L
+    // Update total M2M P&L (sum of all accounts' broker-reported M2M)
     const totalPnlEl = document.getElementById('total-m2m-pnl');
     if (totalPnlEl) {
         const sign = totalM2MPnL >= 0 ? '' : '';
         const colorClass = totalM2MPnL >= 0 ? 'text-success' : 'text-error';
         totalPnlEl.textContent = `₹ ${sign}${totalM2MPnL.toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
         totalPnlEl.className = `stat-value ${colorClass}`;
+    }
+}
+
+// Load Strategy P&L (AlgoMirror tracked positions) - separate from broker M2M P&L
+async function loadStrategyPnL() {
+    const accounts = {{ accounts_json|tojson }};
+    let totalStrategyPnL = 0;
+
+    // Add cache-busting timestamp to prevent stale data
+    const timestamp = Date.now();
+
+    // Fetch all accounts' strategy P&L in parallel
+    const fetchPromises = accounts.map(account =>
+        fetch(`/api/accounts/${account.id}/pnl?_t=${timestamp}`, { signal: AbortSignal.timeout(10000) })
+            .then(response => response.json())
+            .then(data => ({ account, data, success: true }))
+            .catch(error => ({ account, error, success: false }))
+    );
+
+    const results = await Promise.allSettled(fetchPromises);
+
+    // Process results
+    for (const result of results) {
+        if (result.status === 'fulfilled') {
+            const { account, data, success } = result.value;
+
+            if (success && data.status === 'success' && data.data) {
+                const pnlData = data.data;
+                const accountStrategyPnl = parseFloat(pnlData.total_pnl) || 0;
+                totalStrategyPnL += accountStrategyPnl;
+            }
+        }
+    }
+
+    // Update total Strategy P&L
+    const totalStrategyPnlEl = document.getElementById('total-strategy-pnl');
+    if (totalStrategyPnlEl) {
+        const sign = totalStrategyPnL >= 0 ? '' : '';
+        const colorClass = totalStrategyPnL >= 0 ? 'text-success' : 'text-error';
+        totalStrategyPnlEl.textContent = `₹ ${sign}${totalStrategyPnL.toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+        totalStrategyPnlEl.className = `stat-value ${colorClass}`;
     }
 }
 
@@ -698,6 +772,7 @@ async function checkTradingHours() {
                     loadStrategyMetrics();
                     loadAccountFunds();
                     loadAccountPnL();
+                    loadStrategyPnL();
                 }
             }
 
@@ -719,10 +794,11 @@ function startPolling() {
     loadStrategyMetrics();
     loadAccountFunds();
     loadAccountPnL();
+    loadStrategyPnL();
 
     pollingIntervals.metrics = setInterval(loadStrategyMetrics, 10000);  // 10 seconds
     pollingIntervals.funds = setInterval(loadAccountFunds, 30000);       // 30 seconds
-    pollingIntervals.pnl = setInterval(loadAccountPnL, 5000);            // 5 seconds
+    pollingIntervals.pnl = setInterval(() => { loadAccountPnL(); loadStrategyPnL(); }, 5000);  // 5 seconds
 }
 
 // Stop polling intervals

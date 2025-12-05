@@ -86,6 +86,10 @@
                         <span class="font-mono">₹{{ "%.2f"|format(account.last_funds_data.get('collateral', 0)|float) }}</span>
                     </div>
                     <div class="flex justify-between">
+                        <span class="opacity-70">Cash:</span>
+                        <span class="font-mono font-semibold">₹{{ "%.2f"|format((account.last_funds_data.get('availablecash', 0)|float - account.last_funds_data.get('collateral', 0)|float)) }}</span>
+                    </div>
+                    <div class="flex justify-between">
                         <span class="opacity-70">M2M P&L:</span>
                         <span class="font-mono {{ 'text-success' if (account.last_funds_data.get('m2mrealized', 0)|float + account.last_funds_data.get('m2munrealized', 0)|float) >= 0 else 'text-error' }}">
                             ₹{{ "%.2f"|format((account.last_funds_data.get('m2mrealized', 0)|float + account.last_funds_data.get('m2munrealized', 0)|float)) }}
