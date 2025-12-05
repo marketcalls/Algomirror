@@ -111,7 +111,7 @@ class OrderStatusPoller:
                         orders_to_check = dict(self.pending_orders)
 
                     if not orders_to_check:
-                        sleep(2)  # Wait 2 seconds if no orders
+                        sleep(3)  # Wait 3 seconds if no orders
                         continue
 
                     logger.debug(f"[POLLING] Checking {len(orders_to_check)} pending orders")
@@ -120,8 +120,8 @@ class OrderStatusPoller:
                     for execution_id, order_info in orders_to_check.items():
                         self._check_order_status(execution_id, order_info, app)
 
-                    # Wait 2 seconds before next polling cycle
-                    sleep(2)
+                    # Wait 3 seconds before next polling cycle
+                    sleep(3)
 
                 except Exception as e:
                     logger.error(f"[ERROR] Error in polling loop: {e}", exc_info=True)
@@ -289,12 +289,16 @@ class OrderStatusPoller:
 
                         logger.debug(f"[PENDING] Order {order_id} still OPEN (check #{order_info['check_count']})")
 
-                # Auto-remove after 30 checks (1 minute) or 5 minutes elapsed
+                # Extended timeout: Remove after 8 hours (28800 seconds) for LIMIT orders
+                # LIMIT orders can take much longer to fill than MARKET orders
+                # Only remove if order has been open for too long (likely stale/forgotten)
                 order_age = (datetime.utcnow() - order_info['added_time']).total_seconds()
-                if order_info['check_count'] >= 30 or order_age > 300:
+                max_age_seconds = 28800  # 8 hours - allows full trading day for LIMIT orders
+
+                if order_age > max_age_seconds:
                     with self._lock:
                         self.pending_orders.pop(execution_id, None)
-                    logger.warning(f"[TIMEOUT] Order {order_id} removed from polling (timeout after {int(order_age)}s)")
+                    logger.warning(f"[TIMEOUT] Order {order_id} removed from polling (timeout after {int(order_age)}s / {max_age_seconds}s max)")
             else:
                 logger.warning(f"[WARNING] Failed to get status for order {order_id}: {response.get('message')}")
 
@@ -309,6 +313,246 @@ class OrderStatusPoller:
                 'pending_orders_count': len(self.pending_orders),
                 'pending_order_ids': [info['order_id'] for info in self.pending_orders.values()]
             }
+
+    def recover_pending_orders(self, app=None):
+        """
+        Recover pending orders from database on startup.
+        Re-adds any orders with status='pending' and broker_order_status='open' to polling queue.
+        This handles app restarts where in-memory poller state was lost.
+        """
+        try:
+            if app:
+                ctx = app.app_context()
+                ctx.push()
+
+            from app.models import StrategyExecution, TradingAccount
+
+            # Find all pending orders that need tracking
+            pending_executions = StrategyExecution.query.filter(
+                StrategyExecution.status == 'pending',
+                StrategyExecution.order_id.isnot(None)
+            ).all()
+
+            recovered_count = 0
+            for execution in pending_executions:
+                # Skip if already in polling queue
+                if execution.id in self.pending_orders:
+                    continue
+
+                # Get account details
+                account = TradingAccount.query.get(execution.account_id)
+                if not account or not account.is_active:
+                    logger.warning(f"[RECOVERY] Skipping execution {execution.id}: account inactive or not found")
+                    continue
+
+                # Get strategy name
+                strategy_name = execution.strategy.name if execution.strategy else 'Unknown'
+
+                # Add to polling queue
+                with self._lock:
+                    self.pending_orders[execution.id] = {
+                        'account_id': account.id,
+                        'account_name': account.account_name,
+                        'api_key': account.get_api_key(),
+                        'host_url': account.host_url,
+                        'order_id': execution.order_id,
+                        'strategy_name': strategy_name,
+                        'added_time': datetime.utcnow(),  # Reset timer for recovered orders
+                        'check_count': 0
+                    }
+                    recovered_count += 1
+
+            if recovered_count > 0:
+                logger.info(f"[RECOVERY] Recovered {recovered_count} pending orders to polling queue")
+            else:
+                logger.info(f"[RECOVERY] No pending orders to recover")
+
+            if app:
+                ctx.pop()
+
+            return recovered_count
+
+        except Exception as e:
+            logger.error(f"[RECOVERY] Error recovering pending orders: {e}", exc_info=True)
+            return 0
+
+    def sync_order_status(self, execution_id: int, app=None) -> dict:
+        """
+        Manually sync a single order's status from broker.
+        Used when refresh is triggered to ensure latest state.
+        Returns updated status dict.
+        """
+        try:
+            if app:
+                ctx = app.app_context()
+                ctx.push()
+
+            from app.models import StrategyExecution, TradingAccount
+
+            execution = StrategyExecution.query.get(execution_id)
+            if not execution:
+                return {'status': 'error', 'message': 'Execution not found'}
+
+            # Skip if already in terminal state
+            if execution.status in ['exited', 'failed', 'error']:
+                return {'status': 'skipped', 'message': f'Order already in terminal state: {execution.status}'}
+
+            # Get account
+            account = TradingAccount.query.get(execution.account_id)
+            if not account:
+                return {'status': 'error', 'message': 'Account not found'}
+
+            # Fetch status from broker
+            client = ExtendedOpenAlgoAPI(
+                api_key=account.get_api_key(),
+                host=account.host_url
+            )
+
+            strategy_name = execution.strategy.name if execution.strategy else 'Unknown'
+            response = client.orderstatus(order_id=execution.order_id, strategy=strategy_name)
+
+            if response.get('status') == 'success':
+                data = response.get('data', {})
+                broker_status = data.get('order_status')
+                avg_price = data.get('average_price', 0)
+
+                old_status = execution.status
+                old_broker_status = execution.broker_order_status
+
+                # Update based on broker status
+                if broker_status == 'complete':
+                    if execution.status == 'pending':
+                        execution.status = 'entered'
+                        execution.broker_order_status = 'complete'
+                        if avg_price and avg_price > 0:
+                            execution.entry_price = avg_price
+                        if not execution.entry_time:
+                            execution.entry_time = datetime.utcnow()
+                        if execution.leg and not execution.leg.is_executed:
+                            execution.leg.is_executed = True
+                        db.session.commit()
+
+                        # Remove from polling queue if present
+                        with self._lock:
+                            self.pending_orders.pop(execution_id, None)
+
+                        logger.info(f"[SYNC] Order {execution.order_id} synced: {old_status}->{execution.status}")
+
+                elif broker_status in ['rejected', 'cancelled']:
+                    execution.status = 'failed'
+                    execution.broker_order_status = broker_status
+                    db.session.commit()
+
+                    # Remove from polling queue
+                    with self._lock:
+                        self.pending_orders.pop(execution_id, None)
+
+                    logger.info(f"[SYNC] Order {execution.order_id} synced: {old_status}->{execution.status} ({broker_status})")
+
+                else:  # Still open
+                    execution.broker_order_status = 'open'
+                    db.session.commit()
+
+                    # Ensure it's in the polling queue
+                    if execution_id not in self.pending_orders:
+                        self.add_order(
+                            execution_id=execution.id,
+                            account=account,
+                            order_id=execution.order_id,
+                            strategy_name=strategy_name
+                        )
+
+                if app:
+                    ctx.pop()
+
+                return {
+                    'status': 'success',
+                    'order_status': execution.status,
+                    'broker_status': execution.broker_order_status,
+                    'entry_price': execution.entry_price,
+                    'updated': old_status != execution.status or old_broker_status != execution.broker_order_status
+                }
+            else:
+                if app:
+                    ctx.pop()
+                return {'status': 'error', 'message': response.get('message', 'Failed to fetch status')}
+
+        except Exception as e:
+            logger.error(f"[SYNC] Error syncing order {execution_id}: {e}", exc_info=True)
+            if app:
+                try:
+                    ctx.pop()
+                except:
+                    pass
+            return {'status': 'error', 'message': str(e)}
+
+    def sync_all_pending_orders(self, user_id: int = None, app=None) -> dict:
+        """
+        Sync all pending orders from broker.
+        Returns summary of updated orders.
+        """
+        try:
+            if app:
+                ctx = app.app_context()
+                ctx.push()
+
+            from app.models import StrategyExecution, Strategy
+
+            # Build query for pending orders
+            query = StrategyExecution.query.filter(
+                StrategyExecution.status == 'pending',
+                StrategyExecution.order_id.isnot(None)
+            )
+
+            # Filter by user if specified
+            if user_id:
+                query = query.join(Strategy).filter(Strategy.user_id == user_id)
+
+            pending_executions = query.all()
+
+            results = {
+                'total': len(pending_executions),
+                'updated': 0,
+                'filled': 0,
+                'rejected': 0,
+                'still_pending': 0,
+                'errors': 0
+            }
+
+            for execution in pending_executions:
+                result = self.sync_order_status(execution.id)
+
+                if result.get('status') == 'success':
+                    if result.get('updated'):
+                        results['updated'] += 1
+                    if result.get('order_status') == 'entered':
+                        results['filled'] += 1
+                    elif result.get('order_status') == 'failed':
+                        results['rejected'] += 1
+                    elif result.get('order_status') == 'pending':
+                        results['still_pending'] += 1
+                elif result.get('status') == 'skipped':
+                    pass  # Already in terminal state
+                else:
+                    results['errors'] += 1
+
+            if app:
+                ctx.pop()
+
+            logger.info(f"[SYNC ALL] Synced {results['total']} orders: "
+                       f"{results['filled']} filled, {results['rejected']} rejected, "
+                       f"{results['still_pending']} pending, {results['errors']} errors")
+
+            return results
+
+        except Exception as e:
+            logger.error(f"[SYNC ALL] Error syncing pending orders: {e}", exc_info=True)
+            if app:
+                try:
+                    ctx.pop()
+                except:
+                    pass
+            return {'status': 'error', 'message': str(e)}
 
 
 # Global singleton instance

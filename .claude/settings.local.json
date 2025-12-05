@@ -34,7 +34,8 @@
       "Bash(.venvScriptspython.exe -m py_compile apputilssupertrend_exit_service.py)",
       "Bash(D:openalgo-multialgomirror.venvScriptspython.exe -m py_compile:*)",
       "Bash(.venv\\Scripts\\python.exe -c:*)",
-      "Bash(curl:*)"
+      "Bash(curl:*)",
+      "Bash(.venv/Scripts/python.exe -m py_compile:*)"
     ],
     "deny": [],
     "ask": []

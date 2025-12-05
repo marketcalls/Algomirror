@@ -1048,6 +1048,20 @@ def strategy_orderbook(strategy_id):
         user_id=current_user.id
     ).first_or_404()
 
+    # Sync pending orders from broker to ensure latest state
+    # This handles LIMIT orders that may have filled since last check
+    from app.utils.order_status_poller import order_status_poller
+    pending_executions = StrategyExecution.query.filter_by(
+        strategy_id=strategy_id,
+        status='pending'
+    ).all()
+    for execution in pending_executions:
+        if execution.order_id:
+            order_status_poller.sync_order_status(execution.id)
+
+    # Refresh session after sync
+    db.session.expire_all()
+
     # Get all executions for this strategy (INCLUDE rejected/failed for visibility)
     executions = StrategyExecution.query.filter_by(
         strategy_id=strategy_id
@@ -1236,6 +1250,20 @@ def strategy_positions(strategy_id):
         id=strategy_id,
         user_id=current_user.id
     ).first_or_404()
+
+    # Sync pending orders from broker to ensure latest state
+    # This handles LIMIT orders that may have filled since last check
+    from app.utils.order_status_poller import order_status_poller
+    pending_executions = StrategyExecution.query.filter_by(
+        strategy_id=strategy_id,
+        status='pending'
+    ).all()
+    for execution in pending_executions:
+        if execution.order_id:
+            order_status_poller.sync_order_status(execution.id)
+
+    # Refresh session after sync
+    db.session.expire_all()
 
     # Get both open AND closed positions (status='entered' or 'exited')
     # Closed positions will show with quantity=0

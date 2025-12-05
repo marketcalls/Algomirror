@@ -237,6 +237,12 @@ def create_app(config_name=None):
     order_status_poller.start()
     app.logger.info('Order status poller started', extra={'event': 'poller_init'})
 
+    # Recover any pending orders from database (handles app restarts)
+    with app.app_context():
+        recovered = order_status_poller.recover_pending_orders()
+        if recovered > 0:
+            app.logger.info(f'Recovered {recovered} pending orders to polling queue', extra={'event': 'poller_recovery'})
+
     # Initialize Supertrend exit monitoring service
     from app.utils.supertrend_exit_service import supertrend_exit_service
     supertrend_exit_service.start_service()
