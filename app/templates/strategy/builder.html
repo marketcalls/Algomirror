@@ -2788,13 +2788,23 @@ async function fetchCombinedPremium() {
     const supertrendValueEl = document.getElementById('riskSupertrendValue');
     const signalEl = document.getElementById('riskSupertrendSignal');
 
-    if (!premiumEl) return;
+    if (!premiumEl) {
+        console.log('[Supertrend] premiumEl not found, skipping fetch');
+        return;
+    }
 
     try {
         // Fetch chart data with strategy's supertrend parameters
-        const period = {{ strategy.supertrend_period if strategy and strategy.supertrend_period else 10 }};
-        const multiplier = {{ strategy.supertrend_multiplier if strategy and strategy.supertrend_multiplier else 3.0 }};
-        const interval = '{{ strategy.supertrend_timeframe if strategy and strategy.supertrend_timeframe else "10m" }}';
+        // Read from form inputs first (for updated values), fallback to Jinja values
+        const periodInput = document.getElementById('supertrendPeriod');
+        const multiplierInput = document.getElementById('supertrendMultiplier');
+        const timeframeInput = document.getElementById('supertrendTimeframe');
+
+        const period = periodInput ? parseInt(periodInput.value) || 10 : {{ strategy.supertrend_period if strategy and strategy.supertrend_period else 10 }};
+        const multiplier = multiplierInput ? parseFloat(multiplierInput.value) || 3.0 : {{ strategy.supertrend_multiplier if strategy and strategy.supertrend_multiplier else 3.0 }};
+        const interval = timeframeInput ? timeframeInput.value || '10m' : '{{ strategy.supertrend_timeframe if strategy and strategy.supertrend_timeframe else "10m" }}';
+
+        console.log('[Supertrend] Fetching with params:', { period, multiplier, interval });
 
         const response = await fetch(
             `/tradingview/api/chart-data/${strategyIdForRisk}?period=${period}&multiplier=${multiplier}&interval=${interval}&days=1&_=${Date.now()}`
