@@ -111,7 +111,7 @@ class OrderStatusPoller:
                         orders_to_check = dict(self.pending_orders)
 
                     if not orders_to_check:
-                        sleep(3)  # Wait 3 seconds if no orders
+                        sleep(2)  # Wait 2 seconds if no orders
                         continue
 
                     logger.debug(f"[POLLING] Checking {len(orders_to_check)} pending orders")
@@ -120,12 +120,12 @@ class OrderStatusPoller:
                     for execution_id, order_info in orders_to_check.items():
                         self._check_order_status(execution_id, order_info, app)
 
-                    # Wait 3 seconds before next polling cycle
-                    sleep(3)
+                    # Wait 1 second before next polling cycle (faster updates)
+                    sleep(1)
 
                 except Exception as e:
                     logger.error(f"[ERROR] Error in polling loop: {e}", exc_info=True)
-                    sleep(5)  # Wait longer on error
+                    sleep(3)  # Wait on error
 
     def _check_order_status(self, execution_id: int, order_info: Dict, app):
         """Check status of a single order"""
@@ -176,11 +176,11 @@ class OrderStatusPoller:
                         is_entry_order = execution.order_id == order_id and execution.exit_order_id != order_id
                         is_exit_order = execution.exit_order_id == order_id
 
-                        # If average_price is missing/zero, wait 3 seconds and re-fetch
+                        # If average_price is missing/zero, wait 1 second and re-fetch
                         # Some brokers return complete status before average_price is populated
                         if not avg_price or avg_price == 0:
-                            logger.warning(f"[PRICE MISSING] Order {order_id} complete but average_price is {avg_price}, waiting 3s to re-fetch...")
-                            sleep(3)
+                            logger.warning(f"[PRICE MISSING] Order {order_id} complete but average_price is {avg_price}, waiting 1s to re-fetch...")
+                            sleep(1)
 
                             # Re-fetch order status after delay (respecting rate limit)
                             retry_response = client.orderstatus(order_id=order_id, strategy=strategy_name)
