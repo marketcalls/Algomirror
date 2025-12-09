@@ -167,6 +167,10 @@ class RiskManager:
         if not strategy.auto_exit_on_max_loss:
             return None
 
+        # Check if already triggered (prevent re-triggering)
+        if strategy.max_loss_triggered_at:
+            return None
+
         # Calculate current P&L
         pnl_data = self.calculate_strategy_pnl(strategy)
         current_pnl = pnl_data['total_pnl']
@@ -180,6 +184,12 @@ class RiskManager:
                 f"P&L={current_pnl} <= Threshold={max_loss_threshold}"
             )
 
+            # Store exit reason and timestamp
+            exit_reason = f"Max Loss: P&L {current_pnl:.2f} breached threshold {max_loss_threshold:.2f}"
+            strategy.max_loss_triggered_at = datetime.utcnow()
+            strategy.max_loss_exit_reason = exit_reason
+            db.session.commit()
+
             # Create risk event
             risk_event = RiskEvent(
                 strategy_id=strategy.id,
@@ -187,7 +197,7 @@ class RiskManager:
                 threshold_value=max_loss_threshold,
                 current_value=current_pnl,
                 action_taken='close_all' if strategy.auto_exit_on_max_loss else 'alert_only',
-                notes=f"Max Loss breached: P&L {current_pnl} exceeded threshold {max_loss_threshold}"
+                notes=exit_reason
             )
 
             return risk_event
@@ -211,6 +221,10 @@ class RiskManager:
         if not strategy.auto_exit_on_max_profit:
             return None
 
+        # Check if already triggered (prevent re-triggering)
+        if strategy.max_profit_triggered_at:
+            return None
+
         # Calculate current P&L
         pnl_data = self.calculate_strategy_pnl(strategy)
         current_pnl = pnl_data['total_pnl']
@@ -224,6 +238,12 @@ class RiskManager:
                 f"P&L={current_pnl} >= Threshold={max_profit_threshold}"
             )
 
+            # Store exit reason and timestamp
+            exit_reason = f"Max Profit: P&L {current_pnl:.2f} reached target {max_profit_threshold:.2f}"
+            strategy.max_profit_triggered_at = datetime.utcnow()
+            strategy.max_profit_exit_reason = exit_reason
+            db.session.commit()
+
             # Create risk event
             risk_event = RiskEvent(
                 strategy_id=strategy.id,
@@ -231,7 +251,7 @@ class RiskManager:
                 threshold_value=max_profit_threshold,
                 current_value=current_pnl,
                 action_taken='close_all' if strategy.auto_exit_on_max_profit else 'alert_only',
-                notes=f"Max Profit reached: P&L {current_pnl} exceeded threshold {max_profit_threshold}"
+                notes=exit_reason
             )
 
             return risk_event
@@ -317,8 +337,10 @@ class RiskManager:
                         f"P&L={current_pnl}, Trigger={trigger_pnl}, Peak={current_peak}"
                     )
 
-                    # Mark as triggered to prevent re-triggering
+                    # Store exit reason and timestamp
+                    exit_reason = f"TSL: P&L {current_pnl:.2f} dropped below {trigger_pnl:.2f} (Peak: {current_peak:.2f})"
                     strategy.trailing_sl_triggered_at = datetime.utcnow()
+                    strategy.trailing_sl_exit_reason = exit_reason
                     db.session.commit()
 
                     # Create risk event
@@ -328,7 +350,7 @@ class RiskManager:
                         threshold_value=trigger_pnl,
                         current_value=current_pnl,
                         action_taken='close_all',
-                        notes=f"Trailing SL triggered: P&L {current_pnl:.2f} dropped below trigger {trigger_pnl:.2f} (Peak: {current_peak:.2f})"
+                        notes=exit_reason
                     )
 
                     return risk_event

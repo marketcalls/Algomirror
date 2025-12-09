@@ -578,7 +578,7 @@
                     <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
                         <!-- Max Loss -->
                         {% if strategy.max_loss %}
-                        <div class="bg-base-100 rounded-lg p-3">
+                        <div class="bg-base-100 rounded-lg p-3" id="riskMaxLossCard">
                             <div class="flex justify-between text-sm mb-2">
                                 <span class="flex items-center gap-1">
                                     <svg class="w-4 h-4 text-error" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -588,12 +588,30 @@
                                 </span>
                                 <span class="font-mono font-bold">₹{{ strategy.max_loss }}</span>
                             </div>
+                            <div class="text-sm mb-2">
+                                <span class="text-base-content/60">Status:</span>
+                                <span class="badge {{ 'badge-error' if strategy.max_loss_triggered_at else 'badge-success' }} badge-sm ml-1" id="riskMaxLossStatus">
+                                    {{ 'Triggered' if strategy.max_loss_triggered_at else 'Active' }}
+                                </span>
+                            </div>
+                            {% if not strategy.max_loss_triggered_at %}
                             <progress class="progress progress-error w-full h-3" id="riskMaxLossProgress" value="0" max="100"></progress>
                             <div class="flex justify-between text-xs mt-1">
                                 <span id="riskMaxLossAmount">₹0.00</span>
                                 <span id="riskMaxLossPct">0%</span>
                             </div>
-                            {% if strategy.auto_exit_on_max_loss %}
+                            {% endif %}
+                            {% if strategy.max_loss_triggered_at and strategy.max_loss_exit_reason %}
+                            <div class="text-sm mt-2" id="riskMaxLossReason">
+                                <span class="text-base-content/60">Reason:</span>
+                                <span class="text-error text-xs ml-1">{{ strategy.max_loss_exit_reason }}</span>
+                            </div>
+                            <div class="text-sm mt-1">
+                                <span class="text-base-content/60">Time:</span>
+                                <span class="text-xs ml-1">{{ strategy.max_loss_triggered_at.strftime('%d-%b %H:%M:%S') }} UTC</span>
+                            </div>
+                            {% endif %}
+                            {% if strategy.auto_exit_on_max_loss and not strategy.max_loss_triggered_at %}
                             <div class="badge badge-error badge-xs mt-2">Auto Exit</div>
                             {% endif %}
                         </div>
@@ -601,7 +619,7 @@
 
                         <!-- Max Profit -->
                         {% if strategy.max_profit %}
-                        <div class="bg-base-100 rounded-lg p-3">
+                        <div class="bg-base-100 rounded-lg p-3" id="riskMaxProfitCard">
                             <div class="flex justify-between text-sm mb-2">
                                 <span class="flex items-center gap-1">
                                     <svg class="w-4 h-4 text-success" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -611,12 +629,30 @@
                                 </span>
                                 <span class="font-mono font-bold">₹{{ strategy.max_profit }}</span>
                             </div>
+                            <div class="text-sm mb-2">
+                                <span class="text-base-content/60">Status:</span>
+                                <span class="badge {{ 'badge-success' if strategy.max_profit_triggered_at else 'badge-info' }} badge-sm ml-1" id="riskMaxProfitStatus">
+                                    {{ 'Triggered' if strategy.max_profit_triggered_at else 'Active' }}
+                                </span>
+                            </div>
+                            {% if not strategy.max_profit_triggered_at %}
                             <progress class="progress progress-success w-full h-3" id="riskMaxProfitProgress" value="0" max="100"></progress>
                             <div class="flex justify-between text-xs mt-1">
                                 <span id="riskMaxProfitAmount">₹0.00</span>
                                 <span id="riskMaxProfitPct">0%</span>
                             </div>
-                            {% if strategy.auto_exit_on_max_profit %}
+                            {% endif %}
+                            {% if strategy.max_profit_triggered_at and strategy.max_profit_exit_reason %}
+                            <div class="text-sm mt-2" id="riskMaxProfitReason">
+                                <span class="text-base-content/60">Reason:</span>
+                                <span class="text-success text-xs ml-1">{{ strategy.max_profit_exit_reason }}</span>
+                            </div>
+                            <div class="text-sm mt-1">
+                                <span class="text-base-content/60">Time:</span>
+                                <span class="text-xs ml-1">{{ strategy.max_profit_triggered_at.strftime('%d-%b %H:%M:%S') }} UTC</span>
+                            </div>
+                            {% endif %}
+                            {% if strategy.auto_exit_on_max_profit and not strategy.max_profit_triggered_at %}
                             <div class="badge badge-success badge-xs mt-2">Auto Exit</div>
                             {% endif %}
                         </div>
@@ -624,7 +660,7 @@
 
                         <!-- Trailing SL -->
                         {% if strategy.trailing_sl %}
-                        <div class="bg-base-100 rounded-lg p-3">
+                        <div class="bg-base-100 rounded-lg p-3" id="riskTrailingSLCard">
                             <div class="flex justify-between text-sm mb-2">
                                 <span class="flex items-center gap-1">
                                     <svg class="w-4 h-4 text-warning" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -634,14 +670,32 @@
                                 </span>
                                 <span class="font-mono font-bold">{{ strategy.trailing_sl }}{{ '%' if strategy.trailing_sl_type == 'percentage' else ' pts' if strategy.trailing_sl_type == 'points' else '' }}</span>
                             </div>
-                            <div class="text-sm">
+                            <div class="text-sm mb-2">
                                 <span class="text-base-content/60">Status:</span>
-                                <span class="badge badge-warning badge-sm ml-1" id="riskTrailingSLStatus">Inactive</span>
+                                <span class="badge {{ 'badge-error' if strategy.trailing_sl_triggered_at else 'badge-warning' if strategy.trailing_sl_active else 'badge-ghost' }} badge-sm ml-1" id="riskTrailingSLStatus">
+                                    {{ 'Triggered' if strategy.trailing_sl_triggered_at else 'Active' if strategy.trailing_sl_active else 'Waiting' }}
+                                </span>
                             </div>
+                            {% if not strategy.trailing_sl_triggered_at %}
                             <div class="text-xs mt-2">
-                                <span class="text-base-content/60">Triggered at:</span>
-                                <span id="riskTrailingSLTrigger">--</span>
+                                <span class="text-base-content/60">Peak P&L:</span>
+                                <span id="riskTrailingSLPeak">₹{{ strategy.trailing_sl_peak_pnl|default(0, true)|round(2) }}</span>
                             </div>
+                            <div class="text-xs mt-1">
+                                <span class="text-base-content/60">Trigger at:</span>
+                                <span id="riskTrailingSLTrigger">₹{{ strategy.trailing_sl_trigger_pnl|default('--', true) }}</span>
+                            </div>
+                            {% endif %}
+                            {% if strategy.trailing_sl_triggered_at and strategy.trailing_sl_exit_reason %}
+                            <div class="text-sm mt-2" id="riskTrailingSLReason">
+                                <span class="text-base-content/60">Reason:</span>
+                                <span class="text-error text-xs ml-1">{{ strategy.trailing_sl_exit_reason }}</span>
+                            </div>
+                            <div class="text-sm mt-1">
+                                <span class="text-base-content/60">Time:</span>
+                                <span class="text-xs ml-1">{{ strategy.trailing_sl_triggered_at.strftime('%d-%b %H:%M:%S') }} UTC</span>
+                            </div>
+                            {% endif %}
                         </div>
                         {% endif %}
 
@@ -2473,6 +2527,108 @@ function updateRiskStatusDisplay(data) {
                         <span class="text-base-content/60">Time:</span>
                         <span class="text-xs ml-1">${exitTime.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}</span>
                     `;
+                    reasonDiv.insertAdjacentElement('afterend', timeDiv);
+                }
+            }
+        }
+    }
+
+    // Update Max Loss exit status and reason
+    const maxLossStatusEl = document.getElementById('riskMaxLossStatus');
+    if (maxLossStatusEl && strategyData.max_loss) {
+        if (strategyData.max_loss_triggered_at) {
+            maxLossStatusEl.textContent = 'Triggered';
+            maxLossStatusEl.className = 'badge badge-error badge-sm ml-1';
+            // Hide progress bar when triggered
+            const progressEl = document.getElementById('riskMaxLossProgress');
+            if (progressEl) progressEl.parentElement?.remove();
+        }
+    }
+    // Create Max Loss exit reason display
+    const riskMaxLossCard = document.getElementById('riskMaxLossCard');
+    if (riskMaxLossCard && strategyData.max_loss_triggered_at && strategyData.max_loss_exit_reason) {
+        if (!document.getElementById('riskMaxLossReason')) {
+            const statusDiv = riskMaxLossCard.querySelector('#riskMaxLossStatus')?.parentElement;
+            if (statusDiv) {
+                const reasonDiv = document.createElement('div');
+                reasonDiv.className = 'text-sm mt-2';
+                reasonDiv.id = 'riskMaxLossReason';
+                reasonDiv.innerHTML = `<span class="text-base-content/60">Reason:</span><span class="text-error text-xs ml-1">${strategyData.max_loss_exit_reason}</span>`;
+                statusDiv.insertAdjacentElement('afterend', reasonDiv);
+                if (strategyData.max_loss_triggered_at) {
+                    const timeDiv = document.createElement('div');
+                    timeDiv.className = 'text-sm mt-1';
+                    const exitTime = new Date(strategyData.max_loss_triggered_at);
+                    timeDiv.innerHTML = `<span class="text-base-content/60">Time:</span><span class="text-xs ml-1">${exitTime.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}</span>`;
+                    reasonDiv.insertAdjacentElement('afterend', timeDiv);
+                }
+            }
+        }
+    }
+
+    // Update Max Profit exit status and reason
+    const maxProfitStatusEl = document.getElementById('riskMaxProfitStatus');
+    if (maxProfitStatusEl && strategyData.max_profit) {
+        if (strategyData.max_profit_triggered_at) {
+            maxProfitStatusEl.textContent = 'Triggered';
+            maxProfitStatusEl.className = 'badge badge-success badge-sm ml-1';
+            // Hide progress bar when triggered
+            const progressEl = document.getElementById('riskMaxProfitProgress');
+            if (progressEl) progressEl.parentElement?.remove();
+        }
+    }
+    // Create Max Profit exit reason display
+    const riskMaxProfitCard = document.getElementById('riskMaxProfitCard');
+    if (riskMaxProfitCard && strategyData.max_profit_triggered_at && strategyData.max_profit_exit_reason) {
+        if (!document.getElementById('riskMaxProfitReason')) {
+            const statusDiv = riskMaxProfitCard.querySelector('#riskMaxProfitStatus')?.parentElement;
+            if (statusDiv) {
+                const reasonDiv = document.createElement('div');
+                reasonDiv.className = 'text-sm mt-2';
+                reasonDiv.id = 'riskMaxProfitReason';
+                reasonDiv.innerHTML = `<span class="text-base-content/60">Reason:</span><span class="text-success text-xs ml-1">${strategyData.max_profit_exit_reason}</span>`;
+                statusDiv.insertAdjacentElement('afterend', reasonDiv);
+                if (strategyData.max_profit_triggered_at) {
+                    const timeDiv = document.createElement('div');
+                    timeDiv.className = 'text-sm mt-1';
+                    const exitTime = new Date(strategyData.max_profit_triggered_at);
+                    timeDiv.innerHTML = `<span class="text-base-content/60">Time:</span><span class="text-xs ml-1">${exitTime.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}</span>`;
+                    reasonDiv.insertAdjacentElement('afterend', timeDiv);
+                }
+            }
+        }
+    }
+
+    // Update Trailing SL exit status and reason
+    const tslStatusEl = document.getElementById('riskTrailingSLStatus');
+    if (tslStatusEl && strategyData.trailing_sl) {
+        if (strategyData.trailing_sl_triggered_at) {
+            tslStatusEl.textContent = 'Triggered';
+            tslStatusEl.className = 'badge badge-error badge-sm ml-1';
+        } else if (strategyData.total_pnl > 0) {
+            tslStatusEl.textContent = 'Active';
+            tslStatusEl.className = 'badge badge-warning badge-sm ml-1';
+        } else {
+            tslStatusEl.textContent = 'Waiting';
+            tslStatusEl.className = 'badge badge-ghost badge-sm ml-1';
+        }
+    }
+    // Create Trailing SL exit reason display
+    const riskTrailingSLCard = document.getElementById('riskTrailingSLCard');
+    if (riskTrailingSLCard && strategyData.trailing_sl_triggered_at && strategyData.trailing_sl_exit_reason) {
+        if (!document.getElementById('riskTrailingSLReason')) {
+            const statusDiv = riskTrailingSLCard.querySelector('#riskTrailingSLStatus')?.parentElement;
+            if (statusDiv) {
+                const reasonDiv = document.createElement('div');
+                reasonDiv.className = 'text-sm mt-2';
+                reasonDiv.id = 'riskTrailingSLReason';
+                reasonDiv.innerHTML = `<span class="text-base-content/60">Reason:</span><span class="text-error text-xs ml-1">${strategyData.trailing_sl_exit_reason}</span>`;
+                statusDiv.insertAdjacentElement('afterend', reasonDiv);
+                if (strategyData.trailing_sl_triggered_at) {
+                    const timeDiv = document.createElement('div');
+                    timeDiv.className = 'text-sm mt-1';
+                    const exitTime = new Date(strategyData.trailing_sl_triggered_at);
+                    timeDiv.innerHTML = `<span class="text-base-content/60">Time:</span><span class="text-xs ml-1">${exitTime.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}</span>`;
                     reasonDiv.insertAdjacentElement('afterend', timeDiv);
                 }
             }

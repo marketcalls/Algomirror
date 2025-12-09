@@ -1296,9 +1296,15 @@ def get_risk_status():
                 status='entered'
             ).all()
 
-            # Include strategy if it has open positions OR if Supertrend exit was triggered
+            # Include strategy if it has open positions OR if any exit was triggered
             # This ensures we can display the exit reason even after positions are closed
-            if not open_executions and not strategy.supertrend_exit_triggered:
+            any_exit_triggered = (
+                strategy.supertrend_exit_triggered or
+                strategy.trailing_sl_triggered_at or
+                strategy.max_loss_triggered_at or
+                strategy.max_profit_triggered_at
+            )
+            if not open_executions and not any_exit_triggered:
                 continue
 
             # Calculate totals - will be recalculated with real-time LTP
@@ -1454,10 +1460,20 @@ def get_risk_status():
                 'max_loss_pct': round(max_loss_pct, 1),
                 'max_profit_pct': round(max_profit_pct, 1),
                 'executions': executions_data,
+                # Supertrend exit tracking
                 'supertrend_exit_enabled': strategy.supertrend_exit_enabled,
                 'supertrend_exit_triggered': strategy.supertrend_exit_triggered,
                 'supertrend_exit_reason': strategy.supertrend_exit_reason,
-                'supertrend_exit_triggered_at': strategy.supertrend_exit_triggered_at.isoformat() if strategy.supertrend_exit_triggered_at else None
+                'supertrend_exit_triggered_at': strategy.supertrend_exit_triggered_at.isoformat() if strategy.supertrend_exit_triggered_at else None,
+                # Trailing SL exit tracking
+                'trailing_sl_triggered_at': strategy.trailing_sl_triggered_at.isoformat() if strategy.trailing_sl_triggered_at else None,
+                'trailing_sl_exit_reason': strategy.trailing_sl_exit_reason,
+                # Max Loss exit tracking
+                'max_loss_triggered_at': strategy.max_loss_triggered_at.isoformat() if strategy.max_loss_triggered_at else None,
+                'max_loss_exit_reason': strategy.max_loss_exit_reason,
+                # Max Profit exit tracking
+                'max_profit_triggered_at': strategy.max_profit_triggered_at.isoformat() if strategy.max_profit_triggered_at else None,
+                'max_profit_exit_reason': strategy.max_profit_exit_reason
             })
 
         return jsonify({
@@ -1796,9 +1812,15 @@ def risk_status_stream():
                             StrategyExecution.entry_time >= today_start
                         ).all()
 
-                        # Include strategy if it has positions OR if Supertrend exit was triggered
+                        # Include strategy if it has positions OR if any exit was triggered
                         # This ensures we display the exit reason even after all positions are closed
-                        if not open_executions and not strategy.supertrend_exit_triggered:
+                        any_exit_triggered = (
+                            strategy.supertrend_exit_triggered or
+                            strategy.trailing_sl_triggered_at or
+                            strategy.max_loss_triggered_at or
+                            strategy.max_profit_triggered_at
+                        )
+                        if not open_executions and not any_exit_triggered:
                             continue
 
                         # Calculate totals - will be recalculated with real-time LTP
@@ -2022,16 +2044,27 @@ def risk_status_stream():
                             'max_loss': strategy.max_loss,
                             'max_profit': strategy.max_profit,
                             'trailing_sl': strategy.trailing_sl,
+                            'trailing_sl_type': strategy.trailing_sl_type,
                             'total_pnl': round(total_pnl, 2),
                             'max_loss_pct': round(max_loss_pct, 1),
                             'max_profit_pct': round(max_profit_pct, 1),
                             'max_loss_hit': max_loss_hit,
                             'max_profit_hit': max_profit_hit,
                             'executions': executions_data,
+                            # Supertrend exit tracking
                             'supertrend_exit_enabled': strategy.supertrend_exit_enabled,
                             'supertrend_exit_triggered': strategy.supertrend_exit_triggered,
                             'supertrend_exit_reason': strategy.supertrend_exit_reason,
-                            'supertrend_exit_triggered_at': strategy.supertrend_exit_triggered_at.isoformat() if strategy.supertrend_exit_triggered_at else None
+                            'supertrend_exit_triggered_at': strategy.supertrend_exit_triggered_at.isoformat() if strategy.supertrend_exit_triggered_at else None,
+                            # Trailing SL exit tracking
+                            'trailing_sl_triggered_at': strategy.trailing_sl_triggered_at.isoformat() if strategy.trailing_sl_triggered_at else None,
+                            'trailing_sl_exit_reason': strategy.trailing_sl_exit_reason,
+                            # Max Loss exit tracking
+                            'max_loss_triggered_at': strategy.max_loss_triggered_at.isoformat() if strategy.max_loss_triggered_at else None,
+                            'max_loss_exit_reason': strategy.max_loss_exit_reason,
+                            # Max Profit exit tracking
+                            'max_profit_triggered_at': strategy.max_profit_triggered_at.isoformat() if strategy.max_profit_triggered_at else None,
+                            'max_profit_exit_reason': strategy.max_profit_exit_reason
                         })
 
                 # Send as SSE

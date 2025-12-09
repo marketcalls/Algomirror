@@ -283,6 +283,13 @@ class Strategy(db.Model):
     trailing_sl_peak_pnl = db.Column(db.Float, default=0.0)  # Highest P&L reached (for trailing calculation)
     trailing_sl_trigger_pnl = db.Column(db.Float)  # Current trigger level (exit if P&L drops below this)
     trailing_sl_triggered_at = db.Column(db.DateTime)  # When TSL was triggered (if ever)
+    trailing_sl_exit_reason = db.Column(db.String(200))  # Stores TSL exit reason
+
+    # Max Loss/Profit exit tracking
+    max_loss_triggered_at = db.Column(db.DateTime)  # When max loss was triggered
+    max_loss_exit_reason = db.Column(db.String(200))  # Stores max loss exit reason
+    max_profit_triggered_at = db.Column(db.DateTime)  # When max profit was triggered
+    max_profit_exit_reason = db.Column(db.String(200))  # Stores max profit exit reason
 
     # Supertrend-based exit
     supertrend_exit_enabled = db.Column(db.Boolean, default=False)
