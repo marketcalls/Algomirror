@@ -3425,28 +3425,32 @@ function updateTrailingSLDisplay(tslStatus) {
     }
 
     if (tslStatus.active) {
-        statusEl.textContent = 'Active';
-        statusEl.className = 'badge badge-success badge-sm ml-1';
+        // TSL is active from entry - show status based on P&L vs stop
+        const currentPnl = tslStatus.current_pnl || 0;
+        const currentStop = tslStatus.current_stop || tslStatus.trigger_pnl || 0;
 
-        // Show trigger level
-        if (triggerEl && tslStatus.trigger_pnl !== null) {
-            const peakDisplay = tslStatus.peak_pnl ? `Peak: ₹${tslStatus.peak_pnl.toFixed(2)}` : '';
-            const triggerDisplay = `Exit at: ₹${tslStatus.trigger_pnl.toFixed(2)}`;
-            triggerEl.innerHTML = `${peakDisplay}<br><span class="text-warning">${triggerDisplay}</span>`;
+        if (currentPnl <= currentStop) {
+            statusEl.textContent = 'Exit Signal';
+            statusEl.className = 'badge badge-error badge-sm ml-1 animate-pulse';
+        } else if (currentPnl > 0) {
+            statusEl.textContent = 'Trailing';
+            statusEl.className = 'badge badge-success badge-sm ml-1';
+        } else {
+            statusEl.textContent = 'Active';
+            statusEl.className = 'badge badge-info badge-sm ml-1';
+        }
+
+        // Show current stop level
+        if (triggerEl && currentStop !== null) {
+            triggerEl.textContent = `₹${currentStop.toFixed(2)}`;
         }
     } else {
-        // TSL enabled but not active (no profit yet or in loss)
-        statusEl.textContent = 'Waiting';
-        statusEl.className = 'badge badge-warning badge-sm ml-1';
+        // TSL enabled but no positions yet
+        statusEl.textContent = 'No Position';
+        statusEl.className = 'badge badge-ghost badge-sm ml-1';
 
         if (triggerEl) {
-            if (tslStatus.current_pnl < 0) {
-                triggerEl.textContent = `Current: ₹${tslStatus.current_pnl.toFixed(2)} (in loss)`;
-            } else if (tslStatus.current_pnl === 0) {
-                triggerEl.textContent = 'Activates when P&L > 0';
-            } else {
-                triggerEl.textContent = 'Tracking will start shortly';
-            }
+            triggerEl.textContent = '--';
         }
     }
 }

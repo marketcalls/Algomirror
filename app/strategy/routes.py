@@ -401,6 +401,20 @@ def execute_strategy(strategy_id):
         logger.info(f"[EXEC DEBUG] Initializing StrategyExecutor...")
         executor = StrategyExecutor(strategy, use_margin_calculator=use_margin_calc)
 
+        # CRITICAL: Reset TSL tracking BEFORE execution starts
+        # This prevents stale TSL data from previous trades from triggering exits
+        # TSL State: RESET -> WAITING -> ACTIVE -> TRIGGERED -> EXIT
+        if strategy.trailing_sl and strategy.trailing_sl > 0:
+            logger.info(f"[TSL STATE] Strategy {strategy.id} ({strategy.name}): RESET - Clearing TSL for new entry")
+            strategy.trailing_sl_active = False
+            strategy.trailing_sl_peak_pnl = 0.0
+            strategy.trailing_sl_initial_stop = None
+            strategy.trailing_sl_trigger_pnl = None
+            strategy.trailing_sl_triggered_at = None
+            strategy.trailing_sl_exit_reason = None
+            db.session.commit()
+            logger.info(f"[TSL STATE] Strategy {strategy.id} ({strategy.name}): State = WAITING (monitoring for P&L > 0)")
+
         # Execute strategy
         logger.info(f"[EXEC DEBUG] Executing strategy...")
         results = executor.execute()
@@ -1399,33 +1413,52 @@ def strategy_positions(strategy_id):
     }
 
     if tsl_status['enabled']:
-        # Get open positions count
-        open_positions_count = sum(1 for p in data if not p['is_closed'] and int(p['quantity']) != 0)
+        # Get open positions count and calculate entry value
+        open_positions = [p for p in data if not p['is_closed'] and int(p['quantity']) != 0]
+        open_positions_count = len(open_positions)
 
         if open_positions_count > 0:
-            # IMPORTANT: If we have open positions but TSL was previously triggered,
-            # it means a NEW trade was started - reset TSL tracking for new trade
+            # If TSL was already triggered for this trade, don't re-calculate
             if strategy.trailing_sl_triggered_at:
-                logger.info(f"[TSL] Strategy {strategy.name}: Resetting TSL for new trade (was triggered at {strategy.trailing_sl_triggered_at})")
-                strategy.trailing_sl_active = False
-                strategy.trailing_sl_peak_pnl = 0.0
-                strategy.trailing_sl_initial_stop = None
-                strategy.trailing_sl_trigger_pnl = None
-                strategy.trailing_sl_triggered_at = None
-                strategy.trailing_sl_exit_reason = None
+                logger.debug(f"[TSL] Strategy {strategy.name}: TSL already triggered, returning triggered state")
+                tsl_status['active'] = False
+                tsl_status['triggered'] = True
+                tsl_status['peak_pnl'] = strategy.trailing_sl_peak_pnl or 0.0
+                tsl_status['trigger_pnl'] = strategy.trailing_sl_trigger_pnl
+                tsl_status['initial_stop'] = strategy.trailing_sl_initial_stop
+                tsl_status['current_stop'] = strategy.trailing_sl_trigger_pnl
+                tsl_status['exit_reason'] = strategy.trailing_sl_exit_reason
+            else:
+                # TSL ACTIVE FROM ENTRY - Calculate initial stop based on entry value
+                # Entry value = sum of (entry_price * abs(quantity)) for all open positions
+                entry_value = sum(
+                    float(p['average_price']) * abs(int(p['quantity']))
+                    for p in open_positions
+                )
 
-            # Check if TSL was previously activated (persisted state)
-            was_active = strategy.trailing_sl_active or False
-            current_peak = strategy.trailing_sl_peak_pnl or 0.0
-            current_trailing_stop = strategy.trailing_sl_trigger_pnl or 0.0
+                trailing_value = strategy.trailing_sl
+                trailing_type = strategy.trailing_sl_type or 'percentage'
 
-            # TSL activates when P&L becomes positive (first time)
-            # Once active, it STAYS active until exit or positions closed
-            if total_pnl > 0 or was_active:
+                # Calculate initial stop (max loss from entry)
+                # For 20% TSL: initial_stop = -20% of entry value
+                if trailing_type == 'percentage':
+                    initial_stop_pnl = -entry_value * (trailing_value / 100)
+                elif trailing_type == 'points':
+                    initial_stop_pnl = -trailing_value
+                else:  # 'amount'
+                    initial_stop_pnl = -trailing_value
+
+                # Set initial stop if not already set
+                if strategy.trailing_sl_initial_stop is None:
+                    strategy.trailing_sl_initial_stop = initial_stop_pnl
+                    logger.info(f"[TSL STATE] Strategy {strategy.name}: Initial stop set at {initial_stop_pnl:.2f} (Entry value: {entry_value:.2f})")
+
+                # TSL is ALWAYS active from entry (no waiting state)
                 tsl_status['active'] = True
                 strategy.trailing_sl_active = True
 
-                # Update peak P&L only if current is higher
+                # Track peak P&L (highest P&L achieved)
+                current_peak = strategy.trailing_sl_peak_pnl or 0.0
                 if total_pnl > current_peak:
                     strategy.trailing_sl_peak_pnl = total_pnl
                     current_peak = total_pnl
@@ -1433,47 +1466,29 @@ def strategy_positions(strategy_id):
 
                 tsl_status['peak_pnl'] = current_peak
 
-                # AFL-style ratcheting: Calculate new stop based on current peak
-                trailing_value = strategy.trailing_sl
-                trailing_type = strategy.trailing_sl_type or 'percentage'
+                # Calculate trailing stop based on peak P&L
+                # Logic: Current Stop = Initial Stop + Peak P&L
+                # The stop trails UP from initial stop level by the amount of peak profit
+                # Example: Initial=-860, Peak=100 -> Stop = -860 + 100 = -760
+                current_stop = strategy.trailing_sl_initial_stop + current_peak
+                logger.debug(f"[TSL] Strategy {strategy.name}: Initial={strategy.trailing_sl_initial_stop:.2f} + Peak={current_peak:.2f} = Stop={current_stop:.2f}")
 
-                if trailing_type == 'percentage':
-                    # AFL: stop_level = 1 - trailing_pct/100
-                    stop_level = 1 - (trailing_value / 100)
-                    new_stop = current_peak * stop_level
-                elif trailing_type == 'points':
-                    new_stop = current_peak - trailing_value
-                else:  # 'amount'
-                    new_stop = current_peak - trailing_value
+                # Ratchet: current stop can only increase from previous value
+                previous_stop = strategy.trailing_sl_trigger_pnl or strategy.trailing_sl_initial_stop
+                if current_stop > previous_stop:
+                    logger.debug(f"[TSL] Strategy {strategy.name}: Stop ratcheted UP from {previous_stop:.2f} to {current_stop:.2f}")
 
-                # AFL: trailstop = Max(new_stop, trailstop) - RATCHET UP ONLY!
-                if new_stop > current_trailing_stop:
-                    trailing_stop = new_stop
-                    logger.debug(f"[TSL] Strategy {strategy.name}: Stop ratcheted UP to {trailing_stop:.2f}")
-                else:
-                    trailing_stop = current_trailing_stop
+                current_stop = max(current_stop, previous_stop)
 
-                # Set initial stop if this is the first activation
-                if strategy.trailing_sl_initial_stop is None and trailing_stop > 0:
-                    strategy.trailing_sl_initial_stop = trailing_stop
-                    logger.info(f"[TSL] Strategy {strategy.name}: Initial stop set at {trailing_stop:.2f}")
-
-                strategy.trailing_sl_trigger_pnl = trailing_stop
-                tsl_status['trigger_pnl'] = trailing_stop
+                strategy.trailing_sl_trigger_pnl = current_stop
+                tsl_status['trigger_pnl'] = current_stop
                 tsl_status['initial_stop'] = strategy.trailing_sl_initial_stop
-                tsl_status['current_stop'] = trailing_stop
+                tsl_status['current_stop'] = current_stop
 
-                # AFL: Exit when current_pnl < trailing_stop
-                if current_peak > 0 and total_pnl <= trailing_stop and not strategy.trailing_sl_triggered_at:
+                # Exit when P&L drops to or below current stop
+                if total_pnl <= current_stop:
                     tsl_status['should_exit'] = True
-                    logger.warning(f"[TSL] Strategy {strategy.name}: P&L {total_pnl:.2f} dropped below stop {trailing_stop:.2f} (Peak: {current_peak:.2f})")
-            else:
-                # P&L not positive and TSL never activated yet - waiting state
-                tsl_status['active'] = False
-                tsl_status['peak_pnl'] = 0.0
-                tsl_status['trigger_pnl'] = None
-                tsl_status['initial_stop'] = None
-                tsl_status['current_stop'] = None
+                    logger.warning(f"[TSL STATE] Strategy {strategy.name}: ACTIVE -> TRIGGERED | P&L {total_pnl:.2f} <= Stop {current_stop:.2f} (Peak: {current_peak:.2f}, Initial: {strategy.trailing_sl_initial_stop:.2f})")
         else:
             # No open positions, reset TSL tracking completely
             tsl_status['no_positions'] = True

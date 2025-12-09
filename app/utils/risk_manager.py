@@ -113,12 +113,13 @@ class RiskManager:
     def calculate_strategy_pnl(self, strategy: Strategy) -> Dict:
         """
         Calculate total P&L for a strategy across all executions.
+        Uses positions API to get real-time LTP for accurate P&L calculation.
 
         Args:
             strategy: Strategy to calculate P&L for
 
         Returns:
-            Dict with realized_pnl, unrealized_pnl, total_pnl
+            Dict with realized_pnl, unrealized_pnl, total_pnl, valid (bool)
         """
         total_realized = 0.0
         total_unrealized = 0.0
@@ -129,17 +130,57 @@ class RiskManager:
                 strategy_id=strategy.id
             ).all()
 
+            # Get open executions to fetch current prices
+            open_executions = [e for e in executions if e.status == 'entered']
+
+            # Build a map of current prices from positions API
+            current_prices = {}
+            if open_executions:
+                # Get primary account to fetch positions
+                account = open_executions[0].account
+                if account and account.is_active:
+                    try:
+                        client = ExtendedOpenAlgoAPI(
+                            api_key=account.get_api_key(),
+                            host=account.host_url
+                        )
+                        positions_response = client.positionbook()
+                        if positions_response.get('status') == 'success':
+                            positions_data = positions_response.get('data', [])
+                            for pos in positions_data:
+                                symbol = pos.get('symbol', '')
+                                ltp = pos.get('ltp', 0)
+                                if symbol and ltp:
+                                    current_prices[symbol] = float(ltp)
+                    except Exception as api_err:
+                        logger.warning(f"Failed to fetch positions for P&L: {api_err}")
+
             for execution in executions:
-                realized, unrealized = self.calculate_execution_pnl(execution)
-                total_realized += realized
-                total_unrealized += unrealized
+                # Use API price if available, otherwise fall back to execution.last_price
+                api_price = current_prices.get(execution.symbol)
+                if api_price and execution.status == 'entered':
+                    # Calculate P&L using API price
+                    entry_price = float(execution.entry_price or 0)
+                    quantity = int(execution.quantity or 0)
+                    is_long = execution.leg and execution.leg.action.upper() == 'BUY'
+
+                    if is_long:
+                        total_unrealized += (api_price - entry_price) * quantity
+                    else:
+                        total_unrealized += (entry_price - api_price) * quantity
+                else:
+                    # Fall back to stored last_price calculation
+                    realized, unrealized = self.calculate_execution_pnl(execution)
+                    total_realized += realized
+                    total_unrealized += unrealized
 
             total_pnl = total_realized + total_unrealized
 
             return {
                 'realized_pnl': round(total_realized, 2),
                 'unrealized_pnl': round(total_unrealized, 2),
-                'total_pnl': round(total_pnl, 2)
+                'total_pnl': round(total_pnl, 2),
+                'valid': True  # Calculation succeeded
             }
 
         except Exception as e:
@@ -147,7 +188,8 @@ class RiskManager:
             return {
                 'realized_pnl': 0.0,
                 'unrealized_pnl': 0.0,
-                'total_pnl': 0.0
+                'total_pnl': 0.0,
+                'valid': False  # Calculation failed - DO NOT use for risk decisions
             }
 
     def check_max_loss(self, strategy: Strategy) -> Optional[RiskEvent]:
@@ -174,6 +216,11 @@ class RiskManager:
         # Calculate current P&L
         pnl_data = self.calculate_strategy_pnl(strategy)
         current_pnl = pnl_data['total_pnl']
+
+        # Skip if P&L calculation failed (prevents false triggers)
+        if not pnl_data.get('valid', True):
+            logger.warning(f"[MaxLoss] Strategy {strategy.name}: P&L calculation INVALID, skipping check")
+            return None
 
         # Check if loss exceeds threshold (loss is negative)
         max_loss_threshold = -abs(float(strategy.max_loss))
@@ -228,6 +275,11 @@ class RiskManager:
         # Calculate current P&L
         pnl_data = self.calculate_strategy_pnl(strategy)
         current_pnl = pnl_data['total_pnl']
+
+        # Skip if P&L calculation failed (prevents false triggers)
+        if not pnl_data.get('valid', True):
+            logger.warning(f"[MaxProfit] Strategy {strategy.name}: P&L calculation INVALID, skipping check")
+            return None
 
         # Check if profit exceeds threshold (profit is positive)
         max_profit_threshold = abs(float(strategy.max_profit))
@@ -301,7 +353,7 @@ class RiskManager:
             ).all()
 
             if not open_executions:
-                # No open positions - reset TSL state
+                # No open positions - clean up TSL active state (but preserve triggered_at for history)
                 if strategy.trailing_sl_active:
                     strategy.trailing_sl_active = False
                     strategy.trailing_sl_peak_pnl = 0.0
@@ -310,95 +362,96 @@ class RiskManager:
                     db.session.commit()
                 return None
 
-            # IMPORTANT: If we have open positions but TSL was previously triggered,
-            # it means a NEW trade was started - reset TSL tracking for new trade
+            # If TSL was already triggered for this trade, don't re-process
             if strategy.trailing_sl_triggered_at:
-                logger.info(f"[TSL] Strategy {strategy.name}: Resetting TSL for new trade (was triggered at {strategy.trailing_sl_triggered_at})")
-                strategy.trailing_sl_active = False
-                strategy.trailing_sl_peak_pnl = 0.0
-                strategy.trailing_sl_initial_stop = None
-                strategy.trailing_sl_trigger_pnl = None
-                strategy.trailing_sl_triggered_at = None
-                strategy.trailing_sl_exit_reason = None
-                db.session.commit()
+                logger.debug(f"[TSL] Strategy {strategy.name}: TSL already triggered at {strategy.trailing_sl_triggered_at}, skipping")
+                return None
 
             # Calculate COMBINED strategy P&L (not individual execution P&L)
             pnl_data = self.calculate_strategy_pnl(strategy)
             current_pnl = pnl_data['total_pnl']
 
+            # CRITICAL: Skip TSL check if P&L calculation failed (API error, etc.)
+            if not pnl_data.get('valid', True):
+                logger.warning(f"[TSL] Strategy {strategy.name}: P&L calculation INVALID, skipping TSL check")
+                return None
+
             # Get trailing SL settings
             trailing_type = strategy.trailing_sl_type or 'percentage'
             trailing_value = float(strategy.trailing_sl)
 
-            # Check if TSL was previously activated (persisted state)
-            was_active = strategy.trailing_sl_active or False
+            # TSL ACTIVE FROM ENTRY - Calculate initial stop based on entry value
+            # Entry value = sum of (entry_price * quantity) for all open positions
+            entry_value = sum(
+                (exec.entry_price or 0) * (exec.quantity or 0)
+                for exec in open_executions
+                if exec.entry_price and exec.quantity
+            )
+
+            # Calculate initial stop (max loss from entry)
+            if trailing_type == 'percentage':
+                initial_stop_pnl = -entry_value * (trailing_value / 100)
+            elif trailing_type == 'points':
+                initial_stop_pnl = -trailing_value
+            else:  # 'amount'
+                initial_stop_pnl = -trailing_value
+
+            # Set initial stop if not already set
+            if strategy.trailing_sl_initial_stop is None:
+                strategy.trailing_sl_initial_stop = initial_stop_pnl
+                logger.info(f"[TSL STATE] Strategy {strategy.name}: Initial stop set at {initial_stop_pnl:.2f} (Entry value: {entry_value:.2f})")
+
+            # TSL is ALWAYS active from entry (no waiting state)
+            strategy.trailing_sl_active = True
+
+            # Track peak P&L (highest P&L achieved)
             current_peak = strategy.trailing_sl_peak_pnl or 0.0
-            current_trailing_stop = strategy.trailing_sl_trigger_pnl or 0.0
+            if current_pnl > current_peak:
+                strategy.trailing_sl_peak_pnl = current_pnl
+                current_peak = current_pnl
+                logger.debug(f"[TSL] Strategy {strategy.name}: New peak P&L = {current_peak:.2f}")
 
-            # TSL activates when P&L becomes positive (first time)
-            # Once active, it STAYS active until exit or positions closed
-            if current_pnl > 0 or was_active:
-                strategy.trailing_sl_active = True
+            # Calculate trailing stop based on peak P&L
+            # Logic: Current Stop = Initial Stop + Peak P&L
+            # The stop trails UP from initial stop level by the amount of peak profit
+            # Example: Initial=-860, Peak=100 -> Stop = -860 + 100 = -760
+            current_stop = strategy.trailing_sl_initial_stop + current_peak
+            logger.debug(f"[TSL] Strategy {strategy.name}: Initial={strategy.trailing_sl_initial_stop:.2f} + Peak={current_peak:.2f} = Stop={current_stop:.2f}")
 
-                # Update peak P&L only if current is higher
-                if current_pnl > current_peak:
-                    strategy.trailing_sl_peak_pnl = current_pnl
-                    current_peak = current_pnl
-                    logger.debug(f"[TSL] Strategy {strategy.name}: New peak P&L = {current_peak:.2f}")
+            # Ratchet: current stop can only increase from previous value
+            previous_stop = strategy.trailing_sl_trigger_pnl or strategy.trailing_sl_initial_stop
+            if current_stop > previous_stop:
+                logger.debug(f"[TSL] Strategy {strategy.name}: Stop ratcheted UP from {previous_stop:.2f} to {current_stop:.2f}")
+            current_stop = max(current_stop, previous_stop)
 
-                # Calculate new stop level based on current peak
-                # AFL: stoplevel = 1 - trailing_pct/100
-                # AFL: new_stop = High * stoplevel (where High = peak_pnl in our case)
-                if trailing_type == 'percentage':
-                    stop_level = 1 - (trailing_value / 100)
-                    new_stop = current_peak * stop_level
-                elif trailing_type == 'points':
-                    new_stop = current_peak - trailing_value
-                else:  # 'amount'
-                    new_stop = current_peak - trailing_value
+            strategy.trailing_sl_trigger_pnl = current_stop
+            db.session.commit()
 
-                # AFL: trailstop = Max(new_stop, trailstop) - RATCHET UP ONLY!
-                # The trailing stop can only move UP, never down
-                if new_stop > current_trailing_stop:
-                    trailing_stop = new_stop
-                    logger.debug(f"[TSL] Strategy {strategy.name}: Trailing stop ratcheted UP to {trailing_stop:.2f}")
-                else:
-                    trailing_stop = current_trailing_stop
+            # Exit when P&L drops to or below current stop
+            if current_pnl <= current_stop:
+                # State transition: ACTIVE -> TRIGGERED
+                logger.warning(
+                    f"[TSL STATE] Strategy {strategy.name}: ACTIVE -> TRIGGERED | "
+                    f"P&L={current_pnl:.2f} <= Stop={current_stop:.2f} (Peak={current_peak:.2f}, Initial={strategy.trailing_sl_initial_stop:.2f})"
+                )
 
-                # Set initial stop if this is the first activation
-                if strategy.trailing_sl_initial_stop is None:
-                    strategy.trailing_sl_initial_stop = trailing_stop
-                    logger.info(f"[TSL] Strategy {strategy.name}: Initial stop set at {trailing_stop:.2f}")
-
-                strategy.trailing_sl_trigger_pnl = trailing_stop
+                # Store exit reason and timestamp
+                exit_reason = f"TSL: P&L {current_pnl:.2f} <= Stop {current_stop:.2f} (Peak: {current_peak:.2f}, Initial: {strategy.trailing_sl_initial_stop:.2f})"
+                strategy.trailing_sl_triggered_at = datetime.utcnow()
+                strategy.trailing_sl_exit_reason = exit_reason
                 db.session.commit()
 
-                # AFL: Exit when Low < trailstop (where Low = current_pnl in our case)
-                # Only trigger if we have a valid peak (TSL was truly active)
-                if current_peak > 0 and current_pnl <= trailing_stop and not strategy.trailing_sl_triggered_at:
-                    initial_stop = strategy.trailing_sl_initial_stop or trailing_stop
-                    logger.warning(
-                        f"[TSL] Trailing SL triggered for {strategy.name}: "
-                        f"P&L={current_pnl:.2f}, Stop={trailing_stop:.2f}, Peak={current_peak:.2f}, Initial={initial_stop:.2f}"
-                    )
+                # Create risk event
+                risk_event = RiskEvent(
+                    strategy_id=strategy.id,
+                    event_type='trailing_sl',
+                    threshold_value=current_stop,
+                    current_value=current_pnl,
+                    action_taken='close_all',
+                    notes=exit_reason
+                )
 
-                    # Store exit reason and timestamp
-                    exit_reason = f"TSL: P&L {current_pnl:.2f} < Stop {trailing_stop:.2f} (Peak: {current_peak:.2f}, Initial: {initial_stop:.2f})"
-                    strategy.trailing_sl_triggered_at = datetime.utcnow()
-                    strategy.trailing_sl_exit_reason = exit_reason
-                    db.session.commit()
-
-                    # Create risk event
-                    risk_event = RiskEvent(
-                        strategy_id=strategy.id,
-                        event_type='trailing_sl',
-                        threshold_value=trailing_stop,
-                        current_value=current_pnl,
-                        action_taken='close_all',
-                        notes=exit_reason
-                    )
-
-                    return risk_event
+                return risk_event
 
         except Exception as e:
             logger.error(f"Error checking trailing SL for {strategy.name}: {e}")
