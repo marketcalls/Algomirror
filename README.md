@@ -28,6 +28,9 @@ AlgoMirror is a secure and scalable multi-account management platform built on t
 - [Configuration Reference](#configuration-reference)
 - [Production Deployment](#production-deployment)
 - [Troubleshooting](#troubleshooting)
+- [Tech Stack](#tech-stack)
+- [Credits & Acknowledgments](#credits--acknowledgments)
+- [Disclaimer](#disclaimer)
 - [License](#license)
 
 ---
@@ -940,6 +943,104 @@ flask db upgrade
 - Real-time dashboard
 - Mobile-responsive UI with OpenAlgo theme
 - Special trading session support (Muhurat)
+
+---
+
+## Tech Stack
+
+### Backend
+| Technology | Version | Purpose |
+|------------|---------|---------|
+| Python | 3.12+ | Core runtime |
+| Flask | 3.1+ | Web framework |
+| SQLAlchemy | 2.0+ | ORM and database |
+| Flask-Login | 0.6+ | Authentication |
+| Flask-WTF | 1.2+ | Forms and CSRF |
+| Flask-Migrate | 4.1+ | Database migrations |
+| Flask-Limiter | 3.12+ | Rate limiting |
+| Flask-Talisman | 1.1+ | Security headers |
+| Gunicorn | 21+ | Production WSGI server |
+| APScheduler | 3.11+ | Background scheduling |
+
+### Technical Analysis
+| Technology | Version | Purpose |
+|------------|---------|---------|
+| TA-Lib | 0.6+ | Technical indicators |
+| Numba | 0.61+ | JIT compilation for performance |
+| NumPy | 2.2+ | Numerical computing |
+| Pandas | 2.3+ | Data manipulation |
+
+### Frontend
+| Technology | Version | Purpose |
+|------------|---------|---------|
+| TailwindCSS | 3.4+ | Utility-first CSS |
+| DaisyUI | 4.12+ | UI components |
+| Jinja2 | 3.1+ | Templating engine |
+
+### Security
+| Technology | Purpose |
+|------------|---------|
+| Fernet (Cryptography) | AES-128 API key encryption |
+| Flask-Talisman | CSP and security headers |
+| Flask-WTF | CSRF protection |
+| Werkzeug | Password hashing |
+
+### DevOps
+| Technology | Purpose |
+|------------|---------|
+| Docker | Containerization |
+| Docker Compose | Multi-container orchestration |
+| UV | Fast package management (10-100x faster than pip) |
+| Node.js/npm | CSS build system |
+
+### Database Support
+| Database | Environment |
+|----------|-------------|
+| SQLite | Development |
+| PostgreSQL | Production |
+| Redis | Caching & Sessions (optional) |
+
+---
+
+## Credits & Acknowledgments
+
+### Core Platform
+- **[OpenAlgo](https://openalgo.in)** - Open Source Algorithmic Trading Platform by Rajandran R
+  - REST API integration
+  - WebSocket data streaming
+  - Multi-broker support (24+ brokers)
+
+### Libraries & Frameworks
+- **[Flask](https://flask.palletsprojects.com/)** - Micro web framework by Armin Ronacher / Pallets Projects
+- **[SQLAlchemy](https://www.sqlalchemy.org/)** - SQL toolkit and ORM by Mike Bayer
+- **[TailwindCSS](https://tailwindcss.com/)** - Utility-first CSS framework by Adam Wathan
+- **[DaisyUI](https://daisyui.com/)** - Tailwind CSS component library by Pouya Saadeghi
+- **[TA-Lib](https://ta-lib.org/)** - Technical Analysis Library
+- **[Numba](https://numba.pydata.org/)** - JIT compiler for Python by Anaconda
+- **[UV](https://github.com/astral-sh/uv)** - Ultra-fast Python package manager by Astral
+
+### Technical Indicators
+- **Supertrend Implementation** - Based on Pine Script v6 specification
+  - ATR calculation using TA-Lib (RMA-based)
+  - Numba-optimized for performance
+
+### Icons & Design
+- **[Heroicons](https://heroicons.com/)** - Beautiful hand-crafted SVG icons by Tailwind Labs
+
+### Development Tools
+- **[Claude Code](https://claude.ai/code)** - AI-assisted development by Anthropic
+
+---
+
+## Disclaimer
+
+**Always test thoroughly in OpenAlgo Sandbox mode before deploying to a live trading account.**
+
+Trading in Futures & Options (F&O) involves substantial risk of loss and is not suitable for all investors. Past performance does not guarantee future results. You are solely responsible for your trading decisions.
+
+This software is provided "as is" without warranty of any kind. The developers are not responsible for any financial losses incurred through the use of this software.
+
+**SEBI Static IP Compliant** - This application is designed to work with SEBI-compliant broker APIs.
 
 ---
 
