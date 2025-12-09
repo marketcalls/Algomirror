@@ -258,8 +258,8 @@
                             <div class="form-control flex-1">
                                 <label class="label py-0"><span class="label-text text-xs text-black">Exit Type</span></label>
                                 <select id="supertrendExitType" class="select select-bordered select-sm text-black" disabled>
-                                    <option value="breakout" {% if strategy and strategy.supertrend_exit_type == 'breakout' %}selected{% endif %}>Breakout</option>
-                                    <option value="breakdown" {% if strategy and strategy.supertrend_exit_type == 'breakdown' %}selected{% endif %}>Breakdown</option>
+                                    <option value="breakout" {% if strategy and strategy.supertrend_exit_type == 'breakout' %}selected{% endif %}>Breakout (Net Credit)</option>
+                                    <option value="breakdown" {% if strategy and strategy.supertrend_exit_type == 'breakdown' %}selected{% endif %}>Breakdown (Net Debit)</option>
                                 </select>
                             </div>
                             <div class="form-control" style="width: 80px;">

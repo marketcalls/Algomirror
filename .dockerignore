@@ -1,0 +1,87 @@
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Distribution / packaging
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Git
+.git/
+.gitignore
+
+# Local development
+.env
+.env.local
+*.local.json
+
+# Claude settings
+.claude/
+
+# Database files (will be created in container)
+instance/
+*.db
+*.sqlite
+
+# Logs (will be created in container)
+logs/
+*.log
+
+# Sessions (will be created in container)
+flask_session/
+
+# Node modules (CSS should be pre-built)
+node_modules/
+
+# Test files
+tests/
+test/
+*.test.py
+pytest.ini
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Documentation
+docs/
+*.md
+!README.md
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.bak

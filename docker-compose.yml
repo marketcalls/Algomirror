@@ -1,0 +1,77 @@
+version: '3.8'
+
+services:
+  # AlgoMirror Application
+  algomirror:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: algomirror
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - FLASK_APP=app:create_app
+      - FLASK_ENV=production
+      - SECRET_KEY=${SECRET_KEY:-change-this-in-production}
+      - DATABASE_URL=${DATABASE_URL:-sqlite:///instance/algomirror.db}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - SESSION_TYPE=${SESSION_TYPE:-filesystem}
+      - SESSION_COOKIE_SECURE=${SESSION_COOKIE_SECURE:-true}
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:8000}
+      - DEFAULT_OPENALGO_HOST=${DEFAULT_OPENALGO_HOST:-http://host.docker.internal:5000}
+      - DEFAULT_OPENALGO_WS=${DEFAULT_OPENALGO_WS:-ws://host.docker.internal:8765}
+      - PING_MONITORING_ENABLED=${PING_MONITORING_ENABLED:-true}
+      - PING_MONITORING_INTERVAL=${PING_MONITORING_INTERVAL:-30}
+      - PING_MAX_FAILURES=${PING_MAX_FAILURES:-3}
+      - PING_QUIET_MODE=${PING_QUIET_MODE:-false}
+      - RATE_LIMIT_GLOBAL=${RATE_LIMIT_GLOBAL:-2000}
+      - RATE_LIMIT_AUTH=${RATE_LIMIT_AUTH:-30}
+      - RATE_LIMIT_API=${RATE_LIMIT_API:-500}
+      - RATE_LIMIT_HEAVY=${RATE_LIMIT_HEAVY:-100}
+      - TZ=Asia/Kolkata
+    volumes:
+      # Persist database
+      - algomirror_db:/app/instance
+      # Persist logs
+      - algomirror_logs:/app/logs
+      # Persist sessions
+      - algomirror_sessions:/app/flask_session
+    networks:
+      - algomirror_network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/auth/login"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Optional: Redis for production rate limiting and sessions
+  redis:
+    image: redis:7-alpine
+    container_name: algomirror_redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - algomirror_redis:/data
+    networks:
+      - algomirror_network
+    profiles:
+      - with-redis
+
+volumes:
+  algomirror_db:
+    driver: local
+  algomirror_logs:
+    driver: local
+  algomirror_sessions:
+    driver: local
+  algomirror_redis:
+    driver: local
+
+networks:
+  algomirror_network:
+    driver: bridge
