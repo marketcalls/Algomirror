@@ -222,12 +222,12 @@ def create_app(config_name=None):
     # Create database tables
     with app.app_context():
         db.create_all()
-        app.logger.info('Database tables created', extra={'event': 'db_init'})
-    
+        app.logger.debug('Database tables created', extra={'event': 'db_init'})
+
     # Initialize ping monitor
     from app.utils.ping_monitor import ping_monitor
     ping_monitor.init_app(app)
-    
+
     # Initialize option chain background service
     from app.utils.background_service import option_chain_service
     option_chain_service.start_service()
@@ -235,18 +235,18 @@ def create_app(config_name=None):
     # Initialize order status poller (Phase 2)
     from app.utils.order_status_poller import order_status_poller
     order_status_poller.start()
-    app.logger.info('Order status poller started', extra={'event': 'poller_init'})
+    app.logger.debug('Order status poller started', extra={'event': 'poller_init'})
 
     # Recover any pending orders from database (handles app restarts)
     with app.app_context():
         recovered = order_status_poller.recover_pending_orders()
         if recovered > 0:
-            app.logger.info(f'Recovered {recovered} pending orders to polling queue', extra={'event': 'poller_recovery'})
+            app.logger.debug(f'Recovered {recovered} pending orders to polling queue', extra={'event': 'poller_recovery'})
 
     # Initialize Supertrend exit monitoring service
     from app.utils.supertrend_exit_service import supertrend_exit_service
     supertrend_exit_service.start_service()
-    app.logger.info('Supertrend exit monitoring service started', extra={'event': 'supertrend_exit_init'})
+    app.logger.debug('Supertrend exit monitoring service started', extra={'event': 'supertrend_exit_init'})
 
     # Load existing primary and backup accounts within app context
     with app.app_context():
@@ -262,20 +262,20 @@ def create_app(config_name=None):
         ).order_by(TradingAccount.created_at).all()
         
         if primary:
-            app.logger.info(f'Found primary account: {primary.account_name}')
+            app.logger.debug(f'Found primary account: {primary.account_name}')
             if backup_accounts:
-                app.logger.info(f'Found {len(backup_accounts)} backup accounts')
-            
+                app.logger.debug(f'Found {len(backup_accounts)} backup accounts')
+
             # Register Flask app with background service
             option_chain_service.set_flask_app(app)
 
             # Set primary and backup accounts
             option_chain_service.primary_account = primary
             option_chain_service.backup_accounts = backup_accounts.copy()
-            
+
             # Check if within trading hours and trigger option chains
             if primary.connection_status == 'connected':
-                app.logger.info(f"Testing authentication for primary account: {primary.account_name}")
+                app.logger.debug(f"Testing authentication for primary account: {primary.account_name}")
                 try:
                     # Test API connection before starting option chains
                     from app.utils.openalgo_client import ExtendedOpenAlgoAPI
@@ -284,12 +284,12 @@ def create_app(config_name=None):
                         host=primary.host_url
                     )
                     # Quick ping test
-                    app.logger.info(f"Sending ping to {primary.host_url}")
+                    app.logger.debug(f"Sending ping to {primary.host_url}")
                     ping_response = test_client.ping()
-                    app.logger.info(f"Ping response: {ping_response}")
+                    app.logger.debug(f"Ping response: {ping_response}")
 
                     if ping_response.get('status') == 'success':
-                        app.logger.info(f"Authentication successful, starting option chains in background")
+                        app.logger.debug(f"Authentication successful, starting option chains in background")
                         # Start option chains in a background thread to avoid blocking worker startup
                         import threading
                         def delayed_start(flask_app, primary_acct):
@@ -307,15 +307,15 @@ def create_app(config_name=None):
                         app.logger.warning(f"Marking {primary.account_name} as disconnected")
                         primary.connection_status = 'disconnected'
                         db.session.commit()
-                        app.logger.info(f"Account {primary.account_name} marked as disconnected")
+                        app.logger.debug(f"Account {primary.account_name} marked as disconnected")
                 except Exception as e:
                     app.logger.error(f"Error testing primary account connection: {e}", exc_info=True)
                     app.logger.warning(f"Marking {primary.account_name} as disconnected due to error")
                     primary.connection_status = 'disconnected'
                     db.session.commit()
             else:
-                app.logger.info(f"Primary account {primary.account_name} status is '{primary.connection_status}', not starting option chains")
-        
-    app.logger.info('Option chain background service started', extra={'event': 'service_init'})
+                app.logger.debug(f"Primary account {primary.account_name} status is '{primary.connection_status}', not starting option chains")
+
+    app.logger.debug('Option chain background service started', extra={'event': 'service_init'})
     
     return app
