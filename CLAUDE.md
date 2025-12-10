@@ -110,8 +110,10 @@ npm run watch-css
 
 ### Testing & Validation
 ```bash
-# Run the application in debug mode
-python app.py  # Runs on http://localhost:8000
+# Run the application
+uv run wsgi.py      # Using UV (recommended)
+python wsgi.py      # Or with activated venv
+# Runs on http://localhost:8000
 
 # Test OpenAlgo connection
 curl -X POST http://127.0.0.1:5000/api/v1/ping \
@@ -124,11 +126,11 @@ curl http://localhost:8000
 # Kill and restart application (Windows)
 netstat -ano | findstr :8000
 taskkill /PID <PID> /F
-python app.py
+uv run wsgi.py
 
 # Kill and restart application (Linux/Mac)
 lsof -ti:8000 | xargs kill -9
-python app.py
+uv run wsgi.py
 ```
 
 ## Architecture Overview
