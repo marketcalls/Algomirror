@@ -601,6 +601,18 @@ curl -X POST http://127.0.0.1:5000/api/v1/ping \
 
 ## Project Architecture
 
+### Platform Overview
+
+![AlgoMirror Platform Architecture](docs/algomirror-platform-architecture.png)
+
+*Single AlgoMirror instance connecting to multiple OpenAlgo deployments across 24+ brokers*
+
+### Internal Architecture
+
+![AlgoMirror Internal Architecture](docs/algomirror-internal-architecture.png)
+
+*Detailed system components showing all 7 architectural layers*
+
 ### Directory Structure
 
 ```
