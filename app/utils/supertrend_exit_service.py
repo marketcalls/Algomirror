@@ -46,7 +46,7 @@ class SupertrendExitService:
         self.monitoring_strategies = {}  # strategy_id -> last_check_time
         self._initialized = True
 
-        logger.info("Supertrend Exit Service initialized")
+        logger.debug("Supertrend Exit Service initialized")
 
     def start_service(self):
         """Start the background service"""
@@ -54,7 +54,7 @@ class SupertrendExitService:
             # Check if scheduler is actually already running
             if self.scheduler.running:
                 self.is_running = True
-                logger.info("Supertrend Exit Service already running")
+                logger.debug("Supertrend Exit Service already running")
                 return
 
             self.scheduler.start()
@@ -71,14 +71,14 @@ class SupertrendExitService:
                 replace_existing=True
             )
 
-            logger.info("Supertrend Exit Service started - monitoring at start of each minute")
+            logger.debug("Supertrend Exit Service started - monitoring at start of each minute")
 
     def stop_service(self):
         """Stop the background service"""
         if self.is_running:
             self.scheduler.shutdown(wait=False)
             self.is_running = False
-            logger.info("Supertrend Exit Service stopped")
+            logger.debug("Supertrend Exit Service stopped")
 
     def monitor_strategies(self):
         """
@@ -103,13 +103,13 @@ class SupertrendExitService:
                 if not strategies:
                     return
 
-                logger.info(f"Monitoring {len(strategies)} strategies with Supertrend exit enabled")
+                logger.debug(f"Monitoring {len(strategies)} strategies with Supertrend exit enabled")
 
                 for strategy in strategies:
                     try:
                         # Check if we should monitor this strategy based on timeframe
                         if self.should_check_strategy(strategy):
-                            logger.info(f"Checking Supertrend for strategy {strategy.id} ({strategy.name})")
+                            logger.debug(f"Checking Supertrend for strategy {strategy.id} ({strategy.name})")
                             self.check_supertrend_exit(strategy, app)
                     except Exception as e:
                         logger.error(f"Error monitoring strategy {strategy.id}: {e}", exc_info=True)
@@ -168,13 +168,13 @@ class SupertrendExitService:
                 ]
 
                 if not open_positions:
-                    logger.info(f"Strategy {strategy.id} has no open positions, skipping")
+                    logger.debug(f"Strategy {strategy.id} has no open positions, skipping")
                     return
 
                 # Get set of leg IDs that have open positions
                 # A leg is considered "open" if ANY account has an open position for it
                 open_leg_ids = set(pos.leg_id for pos in open_positions if pos.leg_id)
-                logger.info(f"Strategy {strategy.id}: {len(open_positions)} open positions across {len(open_leg_ids)} legs (leg_ids: {open_leg_ids})")
+                logger.debug(f"Strategy {strategy.id}: {len(open_positions)} open positions across {len(open_leg_ids)} legs (leg_ids: {open_leg_ids})")
 
                 # Fetch combined spread data ONLY for legs with open positions
                 # This ensures closed legs don't affect the Supertrend calculation
@@ -216,7 +216,7 @@ class SupertrendExitService:
                     if latest_direction == -1:  # Bullish - price above supertrend
                         should_exit = True
                         exit_reason = f'supertrend_breakout (Close: {latest_close:.2f}, ST: {latest_supertrend:.2f})'
-                        logger.info(f"Strategy {strategy.id}: Supertrend BREAKOUT - Close crossed above ST on candle close")
+                        logger.debug(f"Strategy {strategy.id}: Supertrend BREAKOUT - Close crossed above ST on candle close")
 
                 elif strategy.supertrend_exit_type == 'breakdown':
                     # Breakdown: CLOSE crossed BELOW Supertrend (direction = 1 in Pine Script)
@@ -224,10 +224,10 @@ class SupertrendExitService:
                     if latest_direction == 1:  # Bearish - price below supertrend
                         should_exit = True
                         exit_reason = f'supertrend_breakdown (Close: {latest_close:.2f}, ST: {latest_supertrend:.2f})'
-                        logger.info(f"Strategy {strategy.id}: Supertrend BREAKDOWN - Close crossed below ST on candle close")
+                        logger.debug(f"Strategy {strategy.id}: Supertrend BREAKDOWN - Close crossed below ST on candle close")
 
                 if should_exit:
-                    logger.info(f"Triggering parallel exit for strategy {strategy.id} - Reason: {exit_reason}")
+                    logger.debug(f"Triggering parallel exit for strategy {strategy.id} - Reason: {exit_reason}")
                     self.trigger_parallel_exit(strategy, exit_reason, app)
                 else:
                     logger.debug(f"Strategy {strategy.id}: No exit signal (Direction: {latest_direction}, Type: {strategy.supertrend_exit_type})")
@@ -264,7 +264,7 @@ class SupertrendExitService:
 
                 if len(legs) < original_leg_count:
                     closed_count = original_leg_count - len(legs)
-                    logger.info(f"Strategy {strategy.id}: Filtered from {original_leg_count} to {len(legs)} legs "
+                    logger.debug(f"Strategy {strategy.id}: Filtered from {original_leg_count} to {len(legs)} legs "
                                f"({closed_count} leg(s) closed, excluded from spread calculation)")
 
                 if not legs:
@@ -457,7 +457,7 @@ class SupertrendExitService:
                 combined_df['high'] = pd.concat([high_vals, low_vals], axis=1).max(axis=1)
                 combined_df['low'] = pd.concat([high_vals, low_vals], axis=1).min(axis=1)
 
-                logger.info(f"  Spread calculated with absolute values (always positive)")
+                logger.debug(f"  Spread calculated with absolute values (always positive)")
             elif sell_total is not None:
                 combined_df = sell_total
             elif buy_total is not None:
@@ -466,7 +466,7 @@ class SupertrendExitService:
                 logger.error(f"No valid leg data for strategy {strategy.id}")
                 return None
 
-            logger.info(f"Combined spread data: {len(combined_df)} bars for strategy {strategy.id}")
+            logger.debug(f"Combined spread data: {len(combined_df)} bars for strategy {strategy.id}")
             return combined_df
 
         except Exception as e:
@@ -485,7 +485,7 @@ class SupertrendExitService:
             from datetime import datetime
 
             try:
-                logger.info(f"[SUPERTREND EXIT] Initiating parallel exit for strategy {strategy.id}")
+                logger.debug(f"[SUPERTREND EXIT] Initiating parallel exit for strategy {strategy.id}")
 
                 # Mark strategy as triggered and store the reason
                 strategy.supertrend_exit_triggered = True
@@ -510,7 +510,7 @@ class SupertrendExitService:
                     logger.warning(f"No open positions found for strategy {strategy.id}")
                     return
 
-                logger.info(f"[SUPERTREND EXIT] Closing {len(open_positions)} positions in parallel")
+                logger.debug(f"[SUPERTREND EXIT] Closing {len(open_positions)} positions in parallel")
 
                 # Thread-safe results collection
                 results = []
@@ -640,7 +640,7 @@ class SupertrendExitService:
                 failed = len([r for r in results if r.get('status') in ['failed', 'error']])
                 total_pnl = sum(r.get('pnl', 0) for r in results if r.get('status') == 'success')
 
-                logger.info(f"[SUPERTREND EXIT] Completed: {successful}/{len(open_positions)} positions closed, Total P&L: {total_pnl:.2f}")
+                logger.debug(f"[SUPERTREND EXIT] Completed: {successful}/{len(open_positions)} positions closed, Total P&L: {total_pnl:.2f}")
 
             except Exception as e:
                 logger.error(f"Error triggering parallel exit: {e}", exc_info=True)

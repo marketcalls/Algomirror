@@ -68,12 +68,12 @@ class OptionChainBackgroundService:
         self.flask_app = None  # Store Flask app for app context in threads
         self.shared_websocket_manager = None  # Single shared WebSocket manager for all services
 
-        logger.info("Option Chain Background Service initialized")
+        logger.debug("Option Chain Background Service initialized")
 
     def set_flask_app(self, app):
         """Store Flask app instance for use in background threads"""
         self.flask_app = app
-        logger.info("Flask app instance registered with background service")
+        logger.debug("Flask app instance registered with background service")
 
     def get_or_create_shared_websocket(self):
         """
@@ -97,7 +97,7 @@ class OptionChainBackgroundService:
             return None
 
         try:
-            logger.info("Creating shared WebSocket manager for all services")
+            logger.debug("Creating shared WebSocket manager for all services")
 
             ws_manager = ProfessionalWebSocketManager()
             ws_manager.create_connection_pool(
@@ -123,7 +123,7 @@ class OptionChainBackgroundService:
 
                 # Store as shared instance
                 self.shared_websocket_manager = ws_manager
-                logger.info("✅ Shared WebSocket manager created and authenticated")
+                logger.debug("✅ Shared WebSocket manager created and authenticated")
                 return ws_manager
             else:
                 logger.error("Primary account missing websocket_url")
@@ -139,12 +139,12 @@ class OptionChainBackgroundService:
             # Check if scheduler is actually already running
             if self.scheduler.running:
                 self.is_running = True
-                logger.info("Background service already running")
+                logger.debug("Background service already running")
                 return
 
             self.scheduler.start()
             self.is_running = True
-            logger.info("Background service started")
+            logger.debug("Background service started")
 
             # Schedule market hours check
             self.schedule_market_hours()
@@ -157,7 +157,7 @@ class OptionChainBackgroundService:
                 id='risk_manager_check',
                 replace_existing=True
             )
-            logger.info("Risk manager scheduled (1-second interval)")
+            logger.debug("Risk manager scheduled (1-second interval)")
 
             # NEW: Schedule session cleanup to run every minute
             self.scheduler.add_job(
@@ -167,7 +167,7 @@ class OptionChainBackgroundService:
                 id='session_cleanup',
                 replace_existing=True
             )
-            logger.info("Session cleanup scheduled (1-minute interval)")
+            logger.debug("Session cleanup scheduled (1-minute interval)")
     
     def stop_service(self):
         """Stop the background service"""
@@ -184,7 +184,7 @@ class OptionChainBackgroundService:
             if self.shared_websocket_manager:
                 try:
                     self.shared_websocket_manager.disconnect()
-                    logger.info("Shared WebSocket manager disconnected")
+                    logger.debug("Shared WebSocket manager disconnected")
                 except Exception as e:
                     logger.error(f"Error disconnecting shared WebSocket: {e}")
                 finally:
@@ -192,7 +192,7 @@ class OptionChainBackgroundService:
 
             self.scheduler.shutdown(wait=False)
             self.is_running = False
-            logger.info("Background service stopped")
+            logger.debug("Background service stopped")
     
     def on_primary_account_connected(self, account: TradingAccount):
         """
@@ -200,7 +200,7 @@ class OptionChainBackgroundService:
         Automatically starts NIFTY, BANKNIFTY, and SENSEX option chains
         """
         try:
-            logger.info(f"Primary account connected: {account.account_name}")
+            logger.debug(f"Primary account connected: {account.account_name}")
             self.primary_account = account
             
             # Get backup accounts for failover
@@ -228,7 +228,7 @@ class OptionChainBackgroundService:
                             # self.start_option_chain('SENSEX')  # Will load 4 expiries (328 symbols)
                             # Total: ~984 symbols subscribed automatically
 
-                            logger.info("Option chains DISABLED - using on-demand loading via SessionManager")
+                            logger.debug("Option chains DISABLED - using on-demand loading via SessionManager")
 
                             # START: Position monitor and risk manager (essential services)
                             self.start_position_monitor()
@@ -238,18 +238,18 @@ class OptionChainBackgroundService:
                             # This ensures all services use the SAME connection
                             if self.shared_websocket_manager:
                                 session_manager.set_websocket_manager(self.shared_websocket_manager)
-                                logger.info("SessionManager initialized with shared WebSocket connection")
+                                logger.debug("SessionManager initialized with shared WebSocket connection")
                             else:
                                 logger.warning("No shared WebSocket manager available for SessionManager")
 
-                            logger.info("Position monitor and risk manager started")
+                            logger.debug("Position monitor and risk manager started")
                     else:
                         logger.error("Flask app not set - cannot start services")
 
                 # Spawn background task (greenlet on Linux, thread on Windows)
                 spawn(start_services)
             else:
-                logger.info("Outside trading hours, services will start at market open")
+                logger.debug("Outside trading hours, services will start at market open")
                 
         except Exception as e:
             logger.error(f"Error starting option chains on account connection: {e}")
@@ -272,7 +272,7 @@ class OptionChainBackgroundService:
         
         # Try next backup account
         next_account = self.backup_accounts.pop(0)
-        logger.info(f"Attempting failover to: {next_account.account_name}")
+        logger.debug(f"Attempting failover to: {next_account.account_name}")
         
         try:
             # Test connection
@@ -295,7 +295,7 @@ class OptionChainBackgroundService:
                 for underlying in active_underlyings:
                     self.restart_option_chain(underlying)
                 
-                logger.info(f"Failover successful to: {next_account.account_name}")
+                logger.debug(f"Failover successful to: {next_account.account_name}")
             else:
                 # Try next backup
                 self.attempt_failover()
@@ -339,7 +339,7 @@ class OptionChainBackgroundService:
                     logger.warning(f"Primary account failed to get expiry for {underlying}, trying backup accounts")
                     
                     for backup in self.backup_accounts:
-                        logger.info(f"Trying backup account: {backup.account_name}")
+                        logger.debug(f"Trying backup account: {backup.account_name}")
                         backup_client = ExtendedOpenAlgoAPI(
                             api_key=backup.get_api_key(),
                             host=backup.host_url
@@ -352,7 +352,7 @@ class OptionChainBackgroundService:
                         )
                         
                         if expiry_response.get('status') == 'success':
-                            logger.info(f"Successfully got expiry from backup account: {backup.account_name}")
+                            logger.debug(f"Successfully got expiry from backup account: {backup.account_name}")
                             client = backup_client  # Use backup client for further operations
                             break
                     else:
@@ -376,7 +376,7 @@ class OptionChainBackgroundService:
                 manager_key = f"{underlying}_{exp}"
                 
                 if manager_key in self.active_managers:
-                    logger.info(f"Option chain already running for {manager_key}")
+                    logger.debug(f"Option chain already running for {manager_key}")
                     continue
             
                 # Create or get WebSocket manager for this underlying
@@ -399,7 +399,7 @@ class OptionChainBackgroundService:
                         # Check if we're now connected to a different account
                         current_account = ws_manager.connection_pool.get('current_account')
                         if current_account and current_account != self.primary_account:
-                            logger.info(f"WebSocket failover occurred: now using {current_account.account_name}")
+                            logger.debug(f"WebSocket failover occurred: now using {current_account.account_name}")
                         
                         # Wait for authentication to complete (max 5 seconds)
                         auth_wait_time = 0
@@ -412,7 +412,7 @@ class OptionChainBackgroundService:
                             all_managers_started = False
                             continue
                         
-                        logger.info(f"WebSocket authenticated for {underlying}")
+                        logger.debug(f"WebSocket authenticated for {underlying}")
                     
                     self.websocket_managers[ws_manager_key] = ws_manager
                 else:
@@ -434,7 +434,7 @@ class OptionChainBackgroundService:
                 # Store managers with unique key
                 self.active_managers[manager_key] = option_manager
                 
-                logger.info(f"Option chain started for {manager_key}")
+                logger.debug(f"Option chain started for {manager_key}")
             
             return all_managers_started
             
@@ -452,7 +452,7 @@ class OptionChainBackgroundService:
                     manager = self.active_managers[manager_key]
                     manager.stop_monitoring()
                     del self.active_managers[manager_key]
-                    logger.info(f"Option chain stopped for {manager_key}")
+                    logger.debug(f"Option chain stopped for {manager_key}")
             else:
                 # Stop all expiries for this underlying
                 keys_to_remove = [k for k in self.active_managers.keys() if k.startswith(f"{underlying}_")]
@@ -460,7 +460,7 @@ class OptionChainBackgroundService:
                     manager = self.active_managers[key]
                     manager.stop_monitoring()
                     del self.active_managers[key]
-                    logger.info(f"Option chain stopped for {key}")
+                    logger.debug(f"Option chain stopped for {key}")
                 
                 # Disconnect WebSocket for this underlying
                 if underlying in self.websocket_managers:
@@ -473,7 +473,7 @@ class OptionChainBackgroundService:
     
     def restart_option_chain(self, underlying: str, expiry: str = None):
         """Restart option chain with current primary account"""
-        logger.info(f"Restarting option chain for {underlying} {expiry or 'all expiries'}")
+        logger.debug(f"Restarting option chain for {underlying} {expiry or 'all expiries'}")
         self.stop_option_chain(underlying, expiry)
         self.start_option_chain(underlying, expiry)
     
@@ -528,7 +528,7 @@ class OptionChainBackgroundService:
                     replace_existing=True
                 )
                 
-                logger.info(f"Scheduled {['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][day]}: "
+                logger.debug(f"Scheduled {['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][day]}: "
                           f"WebSocket {pre_market_time.strftime('%H:%M')} - {end_time.strftime('%H:%M')} "
                           f"(Market {start_time.strftime('%H:%M')} - {end_time.strftime('%H:%M')})") 
             
@@ -547,7 +547,7 @@ class OptionChainBackgroundService:
                 replace_existing=True
             )
             
-            logger.info("Market hours scheduled from trading template")
+            logger.debug("Market hours scheduled from trading template")
             
         except Exception as e:
             logger.error(f"Error scheduling market hours: {e}")
@@ -557,7 +557,7 @@ class OptionChainBackgroundService:
     def on_pre_market_open(self):
         """Called 15 minutes before market opens for service initialization"""
         now = datetime.now(pytz.timezone('Asia/Kolkata'))
-        logger.info(f"Pre-market start at {now.strftime('%H:%M:%S')} - Starting services")
+        logger.debug(f"Pre-market start at {now.strftime('%H:%M:%S')} - Starting services")
 
         if self.primary_account:
             if not self.is_holiday():
@@ -570,7 +570,7 @@ class OptionChainBackgroundService:
                         # self.start_option_chain('BANKNIFTY')
                         # self.start_option_chain('SENSEX')
 
-                        logger.info("Option chains DISABLED - using on-demand loading")
+                        logger.debug("Option chains DISABLED - using on-demand loading")
 
                         # START: Position monitor and risk manager (essential services)
                         self.start_position_monitor()
@@ -580,23 +580,23 @@ class OptionChainBackgroundService:
                         ws_manager = self.websocket_managers.get('POSITION_MONITOR') or self.websocket_managers.get('NIFTY')
                         if ws_manager:
                             session_manager.set_websocket_manager(ws_manager)
-                            logger.info("SessionManager initialized with WebSocket manager in pre-market")
+                            logger.debug("SessionManager initialized with WebSocket manager in pre-market")
                         else:
                             logger.warning("No WebSocket manager available for SessionManager in pre-market")
 
-                        logger.info("Position monitor and risk manager started in pre-market")
+                        logger.debug("Position monitor and risk manager started in pre-market")
                 else:
                     logger.error("Flask app not set - cannot start pre-market services")
             else:
-                logger.info("Market holiday - services not started")
+                logger.debug("Market holiday - services not started")
     
     def on_market_open(self):
         """Called when market opens (legacy, kept for compatibility)"""
-        logger.info("Market opened - option chains should already be running from pre-market")
+        logger.debug("Market opened - option chains should already be running from pre-market")
     
     def on_market_close(self):
         """Called when market closes"""
-        logger.info("Market closed - stopping option chains")
+        logger.debug("Market closed - stopping option chains")
         self.stop_all_option_chains()
 
         # NEW: Stop position monitor and risk manager
@@ -645,7 +645,7 @@ class OptionChainBackgroundService:
                 # Include 15-minute pre-market buffer
                 pre_market_time = (datetime.combine(check_date, session['start_time']) - timedelta(minutes=15)).time()
                 if pre_market_time <= check_time <= session['end_time']:
-                    logger.info(f"Special trading session active: {session['session_name']}")
+                    logger.debug(f"Special trading session active: {session['session_name']}")
                     return True
             
             return False
@@ -665,7 +665,7 @@ class OptionChainBackgroundService:
                 holiday_info = self.cached_holidays[check_date]
                 # Check if it's a holiday without special session
                 if not holiday_info.get('is_special_session', False):
-                    logger.info(f"Market holiday: {holiday_info.get('holiday_name', 'Unknown')}")
+                    logger.debug(f"Market holiday: {holiday_info.get('holiday_name', 'Unknown')}")
                     return True
             
             return False
@@ -693,7 +693,7 @@ class OptionChainBackgroundService:
         """Refresh cached trading hours, holidays, and special sessions"""
         try:
             # This method will be called within Flask app context
-            logger.info("Refreshing trading hours cache")
+            logger.debug("Refreshing trading hours cache")
             
             # Cache holidays for the current year
             now = datetime.now(pytz.timezone('Asia/Kolkata'))
@@ -756,7 +756,7 @@ class OptionChainBackgroundService:
                         })
                     
                     self.cache_refresh_time = datetime.now(pytz.timezone('Asia/Kolkata'))
-                    logger.info(f"Cache refreshed: {len(self.cached_holidays)} holidays, "
+                    logger.debug(f"Cache refreshed: {len(self.cached_holidays)} holidays, "
                               f"{len(self.cached_special_sessions)} special session dates, "
                               f"{len(self.cached_sessions)} regular sessions")
                               
@@ -771,7 +771,7 @@ class OptionChainBackgroundService:
     
     def set_default_cache(self):
         """Set default NSE trading hours if database not available"""
-        logger.info("Using default NSE trading hours")
+        logger.debug("Using default NSE trading hours")
         self.cached_sessions = [
             {'day_of_week': i, 'start_time': time(9, 15), 'end_time': time(15, 30), 'is_active': True}
             for i in range(5)  # Monday to Friday
@@ -816,14 +816,14 @@ class OptionChainBackgroundService:
                             args=[session['session_name']]
                         )
                         
-                        logger.info(f"Scheduled special session: {session['session_name']} on {session_date}")
+                        logger.debug(f"Scheduled special session: {session['session_name']} on {session_date}")
                         
         except Exception as e:
             logger.error(f"Error scheduling special sessions: {e}")
     
     def on_special_session_start(self, session_name: str):
         """Called when a special trading session starts"""
-        logger.info(f"Special session started: {session_name}")
+        logger.debug(f"Special session started: {session_name}")
         if self.primary_account:
             self.start_option_chain('NIFTY')
             self.start_option_chain('BANKNIFTY')
@@ -831,12 +831,12 @@ class OptionChainBackgroundService:
     
     def on_special_session_end(self, session_name: str):
         """Called when a special trading session ends"""
-        logger.info(f"Special session ended: {session_name}")
+        logger.debug(f"Special session ended: {session_name}")
         self.stop_all_option_chains()
 
     def schedule_default_hours(self):
         """Fallback to schedule default NSE hours"""
-        logger.info("Scheduling default NSE hours as fallback")
+        logger.debug("Scheduling default NSE hours as fallback")
         for day in range(5):  # Monday to Friday
             # Schedule pre-market start (9:00 AM - 15 minutes before market)
             self.scheduler.add_job(
@@ -869,7 +869,7 @@ class OptionChainBackgroundService:
     def start_position_monitor(self):
         """Start position monitoring (subscribes to open positions only)"""
         if self.position_monitor_running:
-            logger.info("Position monitor already running")
+            logger.debug("Position monitor already running")
             return
 
         try:
@@ -884,7 +884,7 @@ class OptionChainBackgroundService:
             # Start position monitor with shared WebSocket manager and Flask app
             position_monitor.start(ws_manager, app=self.flask_app)
             self.position_monitor_running = True
-            logger.info("✅ Position monitor started with shared WebSocket connection")
+            logger.debug("✅ Position monitor started with shared WebSocket connection")
 
         except Exception as e:
             logger.error(f"Error starting position monitor: {e}")
@@ -897,7 +897,7 @@ class OptionChainBackgroundService:
         try:
             position_monitor.stop()
             self.position_monitor_running = False
-            logger.info("Position monitor stopped")
+            logger.debug("Position monitor stopped")
 
             # DO NOT disconnect shared WebSocket - other services may be using it
             # Shared WebSocket is only disconnected when service stops completely
@@ -908,13 +908,13 @@ class OptionChainBackgroundService:
     def start_risk_manager(self):
         """Start risk manager"""
         if self.risk_manager_running:
-            logger.info("Risk manager already running")
+            logger.debug("Risk manager already running")
             return
 
         try:
             risk_manager.start()
             self.risk_manager_running = True
-            logger.info("Risk manager started")
+            logger.debug("Risk manager started")
         except Exception as e:
             logger.error(f"Error starting risk manager: {e}")
 
@@ -926,7 +926,7 @@ class OptionChainBackgroundService:
         try:
             risk_manager.stop()
             self.risk_manager_running = False
-            logger.info("Risk manager stopped")
+            logger.debug("Risk manager stopped")
         except Exception as e:
             logger.error(f"Error stopping risk manager: {e}")
 

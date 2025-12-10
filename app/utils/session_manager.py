@@ -52,7 +52,7 @@ class SessionManager:
         self.option_chain_manager = None
         self.session_timeout_minutes = 5
 
-        logger.info("SessionManager initialized")
+        logger.debug("SessionManager initialized")
 
     def create_session(
         self,
@@ -95,7 +95,7 @@ class SessionManager:
             db.session.add(session)
             db.session.commit()
 
-            logger.info(
+            logger.debug(
                 f"Created session {session_id} for user {user_id}: "
                 f"{underlying} {expiry}"
             )
@@ -196,7 +196,7 @@ class SessionManager:
             session.subscribed_symbols = subscribed_symbols
             db.session.commit()
 
-            logger.info(
+            logger.debug(
                 f"Session {session.session_id}: Subscribed to {len(subscribed_symbols)} symbols "
                 f"({num_strikes * 2 + 2} strikes)"
             )
@@ -274,7 +274,7 @@ class SessionManager:
             db.session.delete(session)
             db.session.commit()
 
-            logger.info(f"Session {session_id} destroyed")
+            logger.debug(f"Session {session_id} destroyed")
             return True
 
         except Exception as e:
@@ -301,7 +301,7 @@ class SessionManager:
                     'exchange': exchange
                 })
 
-            logger.info(
+            logger.debug(
                 f"Unsubscribed {len(session.subscribed_symbols)} symbols "
                 f"for session {session.session_id}"
             )
@@ -326,7 +326,7 @@ class SessionManager:
             if not expired_sessions:
                 return
 
-            logger.info(f"Cleaning up {len(expired_sessions)} expired sessions")
+            logger.debug(f"Cleaning up {len(expired_sessions)} expired sessions")
 
             for session in expired_sessions:
                 # Unsubscribe from symbols
@@ -337,7 +337,7 @@ class SessionManager:
 
             db.session.commit()
 
-            logger.info(f"Cleaned up {len(expired_sessions)} expired sessions")
+            logger.debug(f"Cleaned up {len(expired_sessions)} expired sessions")
 
         except Exception as e:
             logger.error(f"Error cleaning up expired sessions: {e}")
@@ -373,7 +373,7 @@ class SessionManager:
             websocket_manager: ProfessionalWebSocketManager instance
         """
         self.websocket_manager = websocket_manager
-        logger.info("WebSocket manager set for SessionManager")
+        logger.debug("WebSocket manager set for SessionManager")
 
     def set_option_chain_manager(self, option_chain_manager):
         """
@@ -383,7 +383,7 @@ class SessionManager:
             option_chain_manager: OptionChainManager instance
         """
         self.option_chain_manager = option_chain_manager
-        logger.info("Option chain manager set for SessionManager")
+        logger.debug("Option chain manager set for SessionManager")
 
     def get_status(self) -> Dict:
         """

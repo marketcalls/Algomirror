@@ -52,7 +52,7 @@ class OrderStatusPoller:
         self.poller_thread = None
         self.last_check_time: Dict[str, datetime] = {}  # account_key: last_check_time
         self._initialized = True
-        logger.info("Order Status Poller initialized")
+        logger.debug("Order Status Poller initialized")
 
     def start(self):
         """Start the background polling service"""
@@ -60,7 +60,7 @@ class OrderStatusPoller:
             self.is_running = True
             self.poller_thread = threading.Thread(target=self._poll_loop, daemon=True, name="OrderStatusPoller")
             self.poller_thread.start()
-            logger.info("[STARTED] Order Status Poller started")
+            logger.debug("[STARTED] Order Status Poller started")
 
     def stop(self):
         """Stop the background polling service"""
@@ -70,7 +70,7 @@ class OrderStatusPoller:
                 self.poller_thread.join(timeout=5)
             except Exception:
                 pass
-        logger.info("[STOPPED] Order Status Poller stopped")
+        logger.debug("[STOPPED] Order Status Poller stopped")
 
     def add_order(self, execution_id: int, account, order_id: str, strategy_name: str):
         """Add an order to the polling queue"""
@@ -408,12 +408,12 @@ class OrderStatusPoller:
                         'check_count': 0
                     }
                     recovered_count += 1
-                    logger.info(f"[RECOVERY] Recovered {execution.status} order {order_id_to_poll} for execution {execution.id}")
+                    logger.debug(f"[RECOVERY] Recovered {execution.status} order {order_id_to_poll} for execution {execution.id}")
 
             if recovered_count > 0:
-                logger.info(f"[RECOVERY] Recovered {recovered_count} pending orders to polling queue")
+                logger.debug(f"[RECOVERY] Recovered {recovered_count} pending orders to polling queue")
             else:
-                logger.info(f"[RECOVERY] No pending orders to recover")
+                logger.debug(f"[RECOVERY] No pending orders to recover")
 
             if app:
                 ctx.pop()

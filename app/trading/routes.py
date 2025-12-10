@@ -474,8 +474,8 @@ def option_chain_stream(underlying):
     expiry = request.args.get('expiry')
 
     # Log outside the generator where we have app context
-    current_app.logger.info(f"[SSE] Starting stream for {underlying} with expiry {expiry}")
-    current_app.logger.info(f"[SSE] Active managers: {list(option_chain_service.active_managers.keys())}")
+    current_app.logger.debug(f"[SSE] Starting stream for {underlying} with expiry {expiry}")
+    current_app.logger.debug(f"[SSE] Active managers: {list(option_chain_service.active_managers.keys())}")
     
     def generate():
         # Determine the manager key to use
@@ -1502,16 +1502,16 @@ def risk_status_stream():
     from app.utils.background_service import option_chain_service
     import re
 
-    current_app.logger.info(f"[RiskMonitorSSE] Stream requested by user {current_user.id}")
+    current_app.logger.debug(f"[RiskMonitorSSE] Stream requested by user {current_user.id}")
 
     # Ensure position monitor is running for real-time LTP updates
     if not option_chain_service.position_monitor_running:
-        current_app.logger.info("[RiskMonitorSSE] Starting position monitor for real-time LTP")
+        current_app.logger.debug("[RiskMonitorSSE] Starting position monitor for real-time LTP")
         option_chain_service.start_position_monitor()
 
     # Ensure risk manager is running for SL/TP execution
     if not option_chain_service.risk_manager_running:
-        current_app.logger.info("[RiskMonitorSSE] Starting risk manager for SL/TP execution")
+        current_app.logger.debug("[RiskMonitorSSE] Starting risk manager for SL/TP execution")
         option_chain_service.start_risk_manager()
 
     # Capture context before entering generator (request/app context not available in generator)
@@ -1570,7 +1570,7 @@ def risk_status_stream():
                 exit_action = 'SELL' if entry_action == 'BUY' else 'BUY'
 
                 # Place exit order using keyword arguments
-                app.logger.info(f"[RISK MONITOR] Placing exit order: symbol={symbol}, action={exit_action}, qty={quantity}")
+                app.logger.debug(f"[RISK MONITOR] Placing exit order: symbol={symbol}, action={exit_action}, qty={quantity}")
                 response = client.placeorder(
                     strategy=strategy.name,
                     symbol=symbol,

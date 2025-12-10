@@ -182,7 +182,7 @@ class MarginCalculator:
         key = (trade_type, is_expiry)
         margin = margin_map.get(key, 0)
 
-        logger.info(f"Margin for {instrument} {trade_type} (expiry={is_expiry}): {margin}")
+        logger.debug(f"Margin for {instrument} {trade_type} (expiry={is_expiry}): {margin}")
         return margin
 
     def calculate_lot_size(self,
@@ -238,7 +238,7 @@ class MarginCalculator:
                     "margin_remaining": available_margin,
                     "calculation": "Option buying doesn't block any margin - lots not limited by margin"
                 }
-                logger.info(f"Option buying for {account.account_name}: No margin blocked")
+                logger.debug(f"Option buying for {account.account_name}: No margin blocked")
                 return 0, details
 
             if margin_per_lot < 0:
@@ -267,7 +267,7 @@ class MarginCalculator:
                 "calculation": f"{available_margin:.2f} × {quality.margin_percentage}% / {margin_per_lot:.2f} = {raw_lot_size:.3f} = {lot_size} lots"
             }
 
-            logger.info(f"Lot calculation for {account.account_name}: {details['calculation']}")
+            logger.debug(f"Lot calculation for {account.account_name}: {details['calculation']}")
             return lot_size, details
 
         except Exception as e:
@@ -299,30 +299,30 @@ class MarginCalculator:
             Tuple of (lot_size, calculation_details)
         """
         try:
-            logger.info(f"[LOT CALC DEBUG] Starting custom lot calculation for {account.account_name}")
-            logger.info(f"[LOT CALC DEBUG] Instrument: {instrument}, Trade Type: {trade_type}, Margin %: {margin_percentage*100}%, Source: {margin_source}")
+            logger.debug(f"[LOT CALC DEBUG] Starting custom lot calculation for {account.account_name}")
+            logger.debug(f"[LOT CALC DEBUG] Instrument: {instrument}, Trade Type: {trade_type}, Margin %: {margin_percentage*100}%, Source: {margin_source}")
 
             # Get available margin if not provided
             if available_margin is None:
                 # Check if it's a manual calculation (dummy account)
                 if hasattr(account, 'available_margin'):
                     available_margin = account.available_margin
-                    logger.info(f"[LOT CALC DEBUG] Using account.available_margin: {available_margin:,.2f}")
+                    logger.debug(f"[LOT CALC DEBUG] Using account.available_margin: {available_margin:,.2f}")
                 else:
                     available_margin = self.get_available_margin(account)
-                    logger.info(f"[LOT CALC DEBUG] Fetched available margin: {available_margin:,.2f}")
+                    logger.debug(f"[LOT CALC DEBUG] Fetched available margin: {available_margin:,.2f}")
             else:
-                logger.info(f"[LOT CALC DEBUG] Using provided available margin: {available_margin:,.2f}")
+                logger.debug(f"[LOT CALC DEBUG] Using provided available margin: {available_margin:,.2f}")
 
             # Determine margin per lot based on margin_source
             if margin_source == 'cash':
                 # Option Buyer mode: Get premium per lot from database
                 margin_per_lot = self.get_option_buying_premium(instrument)
-                logger.info(f"[LOT CALC DEBUG] Option Buyer mode: Using premium Rs {margin_per_lot:,}/lot from database")
+                logger.debug(f"[LOT CALC DEBUG] Option Buyer mode: Using premium Rs {margin_per_lot:,}/lot from database")
             else:
                 # Option Seller mode: Get margin requirement from table
                 margin_per_lot = self.get_margin_requirement(instrument, trade_type, is_expiry=is_expiry)
-                logger.info(f"[LOT CALC DEBUG] Option Seller mode: Margin per lot Rs {margin_per_lot:,.2f} (is_expiry={is_expiry})")
+                logger.debug(f"[LOT CALC DEBUG] Option Seller mode: Margin per lot Rs {margin_per_lot:,.2f} (is_expiry={is_expiry})")
 
             # Special case: If margin requirement is 0 and NOT option buyer mode
             if margin_per_lot == 0 and margin_source != 'cash':
@@ -337,7 +337,7 @@ class MarginCalculator:
                     "margin_remaining": available_margin,
                     "calculation": "Option buying doesn't block any margin - lots not limited by margin"
                 }
-                logger.info(f"[LOT CALC DEBUG] Option buying for {account.account_name}: No margin blocked")
+                logger.debug(f"[LOT CALC DEBUG] Option buying for {account.account_name}: No margin blocked")
                 return 0, details
 
             if margin_per_lot < 0:
@@ -346,15 +346,15 @@ class MarginCalculator:
 
             # Calculate effective available margin using custom percentage
             effective_margin = available_margin * margin_percentage
-            logger.info(f"[LOT CALC DEBUG] Effective margin (₹{available_margin:,.2f} × {margin_percentage*100}%): ₹{effective_margin:,.2f}")
+            logger.debug(f"[LOT CALC DEBUG] Effective margin (₹{available_margin:,.2f} × {margin_percentage*100}%): ₹{effective_margin:,.2f}")
 
             # Calculate raw lot size
             raw_lot_size = effective_margin / margin_per_lot
-            logger.info(f"[LOT CALC DEBUG] Raw lot size (₹{effective_margin:,.2f} / ₹{margin_per_lot:,.2f}): {raw_lot_size:.3f}")
+            logger.debug(f"[LOT CALC DEBUG] Raw lot size (₹{effective_margin:,.2f} / ₹{margin_per_lot:,.2f}): {raw_lot_size:.3f}")
 
             # Round down to nearest integer
             lot_size = int(raw_lot_size)
-            logger.info(f"[LOT CALC DEBUG] Final lot size (rounded down): {lot_size}")
+            logger.debug(f"[LOT CALC DEBUG] Final lot size (rounded down): {lot_size}")
 
             # Prepare calculation details
             details = {
@@ -369,8 +369,8 @@ class MarginCalculator:
                 "calculation": f"{available_margin:.2f} × {margin_percentage*100}% / {margin_per_lot:.2f} = {raw_lot_size:.3f} = {lot_size} lots"
             }
 
-            logger.info(f"[LOT CALC DEBUG] Margin required: ₹{details['margin_required']:,.2f}, Remaining: ₹{details['margin_remaining']:,.2f}")
-            logger.info(f"Custom margin lot calculation for {account.account_name}: {details['calculation']}")
+            logger.debug(f"[LOT CALC DEBUG] Margin required: ₹{details['margin_required']:,.2f}, Remaining: ₹{details['margin_remaining']:,.2f}")
+            logger.debug(f"Custom margin lot calculation for {account.account_name}: {details['calculation']}")
             return lot_size, details
 
         except Exception as e:
@@ -387,7 +387,7 @@ class MarginCalculator:
                           If False, use cached data if available and < 5 minutes old
         """
         try:
-            logger.info(f"[MARGIN DEBUG] Getting available margin for account: {account.account_name} (ID: {account.id}), force_refresh={force_refresh}")
+            logger.debug(f"[MARGIN DEBUG] Getting available margin for account: {account.account_name} (ID: {account.id}), force_refresh={force_refresh}")
 
             # Check if account has margin tracker
             tracker = MarginTracker.query.filter_by(account_id=account.id).first()
@@ -395,37 +395,37 @@ class MarginCalculator:
             # Only use cached data if force_refresh is False and cache is recent
             if not force_refresh and tracker and tracker.last_updated:
                 time_diff = (datetime.utcnow() - tracker.last_updated).seconds
-                logger.info(f"[MARGIN DEBUG] Found tracker, last updated {time_diff} seconds ago")
+                logger.debug(f"[MARGIN DEBUG] Found tracker, last updated {time_diff} seconds ago")
                 if time_diff < 300:  # 5 minutes
-                    logger.info(f"[MARGIN DEBUG] Using cached margin: ₹{tracker.free_margin:,.2f}")
+                    logger.debug(f"[MARGIN DEBUG] Using cached margin: ₹{tracker.free_margin:,.2f}")
                     return tracker.free_margin
 
             # Fetch fresh margin data from API
-            logger.info(f"[MARGIN DEBUG] Fetching fresh margin data from API: {account.host_url}")
+            logger.debug(f"[MARGIN DEBUG] Fetching fresh margin data from API: {account.host_url}")
             client = ExtendedOpenAlgoAPI(
                 api_key=account.get_api_key(),
                 host=account.host_url
             )
 
             response = client.funds()
-            logger.info(f"[MARGIN DEBUG] API Response status: {response.get('status')}")
+            logger.debug(f"[MARGIN DEBUG] API Response status: {response.get('status')}")
 
             if response.get('status') == 'success':
                 funds_data = response.get('data', {})
-                logger.info(f"[MARGIN DEBUG] Funds data received: {funds_data}")
+                logger.debug(f"[MARGIN DEBUG] Funds data received: {funds_data}")
 
                 # Create or update margin tracker
                 if not tracker:
                     tracker = MarginTracker(account_id=account.id)
                     from app import db
                     db.session.add(tracker)
-                    logger.info(f"[MARGIN DEBUG] Created new MarginTracker for account {account.id}")
+                    logger.debug(f"[MARGIN DEBUG] Created new MarginTracker for account {account.id}")
 
                 tracker.update_margins(funds_data)
                 from app import db
                 db.session.commit()
 
-                logger.info(f"[MARGIN DEBUG] Updated tracker - Free margin: ₹{tracker.free_margin:,.2f}, Used margin: ₹{tracker.used_margin:,.2f}")
+                logger.debug(f"[MARGIN DEBUG] Updated tracker - Free margin: ₹{tracker.free_margin:,.2f}, Used margin: ₹{tracker.used_margin:,.2f}")
                 return tracker.free_margin
 
             else:
@@ -433,7 +433,7 @@ class MarginCalculator:
                 # Fallback to cached data if available
                 if account.last_funds_data:
                     fallback_margin = account.last_funds_data.get('totalcash', 0)
-                    logger.info(f"[MARGIN DEBUG] Using fallback margin from last_funds_data: ₹{fallback_margin:,.2f}")
+                    logger.debug(f"[MARGIN DEBUG] Using fallback margin from last_funds_data: ₹{fallback_margin:,.2f}")
                     return fallback_margin
                 logger.warning(f"[MARGIN DEBUG] No fallback data available, returning 0")
                 return 0
@@ -457,7 +457,7 @@ class MarginCalculator:
             Cash margin amount (availablecash from API)
         """
         try:
-            logger.info(f"[CASH MARGIN] Getting cash margin for account: {account.account_name}")
+            logger.debug(f"[CASH MARGIN] Getting cash margin for account: {account.account_name}")
 
             # Fetch fresh funds data from API
             client = ExtendedOpenAlgoAPI(
@@ -471,14 +471,14 @@ class MarginCalculator:
                 funds_data = response.get('data', {})
                 # Get availablecash - this is pure cash without collateral
                 cash_margin = float(funds_data.get('availablecash', 0))
-                logger.info(f"[CASH MARGIN] Cash margin for {account.account_name}: {cash_margin:,.2f}")
+                logger.debug(f"[CASH MARGIN] Cash margin for {account.account_name}: {cash_margin:,.2f}")
                 return cash_margin
             else:
                 logger.warning(f"[CASH MARGIN] API call failed, using cached data")
                 # Fallback to cached data
                 if account.last_funds_data:
                     cash_margin = float(account.last_funds_data.get('availablecash', 0))
-                    logger.info(f"[CASH MARGIN] Using cached cash margin: {cash_margin:,.2f}")
+                    logger.debug(f"[CASH MARGIN] Using cached cash margin: {cash_margin:,.2f}")
                     return cash_margin
                 return 0
 
@@ -509,7 +509,7 @@ class MarginCalculator:
             Tuple of (number_of_lots, calculation_details)
         """
         try:
-            logger.info(f"[OPTION BUY] Calculating lots for {instrument} option buying")
+            logger.debug(f"[OPTION BUY] Calculating lots for {instrument} option buying")
 
             # Get quality settings
             quality = self.trade_qualities.get(quality_grade)
@@ -555,7 +555,7 @@ class MarginCalculator:
                 "calculation": f"Cash {cash_margin:,.2f} x {quality.margin_percentage}% = {premium_budget:,.2f} budget / {premium_per_lot:,.2f} per lot = {final_lots} lots"
             }
 
-            logger.info(f"[OPTION BUY] {account.account_name}: {details['calculation']}")
+            logger.debug(f"[OPTION BUY] {account.account_name}: {details['calculation']}")
             return final_lots, details
 
         except Exception as e:

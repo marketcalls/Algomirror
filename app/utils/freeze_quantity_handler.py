@@ -36,7 +36,7 @@ def get_freeze_quantity(user_id: int, symbol: str) -> int:
     ).first()
 
     if setting:
-        logger.info(f"Freeze quantity for {base_symbol}: {setting.freeze_quantity}")
+        logger.debug(f"Freeze quantity for {base_symbol}: {setting.freeze_quantity}")
         return setting.freeze_quantity
 
     # Default freeze quantities if not found (as per NSE circular Dec 2025)
@@ -67,9 +67,9 @@ def should_split_order(user_id: int, symbol: str, quantity: int) -> Tuple[bool, 
     should_split = quantity > freeze_qty
 
     if should_split:
-        logger.info(f"Order quantity {quantity} exceeds freeze limit {freeze_qty} for {symbol} - will use splitorder")
+        logger.debug(f"Order quantity {quantity} exceeds freeze limit {freeze_qty} for {symbol} - will use splitorder")
     else:
-        logger.info(f"Order quantity {quantity} within freeze limit {freeze_qty} for {symbol} - will use placeorder")
+        logger.debug(f"Order quantity {quantity} within freeze limit {freeze_qty} for {symbol} - will use placeorder")
 
     return should_split, freeze_qty
 
@@ -94,7 +94,7 @@ def place_order_with_freeze_check(client, user_id: int, **order_params) -> Dict:
 
     if should_split:
         # Use splitorder for large quantities
-        logger.info(f"Placing split order: {quantity} qty with split size {freeze_qty}")
+        logger.debug(f"Placing split order: {quantity} qty with split size {freeze_qty}")
 
         # Extract parameters for splitorder
         # Build splitorder parameters dynamically based on order type
@@ -145,5 +145,5 @@ def place_order_with_freeze_check(client, user_id: int, **order_params) -> Dict:
         return response
     else:
         # Use regular placeorder
-        logger.info(f"Placing regular order: {quantity} qty")
+        logger.debug(f"Placing regular order: {quantity} qty")
         return client.placeorder(**order_params)

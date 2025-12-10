@@ -60,7 +60,7 @@ class OptionChainManager:
     def initialize(self, api_client):
         """Setup option chain with depth subscriptions"""
         if self.initialized:
-            logger.info(f"Option chain already initialized for {self.underlying}")
+            logger.debug(f"Option chain already initialized for {self.underlying}")
             return True
             
         self.api_client = api_client
@@ -77,7 +77,7 @@ class OptionChainManager:
             if self.underlying_ltp and self.underlying_ltp > 0:
                 # Calculate ATM strike from existing LTP
                 self.atm_strike = round(self.underlying_ltp / self.strike_step) * self.strike_step
-                logger.info(f"{self.underlying} LTP: {self.underlying_ltp}, ATM: {self.atm_strike} (from cached)")
+                logger.debug(f"{self.underlying} LTP: {self.underlying_ltp}, ATM: {self.atm_strike} (from cached)")
                 return self.atm_strike
             
             # Otherwise fetch underlying quote from API
@@ -93,7 +93,7 @@ class OptionChainManager:
                 # Calculate ATM strike
                 if self.underlying_ltp > 0:
                     self.atm_strike = round(self.underlying_ltp / self.strike_step) * self.strike_step
-                    logger.info(f"{self.underlying} LTP: {self.underlying_ltp}, ATM: {self.atm_strike} (from API)")
+                    logger.debug(f"{self.underlying} LTP: {self.underlying_ltp}, ATM: {self.atm_strike} (from API)")
                     return self.atm_strike
                 else:
                     logger.warning(f"Invalid LTP received for {self.underlying}: {self.underlying_ltp}")
@@ -164,7 +164,7 @@ class OptionChainManager:
                 'strike': strike, 'type': 'PE'
             }
         
-        logger.info(f"Generated {len(strikes)} strikes for {self.underlying}")
+        logger.debug(f"Generated {len(strikes)} strikes for {self.underlying}")
     
     def construct_option_symbol(self, strike, option_type):
         """Construct OpenAlgo option symbol"""
@@ -255,7 +255,7 @@ class OptionChainManager:
         # Batch subscribe to all options in depth mode for efficiency
         self.batch_subscribe_options()
         
-        logger.info(f"Setup depth subscriptions for {self.underlying} option chain")
+        logger.debug(f"Setup depth subscriptions for {self.underlying} option chain")
     
     def subscribe_underlying_quote(self):
         """Subscribe to underlying index in quote mode"""
@@ -309,7 +309,7 @@ class OptionChainManager:
         batch_size = 20
         for i in range(0, len(instruments), batch_size):
             batch = instruments[i:i + batch_size]
-            logger.info(f"Subscribing to batch of {len(batch)} option instruments in depth mode")
+            logger.debug(f"Subscribing to batch of {len(batch)} option instruments in depth mode")
             
             # Subscribe to depth mode (includes quote data)
             # Depth mode provides: LTP, Volume, Bid/Ask with quantities
@@ -334,11 +334,11 @@ class OptionChainManager:
                 self.atm_strike = self.calculate_atm()
                 
                 if old_atm != self.atm_strike:
-                    logger.info(f"[ATM_UPDATE] ATM strike changed from {old_atm} to {self.atm_strike} (spot: {self.underlying_ltp})")
+                    logger.debug(f"[ATM_UPDATE] ATM strike changed from {old_atm} to {self.atm_strike} (spot: {self.underlying_ltp})")
                     
                     # If strikes haven't been generated yet (option_data is empty), generate them now
                     if not self.option_data:
-                        logger.info(f"[STRIKE_GEN] Generating strikes for {self.underlying} with ATM {self.atm_strike}")
+                        logger.debug(f"[STRIKE_GEN] Generating strikes for {self.underlying} with ATM {self.atm_strike}")
                         self.generate_strikes()
                         # Also setup subscriptions if not done yet
                         if self.websocket_manager and self.websocket_manager.authenticated:
@@ -424,7 +424,7 @@ class OptionChainManager:
                 best_ask = float(ltp) * 1.005  # 0.5% above LTP
                 bid_qty = 100  # Default quantity
                 ask_qty = 100
-                logger.info(f"[FALLBACK] No bid/ask, using LTP-based approximation: bid={best_bid:.2f}, ask={best_ask:.2f}")
+                logger.debug(f"[FALLBACK] No bid/ask, using LTP-based approximation: bid={best_bid:.2f}, ask={best_ask:.2f}")
             
             depth_data = {
                 'ltp': float(ltp) if ltp else 0,
@@ -575,12 +575,12 @@ class OptionChainManager:
     def start_monitoring(self):
         """Start background monitoring"""
         self.monitoring_active = True
-        logger.info(f"Started monitoring option chain for {self.underlying}")
+        logger.debug(f"Started monitoring option chain for {self.underlying}")
     
     def stop_monitoring(self):
         """Stop background monitoring"""
         self.monitoring_active = False
-        logger.info(f"Stopped monitoring option chain for {self.underlying}")
+        logger.debug(f"Stopped monitoring option chain for {self.underlying}")
     
     def is_active(self):
         """Check if option chain monitoring is active"""

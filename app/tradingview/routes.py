@@ -70,7 +70,7 @@ def strategy_monitor(strategy_id):
                 'leg_number': leg.leg_number if leg else None
             })
 
-    logger.info(f"Found {len(placed_symbols)} unique placed symbols for strategy {strategy_id}")
+    logger.debug(f"Found {len(placed_symbols)} unique placed symbols for strategy {strategy_id}")
 
     return render_template('tradingview/strategy_monitor.html',
                          strategy=strategy,
@@ -137,10 +137,10 @@ def get_chart_data(strategy_id):
         # Filter legs to only include those with open positions
         if open_leg_ids:
             legs = [leg for leg in all_legs if leg.id in open_leg_ids]
-            logger.info(f"Strategy {strategy_id}: Filtered from {len(all_legs)} to {len(legs)} legs with open positions (leg_ids: {open_leg_ids})")
+            logger.debug(f"Strategy {strategy_id}: Filtered from {len(all_legs)} to {len(legs)} legs with open positions (leg_ids: {open_leg_ids})")
         else:
             # No open positions - return zero combined premium
-            logger.info(f"Strategy {strategy_id}: All positions closed, returning zero combined premium")
+            logger.debug(f"Strategy {strategy_id}: All positions closed, returning zero combined premium")
             return jsonify({
                 'status': 'success',
                 'data': [{
@@ -211,7 +211,7 @@ def get_chart_data(strategy_id):
         else:  # direction = 1 (bearish)
             signal = 'SELL'
 
-        logger.info(f"Returning {len(chart_data)} bars of REAL OHLC data to frontend with Supertrend signal: {signal} (active legs: {len(legs)}/{len(all_legs)})")
+        logger.debug(f"Returning {len(chart_data)} bars of REAL OHLC data to frontend with Supertrend signal: {signal} (active legs: {len(legs)}/{len(all_legs)})")
 
         return jsonify({
             'status': 'success',
@@ -314,13 +314,13 @@ def fetch_spread_historical_data(strategy, legs, interval='5m', days=3):
                 if leg.id in leg_symbols:
                     symbol = leg_symbols[leg.id]['symbol']
                     exchange = leg_symbols[leg.id]['exchange']
-                    logger.info(f"Using ACTUAL placed symbol: {symbol}")
+                    logger.debug(f"Using ACTUAL placed symbol: {symbol}")
                 else:
                     symbol = leg.instrument
                     exchange = 'NSE'
                     logger.warning(f"No placed symbol found for leg {leg.leg_number}, using base instrument: {symbol}")
 
-                logger.info(f"Fetching {interval} data for {symbol} from {start_date_str} to {end_date_str}")
+                logger.debug(f"Fetching {interval} data for {symbol} from {start_date_str} to {end_date_str}")
 
                 # Fetch historical data from OpenAlgo
                 response = client.history(
@@ -346,15 +346,15 @@ def fetch_spread_historical_data(strategy, legs, interval='5m', days=3):
                             'lots': lots,  # Number of lots (NOT total quantity)
                             'leg_number': leg.leg_number
                         }
-                        logger.info(f"Fetched REAL {len(response)} bars for leg {leg.leg_number} ({symbol}) - {leg.action} x{lots} lots - OHLC data from OpenAlgo")
-                        logger.info(f"  Sample data - Open: {response['open'].iloc[-1]:.2f}, High: {response['high'].iloc[-1]:.2f}, Low: {response['low'].iloc[-1]:.2f}, Close: {response['close'].iloc[-1]:.2f}")
+                        logger.debug(f"Fetched REAL {len(response)} bars for leg {leg.leg_number} ({symbol}) - {leg.action} x{lots} lots - OHLC data from OpenAlgo")
+                        logger.debug(f"  Sample data - Open: {response['open'].iloc[-1]:.2f}, High: {response['high'].iloc[-1]:.2f}, Low: {response['low'].iloc[-1]:.2f}, Close: {response['close'].iloc[-1]:.2f}")
                     else:
                         logger.error(f"Missing OHLC columns in response for {symbol}. Columns: {response.columns.tolist()}")
                 elif isinstance(response, dict):
                     # API returned error response
                     error_msg = response.get('message', str(response))
                     logger.error(f"OpenAlgo API error for {symbol}: {error_msg}")
-                    logger.info(f"Full error response: {response}")
+                    logger.debug(f"Full error response: {response}")
 
                     # Try falling back to base instrument (NIFTY/BANKNIFTY)
                     if leg.id in leg_symbols:
@@ -377,7 +377,7 @@ def fetch_spread_historical_data(strategy, legs, interval='5m', days=3):
                                         'lots': lots,
                                         'leg_number': leg.leg_number
                                     }
-                                    logger.info(f"Fetched {len(fallback_response)} bars for leg {leg.leg_number} using fallback instrument ({leg.instrument})")
+                                    logger.debug(f"Fetched {len(fallback_response)} bars for leg {leg.leg_number} using fallback instrument ({leg.instrument})")
                         except Exception as fallback_error:
                             logger.error(f"Fallback to base instrument also failed: {fallback_error}")
                 else:
@@ -394,7 +394,7 @@ def fetch_spread_historical_data(strategy, legs, interval='5m', days=3):
 
         # Combine OHLC data from multiple legs into spread
         # For Supertrend to work correctly, we need proper high/low values, not just close
-        logger.info(f"Calculating combined spread OHLC from {len(leg_data_dict)} legs...")
+        logger.debug(f"Calculating combined spread OHLC from {len(leg_data_dict)} legs...")
 
         # Initialize combined OHLC
         common_index = None
@@ -420,9 +420,9 @@ def fetch_spread_historical_data(strategy, legs, interval='5m', days=3):
                 leg_high = -leg_high
                 leg_low = -leg_low
                 leg_close = -leg_close
-                logger.info(f"  Leg {leg_number}: BUY (negative contribution)")
+                logger.debug(f"  Leg {leg_number}: BUY (negative contribution)")
             else:
-                logger.info(f"  Leg {leg_number}: SELL (positive contribution)")
+                logger.debug(f"  Leg {leg_number}: SELL (positive contribution)")
 
             # Build common index (intersection of all timestamps)
             if common_index is None:
@@ -467,14 +467,14 @@ def fetch_spread_historical_data(strategy, legs, interval='5m', days=3):
             'close': combined_close
         })
 
-        logger.info(f"  Combined spread OHLC with proper high/low values for Supertrend")
+        logger.debug(f"  Combined spread OHLC with proper high/low values for Supertrend")
 
         if combined_df is None or combined_df.empty:
             logger.error("Failed to calculate spread")
             return None
 
-        logger.info(f"Successfully combined {len(leg_data_dict)} legs into spread OHLC with {len(combined_df)} bars (REAL DATA)")
-        logger.info(f"  Latest spread - Open: {combined_df['open'].iloc[-1]:.2f}, High: {combined_df['high'].iloc[-1]:.2f}, Low: {combined_df['low'].iloc[-1]:.2f}, Close: {combined_df['close'].iloc[-1]:.2f}")
+        logger.debug(f"Successfully combined {len(leg_data_dict)} legs into spread OHLC with {len(combined_df)} bars (REAL DATA)")
+        logger.debug(f"  Latest spread - Open: {combined_df['open'].iloc[-1]:.2f}, High: {combined_df['high'].iloc[-1]:.2f}, Low: {combined_df['low'].iloc[-1]:.2f}, Close: {combined_df['close'].iloc[-1]:.2f}")
 
         return combined_df
 

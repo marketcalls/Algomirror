@@ -22,7 +22,7 @@ def log_activity(action, details=None, status='success', error_message=None):
         db.session.add(log_entry)
         db.session.commit()
         
-        current_app.logger.info(
+        current_app.logger.debug(
             f'User activity: {action}',
             extra={
                 'event': 'user_activity',
@@ -124,7 +124,7 @@ def register():
             db.session.add(user)
             db.session.commit()
 
-            current_app.logger.info(
+            current_app.logger.debug(
                 f'First user registered: {user.username} (Admin)',
                 extra={
                     'event': 'user_registration',

@@ -133,7 +133,7 @@ def dashboard():
         'total_m2m_pnl': 0  # Will be calculated client-side
     }
 
-    current_app.logger.info(
+    current_app.logger.debug(
         f'Dashboard accessed by user {current_user.username}',
         extra={
             'event': 'dashboard_access',
@@ -235,7 +235,7 @@ def account_positions():
             'total_positions': total_positions
         })
 
-    current_app.logger.info(
+    current_app.logger.debug(
         f'Account positions page accessed by user {current_user.username}',
         extra={
             'event': 'account_positions_access',
@@ -297,7 +297,7 @@ def close_account_positions(account_id):
             'message': 'No open positions to close'
         })
 
-    current_app.logger.info(f"[ACCOUNT CLOSE ALL] Closing {len(open_executions)} positions for account {account_id}")
+    current_app.logger.debug(f"[ACCOUNT CLOSE ALL] Closing {len(open_executions)} positions for account {account_id}")
 
     # Thread-safe results collection
     results = []
@@ -353,7 +353,7 @@ def close_account_positions(account_id):
                 # Determine exit action (opposite of entry)
                 exit_action = 'SELL' if leg.action == 'BUY' else 'BUY'
 
-                current_app.logger.info(f"[THREAD {thread_index}] Closing: {exit_action} {exec_to_close.quantity} {exec_to_close.symbol}")
+                current_app.logger.debug(f"[THREAD {thread_index}] Closing: {exit_action} {exec_to_close.quantity} {exec_to_close.symbol}")
 
                 # Place close order with freeze-aware placement and retry logic
                 max_retries = 3
@@ -406,7 +406,7 @@ def close_account_positions(account_id):
 
                     db.session.commit()
 
-                    current_app.logger.info(f"[THREAD {thread_index}] SUCCESS: {exec_to_close.symbol}, P&L: {exec_to_close.realized_pnl:.2f}")
+                    current_app.logger.debug(f"[THREAD {thread_index}] SUCCESS: {exec_to_close.symbol}, P&L: {exec_to_close.realized_pnl:.2f}")
 
                     with results_lock:
                         results.append({
@@ -456,7 +456,7 @@ def close_account_positions(account_id):
     closed_count = len(successful)
     failed_count = len(failed)
 
-    current_app.logger.info(f"[ACCOUNT CLOSE ALL] Completed: {closed_count}/{len(open_executions)} closed, P&L: {total_pnl:.2f}")
+    current_app.logger.debug(f"[ACCOUNT CLOSE ALL] Completed: {closed_count}/{len(open_executions)} closed, P&L: {total_pnl:.2f}")
 
     # Log activity
     log = ActivityLog(
@@ -502,7 +502,7 @@ def close_account_positions(account_id):
 @login_required
 def websocket_monitor():
     """WebSocket monitor page showing active connections and subscriptions"""
-    current_app.logger.info(
+    current_app.logger.debug(
         f'WebSocket monitor accessed by user {current_user.username}',
         extra={
             'event': 'websocket_monitor_access',

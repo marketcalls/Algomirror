@@ -106,7 +106,7 @@ def create_new_strategy():
         db.session.add(strategy)
         db.session.commit()
 
-        logger.info(f"Created new blank strategy ID {strategy.id} for user {current_user.id}")
+        logger.debug(f"Created new blank strategy ID {strategy.id} for user {current_user.id}")
 
         # Redirect to the builder page with the new strategy ID
         return redirect(url_for('strategy.builder', strategy_id=strategy.id))
@@ -132,11 +132,11 @@ def builder(strategy_id=None):
         strategy.legs_list = StrategyLeg.query.filter_by(
             strategy_id=strategy.id
         ).order_by(StrategyLeg.leg_number).all()
-        logger.info(f"Loading strategy {strategy_id} with {len(strategy.legs_list)} legs")
+        logger.debug(f"Loading strategy {strategy_id} with {len(strategy.legs_list)} legs")
 
         # Log details for debugging
         for leg in strategy.legs_list:
-            logger.info(f"Leg {leg.leg_number}: {leg.instrument} {leg.action} is_executed={leg.is_executed}")
+            logger.debug(f"Leg {leg.leg_number}: {leg.instrument} {leg.action} is_executed={leg.is_executed}")
 
     # Get user's accounts
     accounts = TradingAccount.query.filter_by(
@@ -228,7 +228,7 @@ def builder(strategy_id=None):
                 for leg in legs_to_delete:
                     db.session.delete(leg)
 
-                logger.info(f"Preserved {len(legs_to_preserve)} legs (executed or with orders), deleted {len(legs_to_delete)} unused legs")
+                logger.debug(f"Preserved {len(legs_to_preserve)} legs (executed or with orders), deleted {len(legs_to_delete)} unused legs")
 
             # Calculate starting leg number (count of preserved legs)
             # Since we just fixed is_executed for legs with executions, we can simply count is_executed=True
@@ -249,7 +249,7 @@ def builder(strategy_id=None):
                         }), 400
 
                 # Log the received data for debugging
-                logger.info(f"Saving leg {leg_number}: instrument={leg_data.get('instrument')}, "
+                logger.debug(f"Saving leg {leg_number}: instrument={leg_data.get('instrument')}, "
                            f"lots={lots}, quantity={leg_data.get('quantity')}")
 
                 leg = StrategyLeg(
@@ -364,15 +364,15 @@ def execute_strategy(strategy_id):
                 'message': 'No accounts selected for strategy'
             }), 400
 
-        logger.info(f"Executing strategy {strategy_id} ({strategy.name}): {len(unexecuted_legs)} unexecuted legs out of {leg_count} total")
+        logger.debug(f"Executing strategy {strategy_id} ({strategy.name}): {len(unexecuted_legs)} unexecuted legs out of {leg_count} total")
 
         # Check if risk profile is set to fixed lot size
         is_fixed_lots = strategy.risk_profile == 'fixed_lots'
 
-        logger.info(f"[EXEC DEBUG] Strategy {strategy_id} execution started")
-        logger.info(f"[EXEC DEBUG] Risk profile: {strategy.risk_profile}")
-        logger.info(f"[EXEC DEBUG] Selected accounts: {strategy.selected_accounts}")
-        logger.info(f"[EXEC DEBUG] Total legs: {leg_count}, Unexecuted legs: {len(unexecuted_legs)}")
+        logger.debug(f"[EXEC DEBUG] Strategy {strategy_id} execution started")
+        logger.debug(f"[EXEC DEBUG] Risk profile: {strategy.risk_profile}")
+        logger.debug(f"[EXEC DEBUG] Selected accounts: {strategy.selected_accounts}")
+        logger.debug(f"[EXEC DEBUG] Total legs: {leg_count}, Unexecuted legs: {len(unexecuted_legs)}")
 
         # For margin-based profiles (balanced, conservative, aggressive):
         # Use MarginCalculator to calculate lots dynamically at execution time
@@ -387,25 +387,25 @@ def execute_strategy(strategy_id):
                     'message': f'Fixed Lot Size profile requires all legs to have lots specified. {len(missing_lots)} leg(s) missing lot values.'
                 }), 400
             use_margin_calc = False
-            logger.info(f"[EXEC DEBUG] Strategy {strategy_id}: Risk profile is 'Fixed Lot Size', using explicit lot sizes")
+            logger.debug(f"[EXEC DEBUG] Strategy {strategy_id}: Risk profile is 'Fixed Lot Size', using explicit lot sizes")
             for leg in unexecuted_legs:
-                logger.info(f"[EXEC DEBUG] Leg {leg.leg_number}: {leg.instrument} {leg.action} - {leg.lots} lots")
+                logger.debug(f"[EXEC DEBUG] Leg {leg.leg_number}: {leg.instrument} {leg.action} - {leg.lots} lots")
         else:
             # Margin-based profiles: use MarginCalculator
             use_margin_calc = True
-            logger.info(f"[EXEC DEBUG] Strategy {strategy_id}: Using MarginCalculator with risk profile '{strategy.risk_profile}'")
+            logger.debug(f"[EXEC DEBUG] Strategy {strategy_id}: Using MarginCalculator with risk profile '{strategy.risk_profile}'")
             for leg in unexecuted_legs:
-                logger.info(f"[EXEC DEBUG] Leg {leg.leg_number}: {leg.instrument} {leg.action} - lots will be calculated dynamically")
+                logger.debug(f"[EXEC DEBUG] Leg {leg.leg_number}: {leg.instrument} {leg.action} - lots will be calculated dynamically")
 
         # Initialize strategy executor
-        logger.info(f"[EXEC DEBUG] Initializing StrategyExecutor...")
+        logger.debug(f"[EXEC DEBUG] Initializing StrategyExecutor...")
         executor = StrategyExecutor(strategy, use_margin_calculator=use_margin_calc)
 
         # CRITICAL: Reset TSL tracking BEFORE execution starts
         # This prevents stale TSL data from previous trades from triggering exits
         # TSL State: RESET -> WAITING -> ACTIVE -> TRIGGERED -> EXIT
         if strategy.trailing_sl and strategy.trailing_sl > 0:
-            logger.info(f"[TSL STATE] Strategy {strategy.id} ({strategy.name}): RESET - Clearing TSL for new entry")
+            logger.debug(f"[TSL STATE] Strategy {strategy.id} ({strategy.name}): RESET - Clearing TSL for new entry")
             strategy.trailing_sl_active = False
             strategy.trailing_sl_peak_pnl = 0.0
             strategy.trailing_sl_initial_stop = None
@@ -413,12 +413,12 @@ def execute_strategy(strategy_id):
             strategy.trailing_sl_triggered_at = None
             strategy.trailing_sl_exit_reason = None
             db.session.commit()
-            logger.info(f"[TSL STATE] Strategy {strategy.id} ({strategy.name}): State = WAITING (monitoring for P&L > 0)")
+            logger.debug(f"[TSL STATE] Strategy {strategy.id} ({strategy.name}): State = WAITING (monitoring for P&L > 0)")
 
         # Execute strategy
-        logger.info(f"[EXEC DEBUG] Executing strategy...")
+        logger.debug(f"[EXEC DEBUG] Executing strategy...")
         results = executor.execute()
-        logger.info(f"[EXEC DEBUG] Execution complete. Results count: {len(results)}")
+        logger.debug(f"[EXEC DEBUG] Execution complete. Results count: {len(results)}")
 
         # Count successful, failed, and skipped executions
         # With Phase 2: 'pending' means order placed successfully, being tracked in background
@@ -579,7 +579,7 @@ def cancel_leg_orders(strategy_id, leg_id):
                     execution.exit_reason = 'manual_cancel'
                     execution.exit_time = datetime.utcnow()
                     cancelled_count += 1
-                    logger.info(f"Cancelled order {execution.order_id} for leg {leg_id}")
+                    logger.debug(f"Cancelled order {execution.order_id} for leg {leg_id}")
                 else:
                     failed_count += 1
                     error_msg = response.get('message', 'Unknown error')
@@ -603,7 +603,7 @@ def cancel_leg_orders(strategy_id, leg_id):
         # If all orders were cancelled and no active positions remain, reset leg execution status
         if cancelled_count > 0 and remaining_active == 0:
             leg.is_executed = False
-            logger.info(f"Reset leg {leg.leg_number} is_executed to False (all orders cancelled, no active positions)")
+            logger.debug(f"Reset leg {leg.leg_number} is_executed to False (all orders cancelled, no active positions)")
 
         db.session.commit()
 
@@ -732,7 +732,7 @@ def modify_leg_orders(strategy_id, leg_id):
                     # This will be updated to actual filled price by the order status poller when order fills
                     execution.entry_price = new_price
                     modified_count += 1
-                    logger.info(f"Modified order {execution.order_id} for leg {leg_id} to price {new_price}")
+                    logger.debug(f"Modified order {execution.order_id} for leg {leg_id} to price {new_price}")
                 else:
                     failed_count += 1
                     error_msg = response.get('message', 'Unknown error')
@@ -829,7 +829,7 @@ def convert_leg_to_market(strategy_id, leg_id):
             try:
                 # Step 0: Remove from order status poller to prevent it from marking as failed
                 order_status_poller.remove_order(execution.id)
-                logger.info(f"Removed execution {execution.id} (order {execution.order_id}) from poller before converting to market")
+                logger.debug(f"Removed execution {execution.id} (order {execution.order_id}) from poller before converting to market")
 
                 account = execution.account
                 client = ExtendedOpenAlgoAPI(
@@ -850,7 +850,7 @@ def convert_leg_to_market(strategy_id, leg_id):
                     logger.error(f"Failed to cancel order {execution.order_id}: {error_msg}")
                     continue
 
-                logger.info(f"Cancelled order {execution.order_id} for leg {leg_id}")
+                logger.debug(f"Cancelled order {execution.order_id} for leg {leg_id}")
 
                 # Step 2: Place a new market order
                 market_response = client.placeorder(
@@ -870,7 +870,7 @@ def convert_leg_to_market(strategy_id, leg_id):
                     execution.broker_order_status = 'complete'  # Market orders execute immediately
                     execution.status = 'entered'  # Order is now entered
                     converted_count += 1
-                    logger.info(f"Placed market order {new_order_id} for leg {leg_id} (converted from limit order)")
+                    logger.debug(f"Placed market order {new_order_id} for leg {leg_id} (converted from limit order)")
                 else:
                     failed_count += 1
                     error_msg = market_response.get('message', 'Failed to place market order')
@@ -975,7 +975,7 @@ def delete_strategy(strategy_id):
         # Delete risk events first (foreign key constraint)
         from app.models import RiskEvent
         deleted_risk_events = RiskEvent.query.filter_by(strategy_id=strategy_id).delete()
-        logger.info(f"Deleted {deleted_risk_events} risk events for strategy {strategy_id}")
+        logger.debug(f"Deleted {deleted_risk_events} risk events for strategy {strategy_id}")
 
         # Delete all executions (cascade should handle this, but explicit is better)
         deleted_executions = 0
@@ -1467,9 +1467,9 @@ def strategy_positions(strategy_id):
                 strategy_type = "Combined" if is_combined else "Single Leg"
                 premium_type = "Net Credit" if is_net_credit else "Net Debit"
 
-                logger.info(f"[TSL] Strategy {strategy.name}: {strategy_type} ({premium_type})")
-                logger.info(f"[TSL]   BUY premiums: {buy_premium:.2f}, SELL premiums: {sell_premium:.2f}")
-                logger.info(f"[TSL]   Net Premium: {net_premium:.2f}, Entry Value (abs): {entry_value:.2f}")
+                logger.debug(f"[TSL] Strategy {strategy.name}: {strategy_type} ({premium_type})")
+                logger.debug(f"[TSL]   BUY premiums: {buy_premium:.2f}, SELL premiums: {sell_premium:.2f}")
+                logger.debug(f"[TSL]   Net Premium: {net_premium:.2f}, Entry Value (abs): {entry_value:.2f}")
 
                 trailing_value = strategy.trailing_sl
                 trailing_type = strategy.trailing_sl_type or 'percentage'
@@ -1486,7 +1486,7 @@ def strategy_positions(strategy_id):
                 # Set initial stop if not already set
                 if strategy.trailing_sl_initial_stop is None:
                     strategy.trailing_sl_initial_stop = initial_stop_pnl
-                    logger.info(f"[TSL STATE] Strategy {strategy.name}: Initial stop set at {initial_stop_pnl:.2f} (Net Premium: {net_premium:.2f}, Entry Value: {entry_value:.2f})")
+                    logger.debug(f"[TSL STATE] Strategy {strategy.name}: Initial stop set at {initial_stop_pnl:.2f} (Net Premium: {net_premium:.2f}, Entry Value: {entry_value:.2f})")
 
                 # TSL is ALWAYS active from entry (no waiting state)
                 tsl_status['active'] = True
@@ -1576,9 +1576,9 @@ def close_all_positions(strategy_id):
         # If account_id provided, filter by that account only
         if account_id:
             query = query.filter_by(account_id=account_id)
-            logger.info(f"Closing strategy {strategy_id} positions for account {account_id} only")
+            logger.debug(f"Closing strategy {strategy_id} positions for account {account_id} only")
         else:
-            logger.info(f"Closing strategy {strategy_id} positions for ALL accounts")
+            logger.debug(f"Closing strategy {strategy_id} positions for ALL accounts")
 
         # Get all open positions (exclude rejected/cancelled)
         open_positions = query.all()
@@ -1612,14 +1612,14 @@ def close_all_positions(strategy_id):
             delay = thread_index * 0.3
             if delay > 0:
                 time.sleep(delay)
-                logger.info(f"[THREAD {thread_index}] Waited {delay:.2f}s to prevent race condition")
+                logger.debug(f"[THREAD {thread_index}] Waited {delay:.2f}s to prevent race condition")
 
             # Create Flask app context for this thread
             app = create_app()
 
             with app.app_context():
                 try:
-                    logger.info(f"[THREAD] Closing position: {position.symbol} on account {position.account.account_name}, leg {position.leg.leg_number}")
+                    logger.debug(f"[THREAD] Closing position: {position.symbol} on account {position.account.account_name}, leg {position.leg.leg_number}")
 
                     # Reverse the position
                     client = ExtendedOpenAlgoAPI(
@@ -1630,7 +1630,7 @@ def close_all_positions(strategy_id):
                     # Reverse action for closing
                     close_action = 'SELL' if position.leg.action == 'BUY' else 'BUY'
 
-                    logger.info(f"[THREAD] Placing close order: {close_action} {position.quantity} {position.symbol} on {position.exchange}")
+                    logger.debug(f"[THREAD] Placing close order: {close_action} {position.quantity} {position.symbol} on {position.exchange}")
 
                     # Place close order with freeze-aware placement and retry logic
                     from app.utils.freeze_quantity_handler import place_order_with_freeze_check
@@ -1666,7 +1666,7 @@ def close_all_positions(strategy_id):
                             else:
                                 response = {'status': 'error', 'message': f'API error after {max_retries} retries: {last_error}'}
 
-                    logger.info(f"[THREAD] Close order response for {position.symbol}: {response}")
+                    logger.debug(f"[THREAD] Close order response for {position.symbol}: {response}")
 
                     if response and response.get('status') == 'success':
                         # Get exit order ID from response
@@ -1709,7 +1709,7 @@ def close_all_positions(strategy_id):
                                 strategy_name=position.strategy.name if position.strategy else 'Unknown'
                             )
 
-                            logger.info(f"[THREAD SUCCESS] Exit order placed for {position.symbol}, order_id: {exit_order_id} (polling for fill price)")
+                            logger.debug(f"[THREAD SUCCESS] Exit order placed for {position.symbol}, order_id: {exit_order_id} (polling for fill price)")
 
                             with results_lock:
                                 results.append({
@@ -1752,7 +1752,7 @@ def close_all_positions(strategy_id):
 
         # Create and start threads for parallel execution with staggered delays
         threads = []
-        logger.info(f"[PARALLEL CLOSE] Starting parallel close for {len(open_positions)} positions")
+        logger.debug(f"[PARALLEL CLOSE] Starting parallel close for {len(open_positions)} positions")
 
         for idx, position in enumerate(open_positions):
             thread = threading.Thread(
@@ -1767,7 +1767,7 @@ def close_all_positions(strategy_id):
         for thread in threads:
             thread.join(timeout=30)  # 30 second timeout per thread
 
-        logger.info(f"[PARALLEL CLOSE] All threads completed. Results: {len(results)}")
+        logger.debug(f"[PARALLEL CLOSE] All threads completed. Results: {len(results)}")
 
         # Calculate summary
         total_pnl = sum(r.get('pnl', 0) for r in results if r.get('status') == 'success')
@@ -1877,7 +1877,7 @@ def close_individual_position(strategy_id):
                         if qty != 0:
                             position_found = True
                             actual_quantity = qty
-                            logger.info(f"Found position at broker: {broker_symbol}, qty={qty}")
+                            logger.debug(f"Found position at broker: {broker_symbol}, qty={qty}")
                             break
 
                 if position_found:
@@ -1899,7 +1899,7 @@ def close_individual_position(strategy_id):
         # Reverse action for closing
         close_action = 'SELL' if position.leg.action == 'BUY' else 'BUY'
 
-        logger.info(f"Closing individual position: {close_action} {position.quantity} {symbol} on {exchange}")
+        logger.debug(f"Closing individual position: {close_action} {position.quantity} {symbol} on {exchange}")
 
         # Place close order with freeze-aware placement and retry logic
         max_retries = 3
@@ -1931,7 +1931,7 @@ def close_individual_position(strategy_id):
                 else:
                     response = {'status': 'error', 'message': f'API error after {max_retries} retries: {last_error}'}
 
-        logger.info(f"Close position response for {symbol}: {response}")
+        logger.debug(f"Close position response for {symbol}: {response}")
 
         if response and response.get('status') == 'success':
             # Get exit order ID from response
@@ -1971,7 +1971,7 @@ def close_individual_position(strategy_id):
                 strategy_name=position.strategy.name if position.strategy else 'Unknown'
             )
 
-            logger.info(f"Exit order placed for {symbol}, order_id: {exit_order_id} (polling for fill price)")
+            logger.debug(f"Exit order placed for {symbol}, order_id: {exit_order_id} (polling for fill price)")
 
             return jsonify({
                 'status': 'success',
@@ -2065,7 +2065,7 @@ def close_leg_all_accounts(strategy_id):
             delay = thread_index * 0.3
             if delay > 0:
                 time.sleep(delay)
-                logger.info(f"[THREAD {thread_index}] Waited {delay:.2f}s to prevent race condition")
+                logger.debug(f"[THREAD {thread_index}] Waited {delay:.2f}s to prevent race condition")
 
             # Create Flask app context for this thread
             app = create_app()
@@ -2080,7 +2080,7 @@ def close_leg_all_accounts(strategy_id):
                         logger.error(f"[THREAD] Position {position_id} not found in database")
                         return
 
-                    logger.info(f"[THREAD] Closing leg position: {position.symbol} on account {position.account.account_name}, leg {position.leg.leg_number}")
+                    logger.debug(f"[THREAD] Closing leg position: {position.symbol} on account {position.account.account_name}, leg {position.leg.leg_number}")
 
                     # Create API client
                     client = ExtendedOpenAlgoAPI(
@@ -2113,7 +2113,7 @@ def close_leg_all_accounts(strategy_id):
                                     if qty != 0:
                                         position_found = True
                                         actual_quantity = qty
-                                        logger.info(f"[THREAD] Found position at broker: {broker_symbol}, qty={qty}, product={broker_product}")
+                                        logger.debug(f"[THREAD] Found position at broker: {broker_symbol}, qty={qty}, product={broker_product}")
                                         break
 
                             if position_found:
@@ -2133,7 +2133,7 @@ def close_leg_all_accounts(strategy_id):
                     # Reverse action for closing
                     close_action = 'SELL' if position.leg.action == 'BUY' else 'BUY'
 
-                    logger.info(f"[THREAD] Placing close order: {close_action} {position.quantity} {position.symbol} on {position.exchange}")
+                    logger.debug(f"[THREAD] Placing close order: {close_action} {position.quantity} {position.symbol} on {position.exchange}")
 
                     # Place close order with freeze-aware placement and retry logic
                     from app.utils.freeze_quantity_handler import place_order_with_freeze_check
@@ -2167,7 +2167,7 @@ def close_leg_all_accounts(strategy_id):
                             else:
                                 response = {'status': 'error', 'message': f'API error after {max_retries} retries: {last_error}'}
 
-                    logger.info(f"[THREAD] Close leg order response for {position.symbol}: {response}")
+                    logger.debug(f"[THREAD] Close leg order response for {position.symbol}: {response}")
 
                     if response and response.get('status') == 'success':
                         # Get exit order ID from response
@@ -2205,7 +2205,7 @@ def close_leg_all_accounts(strategy_id):
                                     'orderid': exit_order_id
                                 })
 
-                            logger.info(f"[THREAD] Exit order placed for leg position: {position.symbol}, Exit Order: {exit_order_id} (awaiting fill price from poller)")
+                            logger.debug(f"[THREAD] Exit order placed for leg position: {position.symbol}, Exit Order: {exit_order_id} (awaiting fill price from poller)")
                         else:
                             logger.error(f"[THREAD] Position {position.id} not found in database after close")
                             with results_lock:
@@ -2238,7 +2238,7 @@ def close_leg_all_accounts(strategy_id):
 
         # Create and start threads for parallel execution
         threads = []
-        logger.info(f"[PARALLEL LEG CLOSE] Starting parallel close for leg {leg_number} ({len(open_positions)} positions)")
+        logger.debug(f"[PARALLEL LEG CLOSE] Starting parallel close for leg {leg_number} ({len(open_positions)} positions)")
 
         for idx, position in enumerate(open_positions):
             thread = threading.Thread(
@@ -2253,7 +2253,7 @@ def close_leg_all_accounts(strategy_id):
         for thread in threads:
             thread.join(timeout=30)
 
-        logger.info(f"[PARALLEL LEG CLOSE] All threads completed. Results: {len(results)}")
+        logger.debug(f"[PARALLEL LEG CLOSE] All threads completed. Results: {len(results)}")
 
         # Calculate summary
         total_pnl = sum(r.get('pnl', 0) for r in results if r.get('status') == 'success')

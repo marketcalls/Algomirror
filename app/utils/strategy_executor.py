@@ -66,7 +66,7 @@ class StrategyExecutor:
         else:  # 'any' or None
             self.is_expiry_override = None
 
-        logger.info(f"Strategy {strategy.id}: market_condition='{market_condition}', is_expiry_override={self.is_expiry_override}")
+        logger.debug(f"Strategy {strategy.id}: market_condition='{market_condition}', is_expiry_override={self.is_expiry_override}")
 
         # Store app reference for thread context
         from flask import current_app
@@ -76,7 +76,7 @@ class StrategyExecutor:
             from app.utils.margin_calculator import MarginCalculator
             self.margin_calculator = MarginCalculator(strategy.user_id)
             margin_type = "cash" if self.margin_source == 'cash' else "available"
-            logger.info(f"Strategy {strategy.id} ({strategy.name}): Using {self.margin_percentage*100}% {margin_type} margin based on risk_profile '{strategy.risk_profile}'")
+            logger.debug(f"Strategy {strategy.id} ({strategy.name}): Using {self.margin_percentage*100}% {margin_type} margin based on risk_profile '{strategy.risk_profile}'")
 
     def _get_margin_percentage_from_db(self, strategy: Strategy) -> tuple:
         """
@@ -125,7 +125,7 @@ class StrategyExecutor:
                 margin_pct = trade_quality.margin_percentage / 100  # Convert from 50 to 0.50
                 # Get margin_source: 'available' for option sellers, 'cash' for option buyers
                 margin_source = getattr(trade_quality, 'margin_source', 'available') or 'available'
-                logger.info(f"Loaded from DB: Grade {quality_grade} = {trade_quality.margin_percentage}% {margin_source} margin")
+                logger.debug(f"Loaded from DB: Grade {quality_grade} = {trade_quality.margin_percentage}% {margin_source} margin")
                 return margin_pct, margin_source
             else:
                 # Fallback if not found in DB
@@ -157,11 +157,11 @@ class StrategyExecutor:
         if self.margin_source == 'cash':
             # Option buyers use cash margin only
             margin = self.margin_calculator.get_cash_margin(account)
-            logger.info(f"[MARGIN] Using CASH margin for {account.account_name}: {margin:,.2f}")
+            logger.debug(f"[MARGIN] Using CASH margin for {account.account_name}: {margin:,.2f}")
         else:
             # Option sellers use available margin (cash + collateral)
             margin = self.margin_calculator.get_available_margin(account)
-            logger.info(f"[MARGIN] Using AVAILABLE margin for {account.account_name}: {margin:,.2f}")
+            logger.debug(f"[MARGIN] Using AVAILABLE margin for {account.account_name}: {margin:,.2f}")
 
         return margin
 
@@ -183,7 +183,7 @@ class StrategyExecutor:
         if not legs:
             raise ValueError("No unexecuted legs found for this strategy")
 
-        logger.info(f"[PARALLEL MODE] Executing strategy {self.strategy.id}: {len(legs)} legs across "
+        logger.debug(f"[PARALLEL MODE] Executing strategy {self.strategy.id}: {len(legs)} legs across "
                    f"{len(self.accounts)} accounts in PARALLEL mode")
 
         # PRE-CALCULATION PHASE: Calculate quantities for straddles/strangles/spreads
@@ -197,7 +197,7 @@ class StrategyExecutor:
         results_lock = create_lock()
 
         for i, leg in enumerate(legs, 1):
-            logger.info(f"[LEG {i}] Starting parallel thread for leg {i}/{len(legs)}: "
+            logger.debug(f"[LEG {i}] Starting parallel thread for leg {i}/{len(legs)}: "
                        f"{leg.instrument} {leg.action} {leg.option_type if leg.product_type == 'options' else ''}")
 
             thread = threading.Thread(
@@ -210,11 +210,11 @@ class StrategyExecutor:
             threads.append(thread)
 
         # Wait for all legs to complete
-        logger.info(f"[WAITING] Waiting for {len(threads)} legs to complete...")
+        logger.debug(f"[WAITING] Waiting for {len(threads)} legs to complete...")
         for thread in threads:
             thread.join()
 
-        logger.info(f"[COMPLETED] All {len(legs)} legs completed. Total orders: {len(results)}")
+        logger.debug(f"[COMPLETED] All {len(legs)} legs completed. Total orders: {len(results)}")
         print(f"[EXECUTE END] Total orders placed: {len(results)}")
 
         # CRITICAL: Mark legs as executed in the MAIN session after all threads complete
@@ -222,14 +222,14 @@ class StrategyExecutor:
         print(f"\n[MAIN SESSION] ========== STARTING ==========")
         print(f"[MAIN SESSION] Processing {len(legs)} legs, {len(results)} results")
         print(f"[MAIN SESSION] Results dump: {results}")
-        logger.info(f"[MAIN SESSION] Processing {len(legs)} legs, {len(results)} results")
+        logger.debug(f"[MAIN SESSION] Processing {len(legs)} legs, {len(results)} results")
 
         for leg in legs:
             # Check if this leg had any results at all (order was attempted)
             leg_results = [r for r in results if r.get('leg') == leg.leg_number]
             successful = [r for r in leg_results if r.get('status') in ['success', 'pending']]
             print(f"[MAIN SESSION] Leg {leg.leg_number} (id={leg.id}): {len(leg_results)} results, {len(successful)} successful")
-            logger.info(f"[MAIN SESSION] Leg {leg.leg_number} (id={leg.id}): {len(leg_results)} results, {len(successful)} successful")
+            logger.debug(f"[MAIN SESSION] Leg {leg.leg_number} (id={leg.id}): {len(leg_results)} results, {len(successful)} successful")
 
             # Mark as executed if we have any results (successful or not) - order was attempted
             # This prevents leg from being deleted on next save
@@ -238,15 +238,15 @@ class StrategyExecutor:
                     # Refresh leg object from database to ensure we're in the right session
                     fresh_leg = StrategyLeg.query.get(leg.id)
                     print(f"[MAIN SESSION] Fresh leg query: {fresh_leg}, is_executed={fresh_leg.is_executed if fresh_leg else 'N/A'}")
-                    logger.info(f"[MAIN SESSION] Fresh leg query result: {fresh_leg}, is_executed={fresh_leg.is_executed if fresh_leg else 'N/A'}")
+                    logger.debug(f"[MAIN SESSION] Fresh leg query result: {fresh_leg}, is_executed={fresh_leg.is_executed if fresh_leg else 'N/A'}")
                     if fresh_leg and not fresh_leg.is_executed:
                         fresh_leg.is_executed = True
                         db.session.commit()
                         print(f"[MAIN SESSION] Leg {leg.leg_number} marked as is_executed=True - COMMITTED")
-                        logger.info(f"[MAIN SESSION] Leg {leg.leg_number} marked as is_executed=True")
+                        logger.debug(f"[MAIN SESSION] Leg {leg.leg_number} marked as is_executed=True")
                     elif fresh_leg and fresh_leg.is_executed:
                         print(f"[MAIN SESSION] Leg {leg.leg_number} already is_executed=True, skipping")
-                        logger.info(f"[MAIN SESSION] Leg {leg.leg_number} already is_executed=True, skipping")
+                        logger.debug(f"[MAIN SESSION] Leg {leg.leg_number} already is_executed=True, skipping")
                     else:
                         print(f"[MAIN SESSION] WARNING: Leg {leg.leg_number} not found in database!")
                         logger.warning(f"[MAIN SESSION] Leg {leg.leg_number} not found in database!")
@@ -273,7 +273,7 @@ class StrategyExecutor:
             app = create_app()
 
             with app.app_context():
-                logger.info(f"[LEG {leg.leg_number}] [STARTING] Starting parallel execution")
+                logger.debug(f"[LEG {leg.leg_number}] [STARTING] Starting parallel execution")
 
                 # Reuse existing _execute_leg logic
                 leg_results = self._execute_leg(leg)
@@ -282,7 +282,7 @@ class StrategyExecutor:
                 with results_lock:
                     results.extend(leg_results)
 
-                logger.info(f"[LEG {leg.leg_number}] [COMPLETED] Completed: {len(leg_results)} orders")
+                logger.debug(f"[LEG {leg.leg_number}] [COMPLETED] Completed: {len(leg_results)} orders")
 
         except Exception as e:
             logger.error(f"[LEG {leg.leg_number}] [ERROR] Error: {e}", exc_info=True)
@@ -312,7 +312,7 @@ class StrategyExecutor:
 
         exchange = self._get_exchange(leg)
 
-        logger.info(f"Built symbol: {symbol} on exchange: {exchange}")
+        logger.debug(f"Built symbol: {symbol} on exchange: {exchange}")
 
         # Calculate quantity per account (will be calculated per account if margin calculator is enabled)
         base_quantity = self._calculate_quantity(leg, len(self.accounts))
@@ -327,7 +327,7 @@ class StrategyExecutor:
 
         # Execute on each account (using parallel threads)
         threads = []
-        logger.info(f"Executing leg {leg.leg_number} on {len(self.accounts)} accounts: {[a.account_name for a in self.accounts]}")
+        logger.debug(f"Executing leg {leg.leg_number} on {len(self.accounts)} accounts: {[a.account_name for a in self.accounts]}")
 
         thread_index = 0
         for account in self.accounts:
@@ -347,7 +347,7 @@ class StrategyExecutor:
             else:
                 quantity = base_quantity
 
-            logger.info(f"Starting thread for account {account.account_name}, leg {leg.leg_number}, qty {quantity}")
+            logger.debug(f"Starting thread for account {account.account_name}, leg {leg.leg_number}, qty {quantity}")
             thread = threading.Thread(
                 target=self._execute_on_account,
                 args=(account, leg, symbol, exchange, quantity, results, thread_index),
@@ -357,13 +357,13 @@ class StrategyExecutor:
             threads.append(thread)
             thread_index += 1
 
-        logger.info(f"Waiting for {len(threads)} threads to complete for leg {leg.leg_number}")
+        logger.debug(f"Waiting for {len(threads)} threads to complete for leg {leg.leg_number}")
 
         # Wait for all threads to complete
         for thread in threads:
             thread.join()
 
-        logger.info(f"All threads completed for leg {leg.leg_number}. Total results: {len(results)}")
+        logger.debug(f"All threads completed for leg {leg.leg_number}. Total results: {len(results)}")
 
         # Mark leg as executed in the main session after all accounts complete
         # Check if at least one order succeeded or is pending (pending = order placed but not filled yet)
@@ -371,7 +371,7 @@ class StrategyExecutor:
         failed_orders = [r for r in results if r.get('status') in ['failed', 'error']]
         skipped_orders = [r for r in results if r.get('status') == 'skipped']
 
-        logger.info(f"Leg {leg.leg_number} execution summary: {len(successful_orders)} success/pending, {len(failed_orders)} failed, {len(skipped_orders)} skipped")
+        logger.debug(f"Leg {leg.leg_number} execution summary: {len(successful_orders)} success/pending, {len(failed_orders)} failed, {len(skipped_orders)} skipped")
 
         # Log details of any failures
         for failed in failed_orders:
@@ -402,10 +402,10 @@ class StrategyExecutor:
         delay = thread_index * 0.3
         if delay > 0:
             sleep(delay)
-            logger.info(f"[TASK {thread_index}] Waited {delay:.2f}s to prevent race condition")
+            logger.debug(f"[TASK {thread_index}] Waited {delay:.2f}s to prevent race condition")
 
         account_name = account.account_name
-        logger.info(f"[THREAD START] Executing leg {leg.leg_number} on account {account_name}: {symbol} {leg.action} qty={quantity}")
+        logger.debug(f"[THREAD START] Executing leg {leg.leg_number} on account {account_name}: {symbol} {leg.action} qty={quantity}")
 
         # Create fresh app context for this thread to avoid session conflicts
         from app import create_app
@@ -490,7 +490,7 @@ class StrategyExecutor:
 
                     # PHASE 2: Save as 'pending' immediately, no blocking wait!
                     # Background poller will update status asynchronously
-                    logger.info(f"[ORDER PLACED] Order ID: {order_id} for {symbol} on {account_name} (will poll status)")
+                    logger.debug(f"[ORDER PLACED] Order ID: {order_id} for {symbol} on {account_name} (will poll status)")
 
                     # Determine entry price based on order type
                     # For LIMIT orders, set to limit price initially (will be updated to actual filled price by poller)
@@ -558,7 +558,7 @@ class StrategyExecutor:
                             'leg': leg.leg_number
                         })
 
-                        logger.info(f"[THREAD SUCCESS] Leg {leg.leg_number} order placed on {account_name}, order_id: {order_id} (polling in background)")
+                        logger.debug(f"[THREAD SUCCESS] Leg {leg.leg_number} order placed on {account_name}, order_id: {order_id} (polling in background)")
 
                 else:
                     # Order failed - create execution record for visibility and tracking
@@ -587,7 +587,7 @@ class StrategyExecutor:
                             # Try to commit, but don't fail if it doesn't work
                             try:
                                 db.session.commit()
-                                logger.info(f"[FAILED ORDER TRACKED] Created execution record for failed order on {account_name}")
+                                logger.debug(f"[FAILED ORDER TRACKED] Created execution record for failed order on {account_name}")
                             except Exception as commit_error:
                                 logger.warning(f"Could not commit failed execution record: {commit_error}")
                                 db.session.rollback()
@@ -615,7 +615,7 @@ class StrategyExecutor:
                         'leg': leg.leg_number
                     })
 
-        logger.info(f"[THREAD END] Completed execution for leg {leg.leg_number} on account {account_name}")
+        logger.debug(f"[THREAD END] Completed execution for leg {leg.leg_number} on account {account_name}")
 
     def _get_order_status(self, client: ExtendedOpenAlgoAPI, order_id: str, strategy_name: str) -> Dict:
         """Fetch order status from broker using OpenAlgo API"""
@@ -627,7 +627,7 @@ class StrategyExecutor:
 
             if response.get('status') == 'success':
                 data = response.get('data', {})
-                logger.info(f"Order {order_id} status: {data.get('order_status')} at price {data.get('price')}")
+                logger.debug(f"Order {order_id} status: {data.get('order_status')} at price {data.get('price')}")
                 return data
             else:
                 logger.warning(f"Failed to get order status for {order_id}: {response.get('message')}")
@@ -640,12 +640,12 @@ class StrategyExecutor:
         """Start exit monitoring for an execution (async version)"""
         # This will be called after execution is saved
         # For now, just log - actual implementation would start monitoring
-        logger.info(f"Exit monitoring would start for execution {execution_id}")
+        logger.debug(f"Exit monitoring would start for execution {execution_id}")
 
     def _build_symbol(self, leg: StrategyLeg) -> str:
         """Build OpenAlgo symbol format based on leg configuration"""
         try:
-            logger.info(f"Building symbol for leg {leg.leg_number}: {leg.instrument} {leg.product_type} "
+            logger.debug(f"Building symbol for leg {leg.leg_number}: {leg.instrument} {leg.product_type} "
                        f"strike_selection={leg.strike_selection} strike_offset={leg.strike_offset}")
 
             base_symbol = leg.instrument
@@ -664,7 +664,7 @@ class StrategyExecutor:
 
                 # Get strike price
                 strike = self._get_strike_price(leg)
-                logger.info(f"Got strike price: {strike} for {leg.strike_selection} offset={leg.strike_offset}")
+                logger.debug(f"Got strike price: {strike} for {leg.strike_selection} offset={leg.strike_offset}")
 
                 if not strike or strike == "0":
                     logger.error(f"Failed to get strike price for leg {leg.leg_number}")
@@ -678,11 +678,11 @@ class StrategyExecutor:
                 symbol = f"{base_symbol}{expiry}{strike}{leg.option_type}"
                 print(f"[SYMBOL BUILD] Base: {base_symbol}, Expiry: {expiry}, Strike: {strike}, Type: {leg.option_type}")
                 print(f"[FINAL SYMBOL] {symbol}")
-                logger.info(f"Built option symbol: {symbol}")
+                logger.debug(f"Built option symbol: {symbol}")
 
             elif leg.product_type == 'futures':
                 # Get expiry date
-                logger.info(f"[FUTURES] Getting expiry for {leg.instrument}, expiry_type={leg.expiry}")
+                logger.debug(f"[FUTURES] Getting expiry for {leg.instrument}, expiry_type={leg.expiry}")
                 expiry = self._get_expiry_string(leg)
 
                 if not expiry:
@@ -691,12 +691,12 @@ class StrategyExecutor:
 
                 # Build futures symbol: NIFTY30DEC25FUT
                 symbol = f"{base_symbol}{expiry}FUT"
-                logger.info(f"[FUTURES] Built symbol: {symbol} (base={base_symbol}, expiry={expiry})")
+                logger.debug(f"[FUTURES] Built symbol: {symbol} (base={base_symbol}, expiry={expiry})")
 
             else:
                 # Equity symbol
                 symbol = base_symbol
-                logger.info(f"Using equity symbol: {symbol}")
+                logger.debug(f"Using equity symbol: {symbol}")
 
             return symbol
 
@@ -769,21 +769,21 @@ class StrategyExecutor:
                         return dt.max
 
                     sorted_expiries = sorted(expiries, key=parse_expiry)
-                    logger.info(f"[EXPIRY] {leg.instrument} {leg.product_type} on {exchange}: Raw expiries from API: {expiries}")
-                    logger.info(f"[EXPIRY] {leg.instrument} {leg.product_type} on {exchange}: Sorted expiries ({len(sorted_expiries)} total): {sorted_expiries}")
+                    logger.debug(f"[EXPIRY] {leg.instrument} {leg.product_type} on {exchange}: Raw expiries from API: {expiries}")
+                    logger.debug(f"[EXPIRY] {leg.instrument} {leg.product_type} on {exchange}: Sorted expiries ({len(sorted_expiries)} total): {sorted_expiries}")
 
                     # Select appropriate expiry based on leg configuration
                     selected_expiry = None
-                    logger.info(f"[EXPIRY] Selecting expiry for {leg.instrument} {leg.product_type}, expiry_type={leg.expiry}")
+                    logger.debug(f"[EXPIRY] Selecting expiry for {leg.instrument} {leg.product_type}, expiry_type={leg.expiry}")
 
                     if leg.expiry == 'current_week':
                         # For OPTIONS: First expiry (nearest weekly)
                         # For FUTURES: No weekly expiries exist - use current month (index 0)
                         selected_expiry = sorted_expiries[0] if sorted_expiries else None
                         if leg.product_type == 'futures':
-                            logger.info(f"[EXPIRY] FUTURES current_week -> current_month (no weekly futures): {selected_expiry}")
+                            logger.debug(f"[EXPIRY] FUTURES current_week -> current_month (no weekly futures): {selected_expiry}")
                         else:
-                            logger.info(f"[EXPIRY] OPTIONS current_week: {selected_expiry}")
+                            logger.debug(f"[EXPIRY] OPTIONS current_week: {selected_expiry}")
 
                     elif leg.expiry == 'next_week':
                         # For OPTIONS: Second expiry (next weekly)
@@ -794,14 +794,14 @@ class StrategyExecutor:
                                 selected_expiry = sorted_expiries[1]
                             else:
                                 selected_expiry = sorted_expiries[0] if sorted_expiries else None
-                            logger.info(f"[EXPIRY] FUTURES next_week -> next_month (no weekly futures): {selected_expiry}")
+                            logger.debug(f"[EXPIRY] FUTURES next_week -> next_month (no weekly futures): {selected_expiry}")
                         else:
                             # Options: second expiry
                             if len(sorted_expiries) > 1:
                                 selected_expiry = sorted_expiries[1]
                             else:
                                 selected_expiry = sorted_expiries[0] if sorted_expiries else None
-                            logger.info(f"[EXPIRY] OPTIONS next_week: {selected_expiry}")
+                            logger.debug(f"[EXPIRY] OPTIONS next_week: {selected_expiry}")
 
                     elif leg.expiry == 'current_month':
                         # For FUTURES: Use index-based selection (first contract = current month)
@@ -810,12 +810,12 @@ class StrategyExecutor:
                             # Futures typically have 3 contracts: current, next, far
                             # current_month = first expiry (index 0)
                             selected_expiry = sorted_expiries[0] if sorted_expiries else None
-                            logger.info(f"[EXPIRY] FUTURES current_month: using first expiry = {selected_expiry}")
+                            logger.debug(f"[EXPIRY] FUTURES current_month: using first expiry = {selected_expiry}")
                         else:
                             # Options: find last expiry of current month
                             current_month = dt.now().month
                             current_year = dt.now().year
-                            logger.info(f"[EXPIRY] OPTIONS Looking for current_month: month={current_month}, year={current_year}")
+                            logger.debug(f"[EXPIRY] OPTIONS Looking for current_month: month={current_month}, year={current_year}")
 
                             for exp_str in sorted_expiries:
                                 exp_date = parse_expiry(exp_str)
@@ -825,7 +825,7 @@ class StrategyExecutor:
                             # If no current month expiry found, use the first available
                             if not selected_expiry and sorted_expiries:
                                 selected_expiry = sorted_expiries[0]
-                                logger.info(f"[EXPIRY] No current_month expiry, using first available: {selected_expiry}")
+                                logger.debug(f"[EXPIRY] No current_month expiry, using first available: {selected_expiry}")
 
                     elif leg.expiry == 'next_month':
                         # For FUTURES: Use index-based selection (second contract = next month)
@@ -833,10 +833,10 @@ class StrategyExecutor:
                         if leg.product_type == 'futures':
                             # Futures typically have 3 contracts: current, next, far
                             # next_month = second expiry (index 1)
-                            logger.info(f"[EXPIRY] FUTURES next_month: {len(sorted_expiries)} expiries available: {sorted_expiries}")
+                            logger.debug(f"[EXPIRY] FUTURES next_month: {len(sorted_expiries)} expiries available: {sorted_expiries}")
                             if len(sorted_expiries) > 1:
                                 selected_expiry = sorted_expiries[1]
-                                logger.info(f"[EXPIRY] FUTURES next_month: using index[1] = {selected_expiry}")
+                                logger.debug(f"[EXPIRY] FUTURES next_month: using index[1] = {selected_expiry}")
                             else:
                                 selected_expiry = sorted_expiries[0] if sorted_expiries else None
                                 logger.warning(f"[EXPIRY] FUTURES next_month: only {len(sorted_expiries)} expiry available, using index[0] = {selected_expiry}")
@@ -846,7 +846,7 @@ class StrategyExecutor:
                             current_year = dt.now().year
                             next_month = (current_month % 12) + 1
                             next_year = current_year + 1 if next_month == 1 else current_year
-                            logger.info(f"[EXPIRY] OPTIONS Looking for next_month: month={next_month}, year={next_year}")
+                            logger.debug(f"[EXPIRY] OPTIONS Looking for next_month: month={next_month}, year={next_year}")
 
                             for exp_str in sorted_expiries:
                                 exp_date = parse_expiry(exp_str)
@@ -860,7 +860,7 @@ class StrategyExecutor:
                                     exp_date = parse_expiry(exp_str)
                                     if exp_date.year > current_year or (exp_date.year == current_year and exp_date.month > current_month):
                                         selected_expiry = exp_str
-                                        logger.info(f"[EXPIRY] Using next available month expiry: {selected_expiry}")
+                                        logger.debug(f"[EXPIRY] Using next available month expiry: {selected_expiry}")
                                         break
 
                     if selected_expiry:
@@ -874,7 +874,7 @@ class StrategyExecutor:
                             'timestamp': dt.utcnow()
                         }
 
-                        logger.info(f"[EXPIRY] {leg.instrument} {leg.expiry} -> {selected_expiry} -> {formatted_expiry}")
+                        logger.debug(f"[EXPIRY] {leg.instrument} {leg.expiry} -> {selected_expiry} -> {formatted_expiry}")
                         return formatted_expiry
                     else:
                         logger.error(f"[EXPIRY] Could not determine expiry for {leg.instrument} {leg.expiry}. Available: {sorted_expiries}")
@@ -933,7 +933,7 @@ class StrategyExecutor:
                 offset = leg.strike_offset if leg.strike_offset else 1  # Default to 1 if not set, not 0
 
                 print(f"[STRIKE DEBUG] Strike selection: {leg.strike_selection}, Offset from DB: {leg.strike_offset}, Using offset: {offset}")
-                logger.info(f"Strike selection: {leg.strike_selection}, Offset from DB: {leg.strike_offset}, Using offset: {offset}")
+                logger.debug(f"Strike selection: {leg.strike_selection}, Offset from DB: {leg.strike_offset}, Using offset: {offset}")
 
                 # If offset is 0, it means we're at ATM which is wrong for ITM/OTM
                 if offset == 0:
@@ -962,7 +962,7 @@ class StrategyExecutor:
 
                 print(f"[STRIKE RESULT] {leg.instrument} {leg.option_type}: Spot={spot_price}, ATM={atm_strike}, "
                       f"{leg.strike_selection}{offset}={strike}")
-                logger.info(f"{leg.instrument} {leg.option_type}: Spot={spot_price}, ATM={atm_strike}, "
+                logger.debug(f"{leg.instrument} {leg.option_type}: Spot={spot_price}, ATM={atm_strike}, "
                           f"{leg.strike_selection}{offset}={strike}")
                 return str(strike)
 
@@ -981,7 +981,7 @@ class StrategyExecutor:
             if instrument in self.latest_prices:
                 price_info = self.latest_prices[instrument]
                 if price_info['timestamp'] and (datetime.utcnow() - price_info['timestamp']).seconds < 5:
-                    logger.info(f"Using WebSocket price for {instrument}: {price_info['ltp']}")
+                    logger.debug(f"Using WebSocket price for {instrument}: {price_info['ltp']}")
                     return price_info['ltp']
 
             # Check option chain service for cached underlying price
@@ -989,7 +989,7 @@ class StrategyExecutor:
             if underlying_key in option_chain_service.active_managers:
                 manager = option_chain_service.active_managers[underlying_key]
                 if manager and manager.underlying_ltp > 0:
-                    logger.info(f"Using option chain price for {instrument}: {manager.underlying_ltp}")
+                    logger.debug(f"Using option chain price for {instrument}: {manager.underlying_ltp}")
                     return manager.underlying_ltp
 
             # Fallback to API call
@@ -1002,7 +1002,7 @@ class StrategyExecutor:
                 response = client.quotes(symbol=instrument, exchange=exchange)
                 if response.get('status') == 'success':
                     ltp = response.get('data', {}).get('ltp', 0)
-                    logger.info(f"Using API price for {instrument}: {ltp}")
+                    logger.debug(f"Using API price for {instrument}: {ltp}")
                     return ltp
                 else:
                     logger.error(f"API quote failed for {instrument}: {response.get('message')}")
@@ -1024,9 +1024,9 @@ class StrategyExecutor:
             market_close = dt_time(15, 30)
 
             if not (market_open <= current_time <= market_close):
-                logger.info(f"[PREMIUM INFO] Executing after market hours ({current_time.strftime('%H:%M')})")
-                logger.info(f"[PREMIUM INFO] Using closing prices - illiquid OTM strikes may have stale LTP")
-                logger.info(f"[PREMIUM INFO] For best results, execute premium-based strategies during market hours")
+                logger.debug(f"[PREMIUM INFO] Executing after market hours ({current_time.strftime('%H:%M')})")
+                logger.debug(f"[PREMIUM INFO] Using closing prices - illiquid OTM strikes may have stale LTP")
+                logger.debug(f"[PREMIUM INFO] For best results, execute premium-based strategies during market hours")
 
             target_premium = leg.premium_value if leg.premium_value else 50
 
@@ -1037,7 +1037,7 @@ class StrategyExecutor:
             strikes_no_data = []  # Track strikes with no data
             all_premiums = []  # Collect ALL valid premiums
 
-            logger.info(f"[PREMIUM SEARCH] Target premium: {target_premium}, ATM Strike: {atm_strike}, Strike step: {strike_step}")
+            logger.debug(f"[PREMIUM SEARCH] Target premium: {target_premium}, ATM Strike: {atm_strike}, Strike step: {strike_step}")
 
             # PHASE 1: Collect all premium data (don't select yet)
             # Range: ±20 strikes (NIFTY: ATM ± 1000 points | BANKNIFTY: ATM ± 2000 points)
@@ -1122,20 +1122,20 @@ class StrategyExecutor:
             # VALIDATION: Check if the found premium is acceptable
             percent_diff = abs(best_premium - target_premium) / target_premium * 100
 
-            logger.info(f"[PREMIUM SEARCH RESULT] Checked {strikes_checked} strikes, found {strikes_with_data} with valid data")
+            logger.debug(f"[PREMIUM SEARCH RESULT] Checked {strikes_checked} strikes, found {strikes_with_data} with valid data")
 
             # Log strikes with no data if significant number missing
             if strikes_no_data:
-                logger.info(f"[PREMIUM SEARCH RESULT] {len(strikes_no_data)} strikes had no data: {strikes_no_data[:10]}" +
+                logger.debug(f"[PREMIUM SEARCH RESULT] {len(strikes_no_data)} strikes had no data: {strikes_no_data[:10]}" +
                            (f"... and {len(strikes_no_data)-10} more" if len(strikes_no_data) > 10 else ""))
 
-            logger.info(f"[PREMIUM SEARCH RESULT] ⭐ SELECTED ⭐")
-            logger.info(f"[PREMIUM SEARCH RESULT] Target: {target_premium} → Found: {best_premium} at strike {best_strike}")
-            logger.info(f"[PREMIUM SEARCH RESULT] Direction: {best_match['direction']} target by {best_diff:.2f} ({percent_diff:.1f}%)")
+            logger.debug(f"[PREMIUM SEARCH RESULT] ⭐ SELECTED ⭐")
+            logger.debug(f"[PREMIUM SEARCH RESULT] Target: {target_premium} → Found: {best_premium} at strike {best_strike}")
+            logger.debug(f"[PREMIUM SEARCH RESULT] Direction: {best_match['direction']} target by {best_diff:.2f} ({percent_diff:.1f}%)")
 
             # Create a visual premium distribution map
             if all_premiums and len(all_premiums) > 1:
-                logger.info(f"[PREMIUM MAP] Distribution of {len(all_premiums)} valid premiums:")
+                logger.debug(f"[PREMIUM MAP] Distribution of {len(all_premiums)} valid premiums:")
 
                 # Group premiums by ranges for visual clarity
                 ranges = [
@@ -1153,13 +1153,13 @@ class StrategyExecutor:
                         strikes_str = ', '.join([str(p['strike']) for p in in_range[:5]])
                         if len(in_range) > 5:
                             strikes_str += f" ... (+{len(in_range)-5} more)"
-                        logger.info(f"  {label}: {count} strikes - {strikes_str}")
+                        logger.debug(f"  {label}: {count} strikes - {strikes_str}")
 
                 # Show top 15 closest matches
-                logger.info(f"[PREMIUM] Top 15 closest matches to target {target_premium}:")
+                logger.debug(f"[PREMIUM] Top 15 closest matches to target {target_premium}:")
                 for i, match in enumerate(all_premiums[:15], 1):
                     marker = " ← SELECTED" if match['strike'] == best_strike else ""
-                    logger.info(f"  {i:2d}. Strike {match['strike']:5d}: Premium {match['premium']:7.2f}, Diff {match['diff']:6.2f} ({match['direction']:5s}){marker}")
+                    logger.debug(f"  {i:2d}. Strike {match['strike']:5d}: Premium {match['premium']:7.2f}, Diff {match['diff']:6.2f} ({match['direction']:5s}){marker}")
 
             # WARNING: If difference is too large, log warning with threshold based on target
             # For small premiums (<50): warn if >20% away
@@ -1191,19 +1191,19 @@ class StrategyExecutor:
 
     def _calculate_quantity(self, leg: StrategyLeg, num_accounts: int, account: TradingAccount = None) -> int:
         """Calculate quantity per account based on allocation type and available margin"""
-        logger.info(f"[QTY CALC DEBUG] Starting quantity calculation for leg {leg.leg_number}, account: {account.account_name if account else 'None'}")
-        logger.info(f"[QTY CALC DEBUG] use_margin_calculator: {self.use_margin_calculator}, num_accounts: {num_accounts}")
+        logger.debug(f"[QTY CALC DEBUG] Starting quantity calculation for leg {leg.leg_number}, account: {account.account_name if account else 'None'}")
+        logger.debug(f"[QTY CALC DEBUG] use_margin_calculator: {self.use_margin_calculator}, num_accounts: {num_accounts}")
 
         # Get lot size for the instrument
         lot_size = self._get_lot_size(leg)
-        logger.info(f"[QTY CALC DEBUG] Lot size for {leg.instrument}: {lot_size}")
+        logger.debug(f"[QTY CALC DEBUG] Lot size for {leg.instrument}: {lot_size}")
 
         # Check for pre-calculated quantity (for straddles, strangles, spreads)
         if account and self.use_margin_calculator:
             key = f"{leg.id}_{account.id}"
             if key in self.pre_calculated_quantities:
                 pre_calc_qty = self.pre_calculated_quantities[key]
-                logger.info(f"[QTY CALC DEBUG] Using pre-calculated quantity for leg {leg.leg_number}: {pre_calc_qty}")
+                logger.debug(f"[QTY CALC DEBUG] Using pre-calculated quantity for leg {leg.leg_number}: {pre_calc_qty}")
                 return pre_calc_qty
 
         # SEQUENTIAL EXECUTION FIX: For BUY legs, match quantity with executed SELL leg
@@ -1211,16 +1211,16 @@ class StrategyExecutor:
         if account and self.use_margin_calculator and leg.action == 'BUY' and leg.product_type == 'options':
             executed_sell_qty = self._get_executed_sell_leg_quantity(leg, account)
             if executed_sell_qty:
-                logger.info(f"[SEQ EXEC] BUY {leg.option_type} using executed SELL quantity: {executed_sell_qty}")
+                logger.debug(f"[SEQ EXEC] BUY {leg.option_type} using executed SELL quantity: {executed_sell_qty}")
                 return executed_sell_qty
 
         # If margin calculator is enabled and account provided, calculate based on margin
         if self.use_margin_calculator and self.margin_calculator and account:
-            logger.info(f"[QTY CALC DEBUG] Using margin calculator for {account.account_name}")
+            logger.debug(f"[QTY CALC DEBUG] Using margin calculator for {account.account_name}")
 
             # Determine trade type for margin calculation
             trade_type = self._get_trade_type_for_margin(leg)
-            logger.info(f"[QTY CALC DEBUG] Trade type: {trade_type}")
+            logger.debug(f"[QTY CALC DEBUG] Trade type: {trade_type}")
 
             # Special case for option buying
             if trade_type == 'buy':
@@ -1230,12 +1230,12 @@ class StrategyExecutor:
                 if is_part_of_spread:
                     # For spreads, use margin calculation based on SELL leg's margin
                     # This ensures both BUY and SELL legs have the same quantity
-                    logger.info(f"[QTY CALC DEBUG] Option buying is part of spread - using SELL leg margin calculation")
+                    logger.debug(f"[QTY CALC DEBUG] Option buying is part of spread - using SELL leg margin calculation")
                     # Use 'sell_c_p' margin to calculate quantity (same as corresponding SELL leg)
                     trade_type = 'sell_c_p'
                 elif self.margin_source == 'cash':
                     # Option Buyer grade selected: Calculate lots based on cash margin and premium per lot
-                    logger.info(f"[QTY CALC DEBUG] Option Buyer grade - calculating lots from cash margin and premium")
+                    logger.debug(f"[QTY CALC DEBUG] Option Buyer grade - calculating lots from cash margin and premium")
 
                     # Get cash margin for the account
                     if account.id not in self.account_margins:
@@ -1250,23 +1250,23 @@ class StrategyExecutor:
                     raw_lots = effective_margin / premium_per_lot if premium_per_lot > 0 else 0
                     optimal_lots = int(raw_lots)
 
-                    logger.info(f"[QTY CALC DEBUG] Cash margin: {cash_margin:,.2f}, Margin %: {self.margin_percentage*100}%")
-                    logger.info(f"[QTY CALC DEBUG] Effective margin: {effective_margin:,.2f}, Premium/lot: {premium_per_lot:,.2f}")
-                    logger.info(f"[QTY CALC DEBUG] Raw lots: {raw_lots:.3f}, Optimal lots: {optimal_lots}")
+                    logger.debug(f"[QTY CALC DEBUG] Cash margin: {cash_margin:,.2f}, Margin %: {self.margin_percentage*100}%")
+                    logger.debug(f"[QTY CALC DEBUG] Effective margin: {effective_margin:,.2f}, Premium/lot: {premium_per_lot:,.2f}")
+                    logger.debug(f"[QTY CALC DEBUG] Raw lots: {raw_lots:.3f}, Optimal lots: {optimal_lots}")
 
                     if optimal_lots > 0:
                         # Update remaining margin for next trades
                         margin_used = optimal_lots * premium_per_lot
                         self.account_margins[account.id] -= margin_used
                         total_quantity = optimal_lots * lot_size
-                        logger.info(f"[QTY CALC DEBUG] Option buying: {optimal_lots} lots × {lot_size} = {total_quantity} qty")
+                        logger.debug(f"[QTY CALC DEBUG] Option buying: {optimal_lots} lots × {lot_size} = {total_quantity} qty")
                         return total_quantity
                     else:
                         logger.warning(f"[QTY CALC DEBUG] Insufficient cash margin for option buying")
                         return 0
                 else:
                     # Standalone option buying with Option Seller grade - no margin blocked, use leg's configured lots
-                    logger.info(f"[QTY CALC DEBUG] Standalone option buying (seller grade) - using leg's configured lots")
+                    logger.debug(f"[QTY CALC DEBUG] Standalone option buying (seller grade) - using leg's configured lots")
                     if leg.lots and leg.lots > 0:
                         total_quantity = leg.lots * lot_size
                     elif leg.quantity and leg.quantity > 0:
@@ -1274,20 +1274,20 @@ class StrategyExecutor:
                     else:
                         total_quantity = lot_size  # Default to 1 lot
 
-                    logger.info(f"[QTY CALC DEBUG] Option buying quantity for {account.account_name}: {total_quantity} (lots={leg.lots}, lot_size={lot_size})")
+                    logger.debug(f"[QTY CALC DEBUG] Option buying quantity for {account.account_name}: {total_quantity} (lots={leg.lots}, lot_size={lot_size})")
                     return total_quantity
 
             # Get margin for the account (cash or available based on margin_source)
             if account.id not in self.account_margins:
-                logger.info(f"[QTY CALC DEBUG] Fetching fresh margin for account {account.id}")
+                logger.debug(f"[QTY CALC DEBUG] Fetching fresh margin for account {account.id}")
                 self.account_margins[account.id] = self._get_margin_for_account(account)
             else:
-                logger.info(f"[QTY CALC DEBUG] Using cached margin for account {account.id}")
+                logger.debug(f"[QTY CALC DEBUG] Using cached margin for account {account.id}")
 
             available_margin = self.account_margins[account.id]
             margin_type = "cash" if self.margin_source == 'cash' else "available"
-            logger.info(f"[QTY CALC DEBUG] {margin_type.title()} margin for {account.account_name}: {available_margin:,.2f}")
-            logger.info(f"[QTY CALC DEBUG] Risk profile: {self.strategy.risk_profile}, Margin %: {self.margin_percentage*100}%")
+            logger.debug(f"[QTY CALC DEBUG] {margin_type.title()} margin for {account.account_name}: {available_margin:,.2f}")
+            logger.debug(f"[QTY CALC DEBUG] Risk profile: {self.strategy.risk_profile}, Margin %: {self.margin_percentage*100}%")
 
             # Calculate optimal lot size based on margin with custom percentage
             # Pass is_expiry based on strategy's market_condition setting
@@ -1302,8 +1302,8 @@ class StrategyExecutor:
                 margin_source=self.margin_source
             )
 
-            logger.info(f"[QTY CALC DEBUG] Calculated optimal lots: {optimal_lots}")
-            logger.info(f"[QTY CALC DEBUG] Calculation details: {details}")
+            logger.debug(f"[QTY CALC DEBUG] Calculated optimal lots: {optimal_lots}")
+            logger.debug(f"[QTY CALC DEBUG] Calculation details: {details}")
 
             if optimal_lots > 0:
                 # Update remaining margin for next trades
@@ -1313,9 +1313,9 @@ class StrategyExecutor:
                 # Convert lots to quantity
                 total_quantity = optimal_lots * lot_size
 
-                logger.info(f"[QTY CALC DEBUG] Margin used: ₹{margin_used:,.2f}, Remaining margin: ₹{self.account_margins[account.id]:,.2f}")
-                logger.info(f"[QTY CALC DEBUG] Final quantity: {optimal_lots} lots × {lot_size} = {total_quantity}")
-                logger.info(f"Margin-based calculation for {account.account_name}: "
+                logger.debug(f"[QTY CALC DEBUG] Margin used: ₹{margin_used:,.2f}, Remaining margin: ₹{self.account_margins[account.id]:,.2f}")
+                logger.debug(f"[QTY CALC DEBUG] Final quantity: {optimal_lots} lots × {lot_size} = {total_quantity}")
+                logger.debug(f"Margin-based calculation for {account.account_name}: "
                            f"{optimal_lots} lots = {total_quantity} qty "
                            f"(Margin: {available_margin:.2f} -> {self.account_margins[account.id]:.2f})")
 
@@ -1338,7 +1338,7 @@ class StrategyExecutor:
             # Default to 1 lot
             total_quantity = lot_size
 
-        logger.info(f"Leg {leg.leg_number}: Lots={leg.lots}, Quantity={leg.quantity}, "
+        logger.debug(f"Leg {leg.leg_number}: Lots={leg.lots}, Quantity={leg.quantity}, "
                    f"Lot Size={lot_size}, Total Quantity={total_quantity}")
 
         # Distribute across accounts based on allocation type
@@ -1357,7 +1357,7 @@ class StrategyExecutor:
             # Custom allocation - default to full quantity per account
             quantity_per_account = total_quantity
 
-        logger.info(f"Quantity per account: {quantity_per_account} for {num_accounts} accounts")
+        logger.debug(f"Quantity per account: {quantity_per_account} for {num_accounts} accounts")
         return quantity_per_account
 
     def _get_trade_type_for_margin(self, leg: StrategyLeg) -> str:
@@ -1406,7 +1406,7 @@ class StrategyExecutor:
                 other_leg.action == 'SELL' and
                 other_leg.id != current_leg.id):
                 # Found a SELL leg for the same instrument - this is a spread
-                logger.info(f"[SPREAD DETECT] BUY leg {current_leg.option_type} has matching SELL leg {other_leg.option_type}")
+                logger.debug(f"[SPREAD DETECT] BUY leg {current_leg.option_type} has matching SELL leg {other_leg.option_type}")
                 return True
         return False
 
@@ -1439,7 +1439,7 @@ class StrategyExecutor:
                 break
 
         if not matching_sell_leg:
-            logger.info(f"[SEQ EXEC] No matching SELL {buy_leg.option_type} leg found for BUY {buy_leg.option_type}")
+            logger.debug(f"[SEQ EXEC] No matching SELL {buy_leg.option_type} leg found for BUY {buy_leg.option_type}")
             return None
 
         # Look up the executed quantity for this SELL leg from StrategyExecution
@@ -1452,11 +1452,11 @@ class StrategyExecutor:
         ).first()
 
         if executed and executed.quantity:
-            logger.info(f"[SEQ EXEC] Found executed SELL {matching_sell_leg.option_type} leg with qty={executed.quantity}, "
+            logger.debug(f"[SEQ EXEC] Found executed SELL {matching_sell_leg.option_type} leg with qty={executed.quantity}, "
                        f"BUY {buy_leg.option_type} will use same quantity")
             return executed.quantity
 
-        logger.info(f"[SEQ EXEC] SELL {matching_sell_leg.option_type} leg not yet executed for account {account.account_name}")
+        logger.debug(f"[SEQ EXEC] SELL {matching_sell_leg.option_type} leg not yet executed for account {account.account_name}")
         return None
 
     def _pre_calculate_multi_leg_quantities(self, legs: List[StrategyLeg]):
@@ -1468,7 +1468,7 @@ class StrategyExecutor:
         - Straddle/Strangle: SELL CE + SELL PE (same instrument) -> use 'sell_c_and_p' margin once
         - Spread: BUY CE + SELL CE or BUY PE + SELL PE -> use 'sell_c_p' margin once
         """
-        logger.info(f"[PRE-CALC] Starting pre-calculation for {len(legs)} legs across {len(self.accounts)} accounts")
+        logger.debug(f"[PRE-CALC] Starting pre-calculation for {len(legs)} legs across {len(self.accounts)} accounts")
 
         # Group legs by instrument and identify patterns
         instrument_legs = {}
@@ -1492,7 +1492,7 @@ class StrategyExecutor:
 
             if sell_ce_legs and sell_pe_legs:
                 # This is a straddle/strangle
-                logger.info(f"[PRE-CALC] Detected straddle/strangle for {instrument}: "
+                logger.debug(f"[PRE-CALC] Detected straddle/strangle for {instrument}: "
                            f"{len(sell_ce_legs)} SELL CE + {len(sell_pe_legs)} SELL PE")
 
                 # Calculate quantity once using 'sell_c_and_p' margin for all accounts
@@ -1515,7 +1515,7 @@ class StrategyExecutor:
                             if key in self.pre_calculated_quantities:
                                 buy_key = f"{buy_leg.id}_{account.id}"
                                 self.pre_calculated_quantities[buy_key] = self.pre_calculated_quantities[key]
-                                logger.info(f"[PRE-CALC] Spread BUY leg {buy_leg.id} assigned quantity "
+                                logger.debug(f"[PRE-CALC] Spread BUY leg {buy_leg.id} assigned quantity "
                                            f"{self.pre_calculated_quantities[buy_key]} from SELL leg {matching_sells[0].id}")
             else:
                 # Check for simple spreads (BUY + SELL of same type)
@@ -1526,7 +1526,7 @@ class StrategyExecutor:
 
                     if buy_legs and sell_legs:
                         # This is a spread (e.g., Bull Call Spread, Bear Put Spread)
-                        logger.info(f"[PRE-CALC] Detected {option_type} spread for {instrument}: "
+                        logger.debug(f"[PRE-CALC] Detected {option_type} spread for {instrument}: "
                                    f"{len(buy_legs)} BUY + {len(sell_legs)} SELL")
 
                         # Calculate quantity using 'sell_c_p' margin for the SELL leg
@@ -1537,7 +1537,7 @@ class StrategyExecutor:
                                 account
                             )
 
-        logger.info(f"[PRE-CALC] Pre-calculation complete. {len(self.pre_calculated_quantities)} quantities stored")
+        logger.debug(f"[PRE-CALC] Pre-calculation complete. {len(self.pre_calculated_quantities)} quantities stored")
 
     def _pre_calculate_straddle_quantity(self, instrument: str, sell_legs: List[StrategyLeg],
                                           account: TradingAccount):
@@ -1581,10 +1581,10 @@ class StrategyExecutor:
             for leg in sell_legs:
                 key = f"{leg.id}_{account.id}"
                 self.pre_calculated_quantities[key] = total_quantity
-                logger.info(f"[PRE-CALC] Straddle leg {leg.id} ({leg.option_type}) for {account.account_name}: "
+                logger.debug(f"[PRE-CALC] Straddle leg {leg.id} ({leg.option_type}) for {account.account_name}: "
                            f"{optimal_lots} lots = {total_quantity} qty")
 
-            logger.info(f"[PRE-CALC] Straddle margin calculation for {account.account_name}: "
+            logger.debug(f"[PRE-CALC] Straddle margin calculation for {account.account_name}: "
                        f"Margin used: {margin_used:,.2f}, Remaining: {self.account_margins[account.id]:,.2f}")
         else:
             # Store 0 quantity for insufficient margin
@@ -1635,10 +1635,10 @@ class StrategyExecutor:
             for leg in spread_legs:
                 key = f"{leg.id}_{account.id}"
                 self.pre_calculated_quantities[key] = total_quantity
-                logger.info(f"[PRE-CALC] Spread leg {leg.id} ({leg.action} {leg.option_type}) for {account.account_name}: "
+                logger.debug(f"[PRE-CALC] Spread leg {leg.id} ({leg.action} {leg.option_type}) for {account.account_name}: "
                            f"{optimal_lots} lots = {total_quantity} qty")
 
-            logger.info(f"[PRE-CALC] Spread margin calculation for {account.account_name}: "
+            logger.debug(f"[PRE-CALC] Spread margin calculation for {account.account_name}: "
                        f"Margin used: {margin_used:,.2f}, Remaining: {self.account_margins[account.id]:,.2f}")
         else:
             # Store 0 quantity for insufficient margin
@@ -1666,10 +1666,10 @@ class StrategyExecutor:
             if setting:
                 # Use next_month_lot_size if available and expiry is next month
                 if is_next_month and setting.next_month_lot_size:
-                    logger.info(f"Using next_month_lot_size {setting.next_month_lot_size} for {leg.instrument} (expiry={leg.expiry})")
+                    logger.debug(f"Using next_month_lot_size {setting.next_month_lot_size} for {leg.instrument} (expiry={leg.expiry})")
                     return setting.next_month_lot_size
                 else:
-                    logger.info(f"Using lot_size {setting.lot_size} for {leg.instrument} (expiry={leg.expiry})")
+                    logger.debug(f"Using lot_size {setting.lot_size} for {leg.instrument} (expiry={leg.expiry})")
                     return setting.lot_size
 
         # Fallback to defaults if not found (shouldn't happen if settings are initialized)
@@ -1704,7 +1704,7 @@ class StrategyExecutor:
 
                 if underlying and underlying in option_chain_service.websocket_managers:
                     self.websocket_manager = option_chain_service.websocket_managers[underlying]
-                    logger.info(f"Using existing WebSocket manager for {underlying}")
+                    logger.debug(f"Using existing WebSocket manager for {underlying}")
                 else:
                     # Create new WebSocket manager if needed
                     self.websocket_manager = ProfessionalWebSocketManager()
@@ -1740,7 +1740,7 @@ class StrategyExecutor:
                 self.websocket_manager.data_processor.register_depth_handler(on_depth_update)
                 self.websocket_manager.subscribe_batch(instruments, mode='ltp')
 
-                logger.info(f"Subscribed to WebSocket for {symbol}")
+                logger.debug(f"Subscribed to WebSocket for {symbol}")
                 self.price_subscriptions[symbol] = True
             else:
                 logger.warning(f"WebSocket not available for {symbol}, falling back to REST API")
@@ -1769,7 +1769,7 @@ class StrategyExecutor:
                 logger.error(f"[MONITOR] Execution {execution_id} not found")
                 return
 
-            logger.info(f"[MONITOR_START] Starting monitoring for execution ID={execution.id}, symbol={execution.symbol}")
+            logger.debug(f"[MONITOR_START] Starting monitoring for execution ID={execution.id}, symbol={execution.symbol}")
 
             leg = execution.leg
             account = execution.account
@@ -1805,13 +1805,13 @@ class StrategyExecutor:
                                 retry_avg_price = retry_response.get('data', {}).get('average_price')
                                 if retry_avg_price and retry_avg_price > 0:
                                     avg_price = retry_avg_price
-                                    logger.info(f"[MONITOR] Entry price after retry: {avg_price} for {symbol}")
+                                    logger.debug(f"[MONITOR] Entry price after retry: {avg_price} for {symbol}")
 
                         # Only update if we have a valid price
                         if avg_price and avg_price > 0:
                             execution.entry_price = avg_price
                             db.session.commit()
-                            logger.info(f"[MONITOR] Fetched entry price: {execution.entry_price} for {symbol}")
+                            logger.debug(f"[MONITOR] Fetched entry price: {execution.entry_price} for {symbol}")
                         else:
                             logger.warning(f"[MONITOR] Could not fetch valid entry price for {symbol}")
 
@@ -1909,7 +1909,7 @@ class StrategyExecutor:
                     if self.strategy.square_off_time:
                         current_time = datetime.now().time()
                         if current_time >= self.strategy.square_off_time:
-                            logger.info(f"Square off time reached for {symbol}")
+                            logger.debug(f"Square off time reached for {symbol}")
                             self._exit_position(execution, client, reason='square_off')
                             break
 
@@ -1953,14 +1953,14 @@ class StrategyExecutor:
             if leg.stop_loss_type == 'points':
                 logger.debug(f"[EXIT_CHECK] SL Type=points, SL Value={leg.stop_loss_value}, abs(P&L)={abs(pnl):.2f}")
                 if abs(pnl) >= leg.stop_loss_value:
-                    logger.info(f"[EXIT_TRIGGER] Stop loss hit! P&L={pnl:.2f} >= SL={leg.stop_loss_value}")
+                    logger.debug(f"[EXIT_TRIGGER] Stop loss hit! P&L={pnl:.2f} >= SL={leg.stop_loss_value}")
                     return True
             elif leg.stop_loss_type == 'percentage':
                 entry_value = execution.entry_price * execution.quantity
                 sl_threshold = entry_value * leg.stop_loss_value / 100
                 logger.debug(f"[EXIT_CHECK] SL Type=percentage, SL%={leg.stop_loss_value}, Threshold={sl_threshold:.2f}, abs(P&L)={abs(pnl):.2f}")
                 if abs(pnl) >= sl_threshold:
-                    logger.info(f"[EXIT_TRIGGER] Stop loss hit! abs(P&L)={abs(pnl):.2f} >= Threshold={sl_threshold:.2f}")
+                    logger.debug(f"[EXIT_TRIGGER] Stop loss hit! abs(P&L)={abs(pnl):.2f} >= Threshold={sl_threshold:.2f}")
                     return True
 
         # Check take profit
@@ -1968,14 +1968,14 @@ class StrategyExecutor:
             if leg.take_profit_type == 'points':
                 logger.debug(f"[EXIT_CHECK] TP Type=points, TP Value={leg.take_profit_value}, P&L={pnl:.2f}")
                 if pnl >= leg.take_profit_value:
-                    logger.info(f"[EXIT_TRIGGER] Take profit hit! P&L={pnl:.2f} >= TP={leg.take_profit_value}")
+                    logger.debug(f"[EXIT_TRIGGER] Take profit hit! P&L={pnl:.2f} >= TP={leg.take_profit_value}")
                     return True
             elif leg.take_profit_type == 'percentage':
                 entry_value = execution.entry_price * execution.quantity
                 tp_threshold = entry_value * leg.take_profit_value / 100
                 logger.debug(f"[EXIT_CHECK] TP Type=percentage, TP%={leg.take_profit_value}, Threshold={tp_threshold:.2f}, P&L={pnl:.2f}")
                 if pnl >= tp_threshold:
-                    logger.info(f"[EXIT_TRIGGER] Take profit hit! P&L={pnl:.2f} >= Threshold={tp_threshold:.2f}")
+                    logger.debug(f"[EXIT_TRIGGER] Take profit hit! P&L={pnl:.2f} >= Threshold={tp_threshold:.2f}")
                     return True
 
         # Check max loss/profit at strategy level
@@ -1983,14 +1983,14 @@ class StrategyExecutor:
             total_pnl = self._get_strategy_pnl()
             logger.debug(f"[EXIT_CHECK] Strategy Max Loss={self.strategy.max_loss}, Total P&L={total_pnl:.2f}")
             if abs(total_pnl) >= self.strategy.max_loss:
-                logger.info(f"[EXIT_TRIGGER] Strategy max loss hit! Total P&L={total_pnl:.2f}")
+                logger.debug(f"[EXIT_TRIGGER] Strategy max loss hit! Total P&L={total_pnl:.2f}")
                 return True
 
         if self.strategy.max_profit:
             total_pnl = self._get_strategy_pnl()
             logger.debug(f"[EXIT_CHECK] Strategy Max Profit={self.strategy.max_profit}, Total P&L={total_pnl:.2f}")
             if total_pnl >= self.strategy.max_profit:
-                logger.info(f"[EXIT_TRIGGER] Strategy max profit hit! Total P&L={total_pnl:.2f}")
+                logger.debug(f"[EXIT_TRIGGER] Strategy max profit hit! Total P&L={total_pnl:.2f}")
                 return True
 
         logger.debug(f"[EXIT_CHECK] No exit conditions met")
@@ -2054,7 +2054,7 @@ class StrategyExecutor:
                             retry_exit_price = retry_data.get('average_price')
                             if retry_exit_price and retry_exit_price > 0:
                                 exit_avg_price = retry_exit_price
-                                logger.info(f"[EXIT] Exit price after retry: Rs.{exit_avg_price} for {execution.symbol}")
+                                logger.debug(f"[EXIT] Exit price after retry: Rs.{exit_avg_price} for {execution.symbol}")
 
                 # Calculate realized P&L using actual prices
                 if exit_avg_price and exit_avg_price > 0:
@@ -2071,7 +2071,7 @@ class StrategyExecutor:
 
                 db.session.commit()
 
-                logger.info(f"Exited position for {execution.symbol}: {reason}, Exit Order ID: {exit_order_id}, Exit Price: {execution.exit_price}")
+                logger.debug(f"Exited position for {execution.symbol}: {reason}, Exit Order ID: {exit_order_id}, Exit Price: {execution.exit_price}")
 
         except Exception as e:
             logger.error(f"Error exiting position: {e}")

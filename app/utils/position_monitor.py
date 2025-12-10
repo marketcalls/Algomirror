@@ -58,7 +58,7 @@ class PositionMonitor:
         self.position_map: Dict[str, List[StrategyExecution]] = {}
         self.app = None  # Store Flask app instance for creating app context
 
-        logger.info("PositionMonitor initialized")
+        logger.debug("PositionMonitor initialized")
 
     def should_start_monitoring(self) -> bool:
         """
@@ -97,7 +97,7 @@ class PositionMonitor:
                 )
                 return False
 
-            logger.info(f"Primary account {primary_account.account_name} is connected")
+            logger.debug(f"Primary account {primary_account.account_name} is connected")
 
         except Exception as e:
             logger.error(f"Failed to ping primary account: {e}")
@@ -105,10 +105,10 @@ class PositionMonitor:
 
         # 3. Check trading hours from template
         if not self.is_trading_hours():
-            logger.info("Outside trading hours - monitoring disabled")
+            logger.debug("Outside trading hours - monitoring disabled")
             return False
 
-        logger.info("All conditions met - monitoring can start")
+        logger.debug("All conditions met - monitoring can start")
         return True
 
     def is_trading_hours(self) -> bool:
@@ -130,7 +130,7 @@ class PositionMonitor:
         ).first()
 
         if is_holiday:
-            logger.info(f"Market holiday: {is_holiday.holiday_name}")
+            logger.debug(f"Market holiday: {is_holiday.holiday_name}")
             return False
 
         # Get trading sessions for today
@@ -141,19 +141,19 @@ class PositionMonitor:
         ).all()
 
         if not sessions:
-            logger.info(f"No trading sessions configured for day {day_of_week}")
+            logger.debug(f"No trading sessions configured for day {day_of_week}")
             return False
 
         # Check if current time is within any session
         for session in sessions:
             if session.start_time <= current_time <= session.end_time:
-                logger.info(
+                logger.debug(
                     f"Within trading hours: {session.session_name} "
                     f"({session.start_time} - {session.end_time})"
                 )
                 return True
 
-        logger.info(f"Outside all trading sessions for day {day_of_week}")
+        logger.debug(f"Outside all trading sessions for day {day_of_week}")
         return False
 
     def get_open_positions(self) -> List[StrategyExecution]:
@@ -183,7 +183,7 @@ class PositionMonitor:
 
                 filtered_executions.append(execution)
 
-            logger.info(f"Found {len(filtered_executions)} open positions to monitor")
+            logger.debug(f"Found {len(filtered_executions)} open positions to monitor")
             return filtered_executions
 
         except Exception as e:
@@ -208,7 +208,7 @@ class PositionMonitor:
         open_executions = self.get_open_positions()
 
         if not open_executions:
-            logger.info("No open positions to monitor")
+            logger.debug("No open positions to monitor")
             return
 
         # Group by symbol to avoid duplicate subscriptions
@@ -226,7 +226,7 @@ class PositionMonitor:
 
             symbols_to_subscribe[key]['executions'].append(execution)
 
-        logger.info(f"Subscribing to {len(symbols_to_subscribe)} unique symbols")
+        logger.debug(f"Subscribing to {len(symbols_to_subscribe)} unique symbols")
 
         # Subscribe to each unique symbol
         for key, data in symbols_to_subscribe.items():
@@ -242,7 +242,7 @@ class PositionMonitor:
                 self.subscribed_symbols.add(key)
                 self.position_map[key] = data['executions']
 
-                logger.info(
+                logger.debug(
                     f"Subscribed to {data['symbol']} "
                     f"({len(data['executions'])} positions)"
                 )
@@ -250,7 +250,7 @@ class PositionMonitor:
             except Exception as e:
                 logger.error(f"Failed to subscribe to {data['symbol']}: {e}")
 
-        logger.info(
+        logger.debug(
             f"Position monitoring active: {len(self.subscribed_symbols)} symbols, "
             f"{len(open_executions)} positions"
         )
@@ -278,7 +278,7 @@ class PositionMonitor:
             self.subscribed_symbols.discard(key)
             self.position_map.pop(key, None)
 
-            logger.info(f"Unsubscribed from {symbol}")
+            logger.debug(f"Unsubscribed from {symbol}")
 
         except Exception as e:
             logger.error(f"Error unsubscribing from {symbol}: {e}")
@@ -302,7 +302,7 @@ class PositionMonitor:
             # Add to existing position tracking
             if key in self.position_map:
                 self.position_map[key].append(execution)
-            logger.info(f"Added {execution.symbol} to existing monitoring")
+            logger.debug(f"Added {execution.symbol} to existing monitoring")
             return
 
         # Subscribe to new symbol
@@ -317,7 +317,7 @@ class PositionMonitor:
                 self.subscribed_symbols.add(key)
                 self.position_map[key] = [execution]
 
-                logger.info(f"New position filled - subscribed to {execution.symbol}")
+                logger.debug(f"New position filled - subscribed to {execution.symbol}")
 
         except Exception as e:
             logger.error(f"Failed to subscribe to new position {execution.symbol}: {e}")
@@ -353,11 +353,11 @@ class PositionMonitor:
         # If no more positions for this symbol, unsubscribe
         if not positions:
             self.unsubscribe_from_symbol(execution.symbol, execution.exchange)
-            logger.info(
+            logger.debug(
                 f"No more positions for {execution.symbol} - unsubscribed"
             )
         else:
-            logger.info(
+            logger.debug(
                 f"Position closed for {execution.symbol} - "
                 f"{len(positions)} positions remaining"
             )
@@ -445,30 +445,30 @@ class PositionMonitor:
         # Store Flask app reference for creating app context
         if app is not None:
             self.app = app
-            logger.info("Flask app reference stored for WebSocket context")
+            logger.debug("Flask app reference stored for WebSocket context")
 
         # Check if monitoring should start (app context provided by caller)
         if not self.should_start_monitoring():
-            logger.info("Position monitoring not started - conditions not met")
+            logger.debug("Position monitoring not started - conditions not met")
             return
 
         # Register WebSocket data handler for quote updates
         if hasattr(websocket_manager, 'data_processor'):
             websocket_manager.data_processor.register_quote_handler(self._handle_websocket_data)
-            logger.info("Position monitor registered for WebSocket quote updates")
+            logger.debug("Position monitor registered for WebSocket quote updates")
 
         # Subscribe to open positions
         self.subscribe_to_positions()
 
         self.is_running = True
-        logger.info("Position monitoring started")
+        logger.debug("Position monitoring started")
 
     def stop(self):
         """Stop position monitoring and unsubscribe from all symbols"""
         if not self.is_running:
             return
 
-        logger.info("Stopping position monitoring...")
+        logger.debug("Stopping position monitoring...")
 
         # Unsubscribe from all symbols
         for key in list(self.subscribed_symbols):
@@ -520,7 +520,7 @@ class PositionMonitor:
 
                 self.subscribed_symbols.add(key)
                 self.position_map[key] = [execution]
-                logger.info(f"Refresh: Subscribed to {execution.symbol}")
+                logger.debug(f"Refresh: Subscribed to {execution.symbol}")
 
         except Exception as e:
             logger.error(f"Error refreshing positions: {e}")

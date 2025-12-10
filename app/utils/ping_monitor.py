@@ -41,7 +41,7 @@ class PingMonitor:
             self.monitoring_thread = threading.Thread(target=self._monitor_loop, daemon=True)
             self.monitoring_thread.start()
             if self.app:
-                self.app.logger.info("Ping monitoring started")
+                self.app.logger.debug("Ping monitoring started")
     
     def stop_monitoring_service(self):
         """Stop the background monitoring thread"""
@@ -49,7 +49,7 @@ class PingMonitor:
         if self.monitoring_thread:
             self.monitoring_thread.join(timeout=5)
         if self.app:
-            self.app.logger.info("Ping monitoring stopped")
+            self.app.logger.debug("Ping monitoring stopped")
     
     def _monitor_loop(self):
         """Main monitoring loop that runs in background thread"""
@@ -197,7 +197,7 @@ class PingMonitor:
                 if not self.app.config.get('PING_QUIET_MODE', False):
                     current_app.logger.warning(f"Ping check failed for account {account.id}: {str(e)}")
                 elif failure_count == 1:  # Log first failure even in quiet mode
-                    current_app.logger.info(f"Account {account.id} connection failed, will retry {max_failures - 1} more times")
+                    current_app.logger.debug(f"Account {account.id} connection failed, will retry {max_failures - 1} more times")
     
     def _update_account_status(self, account, status, message=None):
         """Update account connection status in database"""
@@ -209,7 +209,7 @@ class PingMonitor:
             account.updated_at = datetime.utcnow()
             
             db.session.commit()
-            current_app.logger.info(f"Account {account.id} status updated to {status}: {message}")
+            current_app.logger.debug(f"Account {account.id} status updated to {status}: {message}")
         except Exception as e:
             db.session.rollback()
             current_app.logger.error(f"Failed to update account {account.id} status: {str(e)}")
@@ -235,7 +235,7 @@ class PingMonitor:
         """Send notification to user (stored for client-side pickup)"""
         try:
             # Log the notification for immediate debugging
-            current_app.logger.info(f"Notification for user {account.user_id}: {message}")
+            current_app.logger.debug(f"Notification for user {account.user_id}: {message}")
             
             # Store as activity log for user to see in UI
             self._log_activity(
@@ -273,7 +273,7 @@ class PingMonitor:
                 }
             )
             
-            current_app.logger.info(f"Failover triggered successfully for {failed_account.account_name}")
+            current_app.logger.debug(f"Failover triggered successfully for {failed_account.account_name}")
             
         except Exception as e:
             current_app.logger.error(f"Failed to trigger failover: {str(e)}")
@@ -360,7 +360,7 @@ class PingMonitor:
                 response_time = time.time() - start_time
                 
                 # Log response time for manual checks
-                current_app.logger.info(f"Manual ping check for account {account.id} took {response_time:.2f}s")
+                current_app.logger.debug(f"Manual ping check for account {account.id} took {response_time:.2f}s")
                 
             except Exception as e:
                 error_str = str(e)

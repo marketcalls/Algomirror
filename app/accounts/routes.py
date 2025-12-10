@@ -25,7 +25,7 @@ def log_activity(action, details=None, account_id=None):
         db.session.add(log_entry)
         db.session.commit()
         
-        current_app.logger.info(
+        current_app.logger.debug(
             f'Account activity: {action}',
             extra={
                 'event': 'account_activity',
@@ -116,7 +116,7 @@ def add():
             # If this is a primary account, trigger background service
             if account.is_primary:
                 option_chain_service.on_primary_account_connected(account)
-                current_app.logger.info(f'Triggered option chain service for primary account: {account.account_name}')
+                current_app.logger.debug(f'Triggered option chain service for primary account: {account.account_name}')
             
             flash(f'Account "{account.account_name}" added successfully!', 'success')
             return redirect(url_for('accounts.manage'))
@@ -193,7 +193,7 @@ def edit(account_id):
             # If this became the primary account, trigger background service
             if account.is_primary:
                 option_chain_service.on_primary_account_connected(account)
-                current_app.logger.info(f'Triggered option chain service for primary account: {account.account_name}')
+                current_app.logger.debug(f'Triggered option chain service for primary account: {account.account_name}')
             
             flash(f'Account "{account.account_name}" updated successfully!', 'success')
             return redirect(url_for('accounts.manage'))
@@ -233,7 +233,7 @@ def delete(account_id):
         # If deleting primary account, notify background service
         if was_primary:
             option_chain_service.on_account_disconnected(account)
-            current_app.logger.info(f'Notified option chain service of primary account deletion: {account_name}')
+            current_app.logger.debug(f'Notified option chain service of primary account deletion: {account_name}')
 
         # Delete all related records first to avoid foreign key constraint errors
         # Import models needed for deletion

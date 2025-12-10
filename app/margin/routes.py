@@ -660,7 +660,7 @@ def update_trade_quality(quality_grade):
         quality.updated_at = datetime.utcnow()
         db.session.commit()
 
-        logger.info(f"Updated trade quality {quality_grade} for user {current_user.id}")
+        logger.debug(f"Updated trade quality {quality_grade} for user {current_user.id}")
 
         return jsonify({
             'status': 'success',
@@ -704,7 +704,7 @@ def delete_trade_quality(quality_grade):
         db.session.delete(quality)
         db.session.commit()
 
-        logger.info(f"Deleted trade quality {quality_grade} for user {current_user.id}")
+        logger.debug(f"Deleted trade quality {quality_grade} for user {current_user.id}")
 
         return jsonify({
             'status': 'success',
@@ -777,7 +777,7 @@ def update_option_buying_premium():
 
         db.session.commit()
 
-        logger.info(f"Updated option buying premium for user {current_user.id}: NIFTY/BN={option_buying_premium}, SENSEX={sensex_option_buying_premium}")
+        logger.debug(f"Updated option buying premium for user {current_user.id}: NIFTY/BN={option_buying_premium}, SENSEX={sensex_option_buying_premium}")
 
         return jsonify({
             'status': 'success',

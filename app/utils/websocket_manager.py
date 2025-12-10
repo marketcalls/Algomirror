@@ -160,7 +160,7 @@ class ProfessionalWebSocketManager:
             }
         
         self.connection_pool = pool
-        logger.info(f"Connection pool created with {len(backup_accounts or [])} backup accounts")
+        logger.debug(f"Connection pool created with {len(backup_accounts or [])} backup accounts")
         return pool
     
     def connect(self, ws_url, api_key):
@@ -193,7 +193,7 @@ class ProfessionalWebSocketManager:
                 return False
 
             self.active = True
-            logger.info("WebSocket connection established")
+            logger.debug("WebSocket connection established")
             return True
 
         except Exception as e:
@@ -203,7 +203,7 @@ class ProfessionalWebSocketManager:
     
     def on_open(self, ws):
         """WebSocket opened callback"""
-        logger.info("WebSocket connection opened")
+        logger.debug("WebSocket connection opened")
         self.backoff_strategy.reset()
         
         # Send authentication message (OpenAlgo style)
@@ -220,7 +220,7 @@ class ProfessionalWebSocketManager:
                 "action": "authenticate",
                 "api_key": self.api_key
             }
-            logger.info(f"Authenticating with API key: {self.api_key[:8]}...{self.api_key[-8:]}")
+            logger.debug(f"Authenticating with API key: {self.api_key[:8]}...{self.api_key[-8:]}")
             self.ws.send(json.dumps(auth_msg))
     
     def on_message(self, ws, message):
@@ -240,7 +240,7 @@ class ProfessionalWebSocketManager:
             if data.get("type") == "auth":
                 if data.get("status") == "success":
                     self.authenticated = True
-                    logger.info("Authentication successful!")
+                    logger.debug("Authentication successful!")
                     # Resubscribe after successful auth
                     if self.subscriptions:
                         self.resubscribe_all()
@@ -335,7 +335,7 @@ class ProfessionalWebSocketManager:
 
         for attempt in range(self.reconnect_attempts):
             delay = self.backoff_strategy.get_next_delay()
-            logger.info(f"Reconnection attempt {attempt + 1}/{self.reconnect_attempts} in {delay} seconds")
+            logger.debug(f"Reconnection attempt {attempt + 1}/{self.reconnect_attempts} in {delay} seconds")
             sleep(delay)
             
             try:
@@ -358,11 +358,11 @@ class ProfessionalWebSocketManager:
                 
                 # Check if connection succeeded or was refused
                 if connected:
-                    logger.info("Reconnection successful")
+                    logger.debug("Reconnection successful")
 
                     # Resubscribe to all previous subscriptions
                     if self.subscriptions:
-                        logger.info(f"Resubscribing to {len(self.subscriptions)} symbols after reconnection")
+                        logger.debug(f"Resubscribing to {len(self.subscriptions)} symbols after reconnection")
                         sleep(1)  # Wait for authentication
                         for sub_str in list(self.subscriptions):
                             subscription = json.loads(sub_str)
@@ -404,7 +404,7 @@ class ProfessionalWebSocketManager:
             from_account_name = previous_account.account_name if previous_account and hasattr(previous_account, 'account_name') else 'Unknown'
             
             next_account = backup_accounts[0]
-            logger.info(f"Switching from {from_account_name} to backup account: {next_account.account_name}")
+            logger.debug(f"Switching from {from_account_name} to backup account: {next_account.account_name}")
             
             # Update connection pool
             self.connection_pool['current_account'] = next_account
@@ -421,7 +421,7 @@ class ProfessionalWebSocketManager:
             
             # Connect with new account
             if hasattr(next_account, 'websocket_url') and hasattr(next_account, 'get_api_key'):
-                logger.info(f"Attempting to connect to backup WebSocket: {next_account.websocket_url}")
+                logger.debug(f"Attempting to connect to backup WebSocket: {next_account.websocket_url}")
                 
                 # Update stored credentials for future reconnection attempts
                 self.ws_url = next_account.websocket_url
@@ -432,11 +432,11 @@ class ProfessionalWebSocketManager:
                 
                 # Try to connect with the backup account
                 if self.connect(next_account.websocket_url, next_account.get_api_key()):
-                    logger.info(f"Successfully connected to backup account: {next_account.account_name}")
+                    logger.debug(f"Successfully connected to backup account: {next_account.account_name}")
 
                     # Resubscribe to all previous subscriptions
                     if self.subscriptions:
-                        logger.info(f"Resubscribing to {len(self.subscriptions)} symbols after failover")
+                        logger.debug(f"Resubscribing to {len(self.subscriptions)} symbols after failover")
                         sleep(1)  # Wait for authentication
                         for sub_str in list(self.subscriptions):
                             subscription = json.loads(sub_str)
@@ -607,7 +607,7 @@ class ProfessionalWebSocketManager:
     
     def resubscribe_all(self):
         """Resubscribe to all symbols after reconnection"""
-        logger.info(f"Resubscribing to {len(self.subscriptions)} symbols")
+        logger.debug(f"Resubscribing to {len(self.subscriptions)} symbols")
         
         # Map mode names to numbers
         mode_map = {
@@ -653,7 +653,7 @@ class ProfessionalWebSocketManager:
             self.active = False
             if self.ws:
                 self.ws.close()
-            logger.info("WebSocket disconnected")
+            logger.debug("WebSocket disconnected")
         except Exception as e:
             logger.error(f"Error disconnecting WebSocket: {e}")
     
