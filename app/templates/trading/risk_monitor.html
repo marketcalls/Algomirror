@@ -287,7 +287,7 @@
                     <tbody id="riskEventsTable">
                         {% for event in recent_events %}
                         <tr>
-                            <td class="text-xs">{{ event.triggered_at.strftime('%Y-%m-%d %H:%M:%S') if event.triggered_at else '--' }}</td>
+                            <td class="text-xs">{{ event.triggered_at.strftime('%d/%m/%Y, %I:%M:%S %p') + ' IST' if event.triggered_at else '--' }}</td>
                             <td>{{ event.strategy.name if event.strategy else 'Unknown' }}</td>
                             <td>
                                 <span class="badge badge-sm

@@ -587,7 +587,7 @@
                             </div>
                             <div class="text-sm mt-1">
                                 <span class="text-base-content/60">Time:</span>
-                                <span class="text-xs ml-1">{{ strategy.max_loss_triggered_at.strftime('%d-%b %H:%M:%S') }} UTC</span>
+                                <span class="text-xs ml-1">{{ strategy.max_loss_triggered_at.strftime('%d/%m/%Y, %I:%M:%S %p') }} IST</span>
                             </div>
                             {% endif %}
                             {% if strategy.auto_exit_on_max_loss and not strategy.max_loss_triggered_at %}
@@ -628,7 +628,7 @@
                             </div>
                             <div class="text-sm mt-1">
                                 <span class="text-base-content/60">Time:</span>
-                                <span class="text-xs ml-1">{{ strategy.max_profit_triggered_at.strftime('%d-%b %H:%M:%S') }} UTC</span>
+                                <span class="text-xs ml-1">{{ strategy.max_profit_triggered_at.strftime('%d/%m/%Y, %I:%M:%S %p') }} IST</span>
                             </div>
                             {% endif %}
                             {% if strategy.auto_exit_on_max_profit and not strategy.max_profit_triggered_at %}
@@ -711,7 +711,7 @@
                             {% if strategy.supertrend_exit_triggered_at %}
                             <div class="text-sm mt-1">
                                 <span class="text-base-content/60">Time:</span>
-                                <span class="text-xs ml-1">{{ strategy.supertrend_exit_triggered_at.strftime('%d-%b %H:%M:%S') }} UTC</span>
+                                <span class="text-xs ml-1">{{ strategy.supertrend_exit_triggered_at.strftime('%d/%m/%Y, %I:%M:%S %p') }} IST</span>
                             </div>
                             {% endif %}
                             {% endif %}

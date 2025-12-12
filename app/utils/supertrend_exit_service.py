@@ -11,6 +11,13 @@ from typing import Dict, Any, List
 from apscheduler.schedulers.background import BackgroundScheduler
 import pytz
 
+# IST timezone for storing timestamps
+IST = pytz.timezone('Asia/Kolkata')
+
+def get_ist_now():
+    """Get current time in IST (naive datetime for DB storage)"""
+    return datetime.now(IST).replace(tzinfo=None)
+
 from app.models import Strategy, StrategyExecution, TradingAccount
 from app.utils.supertrend import calculate_supertrend
 from app.utils.openalgo_client import ExtendedOpenAlgoAPI
@@ -516,7 +523,7 @@ class SupertrendExitService:
                 # Mark strategy as triggered and store the reason
                 strategy.supertrend_exit_triggered = True
                 strategy.supertrend_exit_reason = exit_reason
-                strategy.supertrend_exit_triggered_at = datetime.utcnow()
+                strategy.supertrend_exit_triggered_at = get_ist_now()
                 db.session.commit()
 
                 # Get all open positions
@@ -601,7 +608,7 @@ class SupertrendExitService:
                                     exit_order_id = response.get('orderid')
                                     position_to_update.status = 'exit_pending'
                                     position_to_update.exit_order_id = exit_order_id
-                                    position_to_update.exit_time = datetime.utcnow()
+                                    position_to_update.exit_time = get_ist_now()
                                     position_to_update.exit_reason = exit_reason
                                     position_to_update.broker_order_status = 'open'
 

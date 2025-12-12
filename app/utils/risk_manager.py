@@ -15,8 +15,16 @@ import logging
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 from decimal import Decimal
+import pytz
 
 from app import db
+
+# IST timezone for storing timestamps
+IST = pytz.timezone('Asia/Kolkata')
+
+def get_ist_now():
+    """Get current time in IST (naive datetime for DB storage)"""
+    return datetime.now(IST).replace(tzinfo=None)
 from app.models import (
     Strategy, StrategyExecution, StrategyLeg, RiskEvent,
     TradingAccount
@@ -233,7 +241,7 @@ class RiskManager:
 
             # Store exit reason and timestamp
             exit_reason = f"Max Loss: P&L {current_pnl:.2f} breached threshold {max_loss_threshold:.2f}"
-            strategy.max_loss_triggered_at = datetime.utcnow()
+            strategy.max_loss_triggered_at = get_ist_now()
             strategy.max_loss_exit_reason = exit_reason
             db.session.commit()
 
@@ -292,7 +300,7 @@ class RiskManager:
 
             # Store exit reason and timestamp
             exit_reason = f"Max Profit: P&L {current_pnl:.2f} reached target {max_profit_threshold:.2f}"
-            strategy.max_profit_triggered_at = datetime.utcnow()
+            strategy.max_profit_triggered_at = get_ist_now()
             strategy.max_profit_exit_reason = exit_reason
             db.session.commit()
 
@@ -475,7 +483,7 @@ class RiskManager:
 
                 # Store exit reason and timestamp
                 exit_reason = f"TSL: P&L {current_pnl:.2f} <= Stop {current_stop:.2f} (Peak: {current_peak:.2f}, Initial: {strategy.trailing_sl_initial_stop:.2f})"
-                strategy.trailing_sl_triggered_at = datetime.utcnow()
+                strategy.trailing_sl_triggered_at = get_ist_now()
                 strategy.trailing_sl_exit_reason = exit_reason
                 db.session.commit()
 
@@ -602,7 +610,7 @@ class RiskManager:
                         execution.status = 'exit_pending'
                         execution.exit_order_id = order_id
                         execution.broker_order_status = 'open'
-                        execution.exit_time = datetime.utcnow()
+                        execution.exit_time = get_ist_now()
                         execution.exit_reason = risk_event.event_type
 
                         # Add exit order to poller to get actual fill price (same as entry orders)

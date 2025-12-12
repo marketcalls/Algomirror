@@ -3,8 +3,16 @@ from flask_login import UserMixin
 from werkzeug.security import generate_password_hash, check_password_hash
 from cryptography.fernet import Fernet
 import os
+import pytz
 from dotenv import load_dotenv
 from app import db, login_manager
+
+# IST timezone for storing timestamps
+IST = pytz.timezone('Asia/Kolkata')
+
+def get_ist_now():
+    """Get current time in IST (naive datetime for DB storage)"""
+    return datetime.now(IST).replace(tzinfo=None)
 
 # Load environment variables first
 load_dotenv()
@@ -888,7 +896,7 @@ class RiskEvent(db.Model):
     current_value = db.Column(db.Float)  # Current P&L or price
     action_taken = db.Column(db.String(50))  # 'close_all', 'close_partial', 'alert_only'
     exit_order_ids = db.Column(db.JSON)  # List of exit orders placed
-    triggered_at = db.Column(db.DateTime, default=datetime.utcnow)
+    triggered_at = db.Column(db.DateTime, default=get_ist_now)
     notes = db.Column(db.Text)
 
     # Relationships - cascade delete when Strategy/Execution is deleted
