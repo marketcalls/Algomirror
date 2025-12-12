@@ -498,7 +498,10 @@ class RiskManager:
 
     def close_strategy_positions(self, strategy: Strategy, risk_event: RiskEvent) -> bool:
         """
-        Close all open positions for a strategy.
+        Close all open positions for a strategy across ALL accounts.
+
+        IMPORTANT: For multi-account strategies, each execution is closed on its own account.
+        This ensures orders are placed to the correct broker account.
 
         Args:
             strategy: Strategy to close
@@ -518,19 +521,30 @@ class RiskManager:
                 logger.debug(f"No open positions to close for {strategy.name}")
                 return True
 
+            # Log all executions we're about to close
+            logger.debug(f"[RISK EXIT] Strategy {strategy.name}: Found {len(open_executions)} open positions to close")
+            for exec in open_executions:
+                logger.debug(f"[RISK EXIT]   - Execution {exec.id}: {exec.symbol} on account {exec.account.account_name if exec.account else 'NONE'}, qty={exec.quantity}")
+
             exit_order_ids = []
+            success_count = 0
+            fail_count = 0
 
             # Close each position with freeze-aware placement and retry logic
             from app.utils.freeze_quantity_handler import place_order_with_freeze_check
 
-            for execution in open_executions:
+            for idx, execution in enumerate(open_executions):
+                logger.debug(f"[RISK EXIT] Processing execution {idx + 1}/{len(open_executions)}: ID={execution.id}, symbol={execution.symbol}")
                 try:
                     # Use the account from the execution (not primary account)
                     # Each execution might be on a different account in multi-account setups
                     account = execution.account
                     if not account or not account.is_active:
-                        logger.error(f"Account not found or inactive for execution {execution.id}")
+                        logger.error(f"[RISK EXIT] Account not found or inactive for execution {execution.id}")
+                        fail_count += 1
                         continue
+
+                    logger.debug(f"[RISK EXIT] Using account {account.account_name} (ID={account.id}) for execution {execution.id}")
 
                     # Initialize OpenAlgo client for this execution's account
                     client = ExtendedOpenAlgoAPI(
@@ -541,6 +555,8 @@ class RiskManager:
                     # Reverse transaction type for exit (get action from leg)
                     leg_action = execution.leg.action.upper() if execution.leg else 'BUY'
                     exit_transaction = 'SELL' if leg_action == 'BUY' else 'BUY'
+
+                    logger.debug(f"[RISK EXIT] Placing {exit_transaction} order for {execution.symbol}, qty={execution.quantity} on {account.account_name}")
 
                     # Place exit order with freeze-aware placement and retry logic
                     max_retries = 3
@@ -561,22 +577,24 @@ class RiskManager:
                                 product=execution.product or 'MIS'
                             )
                             if response and isinstance(response, dict):
+                                logger.debug(f"[RISK EXIT] Order response for {execution.symbol}: {response}")
                                 break
                         except Exception as api_error:
-                            logger.warning(f"[RETRY] Risk exit attempt {attempt + 1}/{max_retries} failed: {api_error}")
+                            logger.warning(f"[RISK EXIT] Attempt {attempt + 1}/{max_retries} failed for {execution.symbol} on {account.account_name}: {api_error}")
                             if attempt < max_retries - 1:
                                 import time
                                 time.sleep(retry_delay)
                                 retry_delay *= 2
                             else:
-                                response = {'status': 'error', 'message': f'API error after {max_retries} retries'}
+                                response = {'status': 'error', 'message': f'API error after {max_retries} retries: {api_error}'}
 
                     if response and response.get('status') == 'success':
                         order_id = response.get('orderid')
                         exit_order_ids.append(order_id)
+                        success_count += 1
 
                         logger.debug(
-                            f"Exit order placed for {execution.symbol}: "
+                            f"[RISK EXIT] SUCCESS: Exit order placed for {execution.symbol} on {account.account_name}: "
                             f"Order ID {order_id}"
                         )
 
@@ -597,13 +615,15 @@ class RiskManager:
                         )
 
                     else:
+                        fail_count += 1
+                        error_msg = response.get('message') if response else 'No response'
                         logger.error(
-                            f"Failed to place exit order for {execution.symbol}: "
-                            f"{response.get('message') if response else 'No response'}"
+                            f"[RISK EXIT] FAILED: Exit order for {execution.symbol} on {account.account_name}: {error_msg}"
                         )
 
                 except Exception as e:
-                    logger.error(f"Error placing exit order for {execution.symbol}: {e}")
+                    fail_count += 1
+                    logger.error(f"[RISK EXIT] EXCEPTION for {execution.symbol}: {e}", exc_info=True)
 
             # Update risk event with order IDs
             risk_event.exit_order_ids = exit_order_ids
@@ -611,11 +631,11 @@ class RiskManager:
             db.session.commit()
 
             logger.debug(
-                f"Risk exit completed for {strategy.name}: "
-                f"{len(exit_order_ids)} orders placed"
+                f"[RISK EXIT] Completed for {strategy.name}: "
+                f"{success_count} success, {fail_count} failed out of {len(open_executions)} total"
             )
 
-            return len(exit_order_ids) > 0
+            return success_count > 0
 
         except Exception as e:
             logger.error(f"Error closing strategy positions: {e}")
@@ -643,6 +663,23 @@ class RiskManager:
                 # Close positions if auto-exit enabled
                 if strategy.auto_exit_on_max_loss:
                     self.close_strategy_positions(strategy, risk_event)
+            else:
+                # RETRY MECHANISM: If max loss was already triggered but positions still open, retry closing
+                if strategy.max_loss_triggered_at:
+                    open_positions = StrategyExecution.query.filter_by(
+                        strategy_id=strategy.id,
+                        status='entered'
+                    ).count()
+                    if open_positions > 0:
+                        logger.debug(f"[MAX LOSS RETRY] Strategy {strategy.name}: Max loss triggered but {open_positions} positions still open, retrying close")
+                        retry_event = RiskEvent(
+                            strategy_id=strategy.id,
+                            event_type='max_loss_retry',
+                            threshold_value=strategy.max_loss,
+                            current_value=0,
+                            action_taken='close_remaining'
+                        )
+                        self.close_strategy_positions(strategy, retry_event)
 
             # Check max profit
             risk_event = self.check_max_profit(strategy)
@@ -653,6 +690,23 @@ class RiskManager:
                 # Close positions if auto-exit enabled
                 if strategy.auto_exit_on_max_profit:
                     self.close_strategy_positions(strategy, risk_event)
+            else:
+                # RETRY MECHANISM: If max profit was already triggered but positions still open, retry closing
+                if strategy.max_profit_triggered_at:
+                    open_positions = StrategyExecution.query.filter_by(
+                        strategy_id=strategy.id,
+                        status='entered'
+                    ).count()
+                    if open_positions > 0:
+                        logger.debug(f"[MAX PROFIT RETRY] Strategy {strategy.name}: Max profit triggered but {open_positions} positions still open, retrying close")
+                        retry_event = RiskEvent(
+                            strategy_id=strategy.id,
+                            event_type='max_profit_retry',
+                            threshold_value=strategy.max_profit,
+                            current_value=0,
+                            action_taken='close_remaining'
+                        )
+                        self.close_strategy_positions(strategy, retry_event)
 
             # Check trailing SL
             risk_event = self.check_trailing_sl(strategy)
@@ -662,6 +716,24 @@ class RiskManager:
 
                 # Trailing SL always triggers exit
                 self.close_strategy_positions(strategy, risk_event)
+            else:
+                # RETRY MECHANISM: If TSL was already triggered but positions still open, retry closing
+                if strategy.trailing_sl_triggered_at:
+                    open_positions = StrategyExecution.query.filter_by(
+                        strategy_id=strategy.id,
+                        status='entered'
+                    ).count()
+                    if open_positions > 0:
+                        logger.debug(f"[TSL RETRY] Strategy {strategy.name}: TSL triggered but {open_positions} positions still open, retrying close")
+                        # Create a retry risk event
+                        retry_event = RiskEvent(
+                            strategy_id=strategy.id,
+                            event_type='trailing_sl_retry',
+                            threshold_value=strategy.trailing_sl_trigger_pnl,
+                            current_value=0,  # Will be recalculated
+                            action_taken='close_remaining'
+                        )
+                        self.close_strategy_positions(strategy, retry_event)
 
         except Exception as e:
             logger.error(f"Error checking strategy {strategy.name}: {e}")

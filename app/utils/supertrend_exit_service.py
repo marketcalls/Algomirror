@@ -100,19 +100,45 @@ class SupertrendExitService:
                     is_active=True
                 ).all()
 
-                if not strategies:
-                    return
+                if strategies:
+                    logger.debug(f"Monitoring {len(strategies)} strategies with Supertrend exit enabled")
 
-                logger.debug(f"Monitoring {len(strategies)} strategies with Supertrend exit enabled")
+                    for strategy in strategies:
+                        try:
+                            # Check if we should monitor this strategy based on timeframe
+                            if self.should_check_strategy(strategy):
+                                logger.debug(f"Checking Supertrend for strategy {strategy.id} ({strategy.name})")
+                                self.check_supertrend_exit(strategy, app)
+                        except Exception as e:
+                            logger.error(f"Error monitoring strategy {strategy.id}: {e}", exc_info=True)
 
-                for strategy in strategies:
+                # RETRY MECHANISM: Check strategies where Supertrend was triggered but positions still open
+                triggered_strategies = Strategy.query.filter_by(
+                    supertrend_exit_enabled=True,
+                    supertrend_exit_triggered=True,
+                    is_active=True
+                ).all()
+
+                for strategy in triggered_strategies:
                     try:
-                        # Check if we should monitor this strategy based on timeframe
-                        if self.should_check_strategy(strategy):
-                            logger.debug(f"Checking Supertrend for strategy {strategy.id} ({strategy.name})")
-                            self.check_supertrend_exit(strategy, app)
+                        # Check if there are still open positions
+                        open_positions = StrategyExecution.query.filter_by(
+                            strategy_id=strategy.id,
+                            status='entered'
+                        ).all()
+
+                        # Filter out rejected/cancelled
+                        open_positions = [
+                            pos for pos in open_positions
+                            if not (hasattr(pos, 'broker_order_status') and
+                                   pos.broker_order_status in ['rejected', 'cancelled'])
+                        ]
+
+                        if open_positions:
+                            logger.debug(f"[SUPERTREND RETRY] Strategy {strategy.id}: Supertrend triggered but {len(open_positions)} positions still open, retrying close")
+                            self.trigger_parallel_exit(strategy, f"Supertrend RETRY - {len(open_positions)} positions remaining", app)
                     except Exception as e:
-                        logger.error(f"Error monitoring strategy {strategy.id}: {e}", exc_info=True)
+                        logger.error(f"Error retrying Supertrend exit for strategy {strategy.id}: {e}", exc_info=True)
 
         except Exception as e:
             logger.error(f"Error in monitor_strategies: {e}", exc_info=True)

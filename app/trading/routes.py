@@ -1909,8 +1909,40 @@ def risk_status_stream():
                             # Check if already hit (persisted state)
                             if execution.sl_hit_at:
                                 sl_hit = True
+                                # RETRY MECHANISM: If SL was hit but position still open (no exit order), retry exit
+                                if not execution.exit_order_id and execution.status == 'entered':
+                                    print(f"[RISK MONITOR] RETRY: SL was hit but no exit order for {execution.symbol}, retrying...", flush=True)
+                                    exit_success = execute_leg_exit(
+                                        execution.id,
+                                        execution.strategy_id,
+                                        execution.symbol,
+                                        execution.exchange,
+                                        execution.quantity,
+                                        action,
+                                        'stop_loss_retry',
+                                        execution.sl_hit_price or 0
+                                    )
+                                    if exit_success:
+                                        print(f"[RISK MONITOR] RETRY SUCCESS: Exit order placed for {execution.symbol} (Stop Loss)", flush=True)
+                                        exit_already_placed = True
                             if execution.tp_hit_at:
                                 tp_hit = True
+                                # RETRY MECHANISM: If TP was hit but position still open (no exit order), retry exit
+                                if not execution.exit_order_id and execution.status == 'entered':
+                                    print(f"[RISK MONITOR] RETRY: TP was hit but no exit order for {execution.symbol}, retrying...", flush=True)
+                                    exit_success = execute_leg_exit(
+                                        execution.id,
+                                        execution.strategy_id,
+                                        execution.symbol,
+                                        execution.exchange,
+                                        execution.quantity,
+                                        action,
+                                        'take_profit_retry',
+                                        execution.tp_hit_price or 0
+                                    )
+                                    if exit_success:
+                                        print(f"[RISK MONITOR] RETRY SUCCESS: Exit order placed for {execution.symbol} (Take Profit)", flush=True)
+                                        exit_already_placed = True
 
                             if leg and entry_price > 0:
                                 # Stop Loss calculation
