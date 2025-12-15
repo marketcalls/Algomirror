@@ -694,22 +694,31 @@ class OptionChainBackgroundService:
     def refresh_trading_hours_cache(self):
         """Refresh cached trading hours, holidays, and special sessions"""
         try:
-            # This method will be called within Flask app context
             logger.debug("Refreshing trading hours cache")
-            
+
             # Cache holidays for the current year
             now = datetime.now(pytz.timezone('Asia/Kolkata'))
             year_start = date(now.year, 1, 1)
             year_end = date(now.year, 12, 31)
-            
-            # Note: These queries will only work within Flask app context
-            # They'll be called from Flask routes or scheduled jobs with context
+
+            # Use stored Flask app instead of creating a new one (expensive!)
             try:
-                from app import create_app, db
+                from app import db
                 from app.models import MarketHoliday, SpecialTradingSession, TradingSession
-                
-                app = create_app()
-                with app.app_context():
+
+                # Use stored flask_app if available, otherwise try current_app
+                app_to_use = self.flask_app
+                if not app_to_use:
+                    try:
+                        from flask import current_app
+                        app_to_use = current_app._get_current_object()
+                    except RuntimeError:
+                        # No app context available - use defaults
+                        logger.warning("No Flask app available for cache refresh")
+                        self.set_default_cache()
+                        return
+
+                with app_to_use.app_context():
                     # Cache holidays
                     holidays = MarketHoliday.query.filter(
                         and_(
@@ -717,7 +726,7 @@ class OptionChainBackgroundService:
                             MarketHoliday.holiday_date <= year_end
                         )
                     ).all()
-                    
+
                     self.cached_holidays = {}
                     for holiday in holidays:
                         self.cached_holidays[holiday.holiday_date] = {
@@ -725,7 +734,7 @@ class OptionChainBackgroundService:
                             'market': holiday.market,
                             'is_special_session': holiday.is_special_session
                         }
-                    
+
                     # Cache special sessions
                     special_sessions = SpecialTradingSession.query.filter(
                         and_(
@@ -734,7 +743,7 @@ class OptionChainBackgroundService:
                             SpecialTradingSession.is_active == True
                         )
                     ).all()
-                    
+
                     self.cached_special_sessions = {}
                     for session in special_sessions:
                         if session.session_date not in self.cached_special_sessions:
@@ -745,7 +754,7 @@ class OptionChainBackgroundService:
                             'end_time': session.end_time,
                             'market': session.market
                         })
-                    
+
                     # Cache regular trading sessions
                     sessions = TradingSession.query.filter_by(is_active=True).all()
                     self.cached_sessions = []
@@ -756,17 +765,17 @@ class OptionChainBackgroundService:
                             'end_time': session.end_time,
                             'is_active': session.is_active
                         })
-                    
+
                     self.cache_refresh_time = datetime.now(pytz.timezone('Asia/Kolkata'))
                     logger.debug(f"Cache refreshed: {len(self.cached_holidays)} holidays, "
                               f"{len(self.cached_special_sessions)} special session dates, "
                               f"{len(self.cached_sessions)} regular sessions")
-                              
+
             except Exception as e:
                 logger.warning(f"Could not refresh cache from database: {e}")
                 # Use default cache if database not available
                 self.set_default_cache()
-                
+
         except Exception as e:
             logger.error(f"Error refreshing trading hours cache: {e}")
             self.set_default_cache()
@@ -942,39 +951,36 @@ class OptionChainBackgroundService:
             logger.error(f"Error stopping risk manager: {e}")
 
     def run_risk_checks(self):
-        """Run risk checks (called by scheduler every 1 second)"""
+        """Run risk checks (called by scheduler every 1 second)
+
+        Note: APScheduler already runs jobs in a thread pool, so we DON'T
+        need to spawn additional threads here. Just run directly with app context.
+        """
         if not self.risk_manager_running:
             return
 
         try:
-            # Run within Flask app context for database access
+            # Run directly with Flask app context (no extra thread spawn!)
+            # APScheduler's BackgroundScheduler already handles threading
             if self.flask_app:
-                def _do_risk_check():
-                    try:
-                        with self.flask_app.app_context():
-                            risk_manager.run_risk_checks()
-                    except Exception as e:
-                        logger.error(f"Error in risk check: {e}")
-                # Spawn background task (greenlet on Linux, thread on Windows)
-                spawn_n(_do_risk_check)
+                with self.flask_app.app_context():
+                    risk_manager.run_risk_checks()
             else:
                 logger.warning("Flask app not available for risk checks")
         except Exception as e:
             logger.error(f"Error running risk checks: {e}")
 
     def cleanup_sessions(self):
-        """Clean up expired option chain sessions (called by scheduler every 1 minute)"""
+        """Clean up expired option chain sessions (called by scheduler every 1 minute)
+
+        Note: APScheduler already runs jobs in a thread pool, so we DON'T
+        need to spawn additional threads here. Just run directly with app context.
+        """
         try:
-            # Run within Flask app context for database access
+            # Run directly with Flask app context (no extra thread spawn!)
             if self.flask_app:
-                def _do_cleanup():
-                    try:
-                        with self.flask_app.app_context():
-                            session_manager.cleanup_expired_sessions()
-                    except Exception as e:
-                        logger.error(f"Error in cleanup: {e}")
-                # Spawn background task (greenlet on Linux, thread on Windows)
-                spawn_n(_do_cleanup)
+                with self.flask_app.app_context():
+                    session_manager.cleanup_expired_sessions()
             else:
                 logger.warning("Flask app not available for session cleanup")
         except Exception as e:

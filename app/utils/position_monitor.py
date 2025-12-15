@@ -15,10 +15,11 @@ from datetime import datetime
 from typing import Dict, List, Set, Optional
 import pytz
 from sqlalchemy import and_
+from sqlalchemy.orm import joinedload
 
 from app import db
 from app.models import (
-    TradingAccount, StrategyExecution, Strategy,
+    TradingAccount, StrategyExecution, Strategy, StrategyLeg,
     TradingHoursTemplate, TradingSession, MarketHoliday
 )
 from app.utils.openalgo_client import ExtendedOpenAlgoAPI
@@ -57,6 +58,14 @@ class PositionMonitor:
         self.subscribed_symbols: Set[str] = set()
         self.position_map: Dict[str, List[StrategyExecution]] = {}
         self.app = None  # Store Flask app instance for creating app context
+
+        # Batch update mechanism for WebSocket price updates
+        # Stores {symbol_exchange: {'ltp': float, 'updated': datetime}}
+        self._pending_price_updates: Dict[str, Dict] = {}
+        self._price_update_lock = None  # Will be initialized with threading.Lock()
+        self._batch_flush_interval = 2.0  # Flush every 2 seconds
+        self._last_flush_time = None
+        self._flush_thread = None
 
         logger.debug("PositionMonitor initialized")
 
@@ -173,8 +182,12 @@ class PositionMonitor:
             List[StrategyExecution]: List of open position executions with risk management
         """
         try:
-            # Query for entered positions
-            open_executions = StrategyExecution.query.filter(
+            # Query for entered positions with eager loading to avoid N+1 queries
+            # This loads leg and strategy in a single query instead of separate queries per execution
+            open_executions = StrategyExecution.query.options(
+                joinedload(StrategyExecution.leg),
+                joinedload(StrategyExecution.strategy)
+            ).filter(
                 StrategyExecution.status == 'entered'
             ).all()
 
@@ -447,8 +460,11 @@ class PositionMonitor:
 
     def update_last_price(self, symbol: str, exchange: str, ltp: float):
         """
-        Update last traded price for all positions of a symbol.
+        Queue price update for batch processing.
         Called by WebSocket message handler.
+
+        Instead of writing to DB immediately, queues the update for batch flush.
+        This reduces DB writes from potentially 100s per second to 1 per 2 seconds.
 
         Args:
             symbol: Trading symbol
@@ -460,32 +476,90 @@ class PositionMonitor:
         if key not in self.position_map:
             return
 
+        # Queue for batch update instead of immediate DB write
+        if self._price_update_lock:
+            with self._price_update_lock:
+                self._pending_price_updates[key] = {
+                    'symbol': symbol,
+                    'exchange': exchange,
+                    'ltp': ltp,
+                    'updated': datetime.utcnow()
+                }
+
+    def _flush_pending_updates(self):
+        """
+        Flush all pending price updates to database in a single transaction.
+        Called periodically by the flush thread.
+        """
+        if not self._pending_price_updates:
+            return
+
+        if not self.app:
+            return
+
+        updates_to_process = {}
+
+        # Get pending updates with lock
+        if self._price_update_lock:
+            with self._price_update_lock:
+                updates_to_process = self._pending_price_updates.copy()
+                self._pending_price_updates.clear()
+
+        if not updates_to_process:
+            return
+
         try:
-            now = datetime.utcnow()
+            with self.app.app_context():
+                # Get all execution IDs that need updating
+                execution_ids = []
+                for key, data in updates_to_process.items():
+                    if key in self.position_map:
+                        execution_ids.extend([e.id for e in self.position_map[key]])
 
-            # Update all positions for this symbol
-            for execution in self.position_map[key]:
-                execution.last_price = ltp
-                execution.last_price_updated = now
-                execution.websocket_subscribed = True
+                if not execution_ids:
+                    return
 
-            db.session.commit()
+                # Batch update all positions in a single query
+                now = datetime.utcnow()
+                for key, data in updates_to_process.items():
+                    if key in self.position_map:
+                        position_ids = [e.id for e in self.position_map[key]]
+                        if position_ids:
+                            StrategyExecution.query.filter(
+                                StrategyExecution.id.in_(position_ids)
+                            ).update({
+                                'last_price': data['ltp'],
+                                'last_price_updated': now,
+                                'websocket_subscribed': True
+                            }, synchronize_session=False)
 
-            logger.debug(
-                f"Updated LTP for {symbol}: {ltp} "
-                f"({len(self.position_map[key])} positions)"
-            )
+                db.session.commit()
+                logger.debug(f"Batch flushed {len(updates_to_process)} price updates")
 
         except Exception as e:
-            logger.error(f"Error updating last price for {symbol}: {e}")
-            db.session.rollback()
+            logger.error(f"Error flushing price updates: {e}")
+            try:
+                with self.app.app_context():
+                    db.session.rollback()
+            except:
+                pass
+
+    def _flush_thread_runner(self):
+        """Background thread that periodically flushes price updates."""
+        import time
+        while self.is_running:
+            time.sleep(self._batch_flush_interval)
+            try:
+                self._flush_pending_updates()
+            except Exception as e:
+                logger.error(f"Flush thread error: {e}")
 
     def _handle_websocket_data(self, data: Dict):
         """
-        WebSocket data handler - updates last prices for monitored positions.
+        WebSocket data handler - queues price updates for batch processing.
 
-        Note: This is called from WebSocket callbacks which may not have app context.
-        We need to provide app context for database operations.
+        Note: This is called from WebSocket callbacks at high frequency.
+        Uses batching to avoid creating app context and DB writes for each update.
 
         Args:
             data: WebSocket market data
@@ -498,14 +572,8 @@ class PositionMonitor:
             if not symbol or not ltp:
                 return
 
-            # WebSocket callbacks run in separate thread - need app context
-            if self.app is None:
-                logger.error("Flask app not set - cannot process WebSocket data")
-                return
-
-            # Create app context using stored app reference
-            with self.app.app_context():
-                self.update_last_price(symbol, exchange, float(ltp))
+            # Queue for batch update - no app context needed here
+            self.update_last_price(symbol, exchange, float(ltp))
 
         except Exception as e:
             logger.error(f"Error handling WebSocket data: {e}")
@@ -518,6 +586,8 @@ class PositionMonitor:
             websocket_manager: WebSocket manager instance
             app: Flask app instance (for creating app context in WebSocket callbacks)
         """
+        import threading
+
         if self.is_running:
             logger.warning("Position monitor already running")
             return
@@ -525,10 +595,13 @@ class PositionMonitor:
         # Store websocket manager reference
         self.websocket_manager = websocket_manager
 
-        # Store Flask app reference for creating app context
+        # Store Flask app reference for batch flush operations
         if app is not None:
             self.app = app
-            logger.debug("Flask app reference stored for WebSocket context")
+            logger.debug("Flask app reference stored for batch flush operations")
+
+        # Initialize thread lock for batch updates
+        self._price_update_lock = threading.Lock()
 
         # Check if monitoring should start (app context provided by caller)
         if not self.should_start_monitoring():
@@ -544,7 +617,11 @@ class PositionMonitor:
         self.subscribe_to_positions()
 
         self.is_running = True
-        logger.debug("Position monitoring started")
+
+        # Start batch flush thread
+        self._flush_thread = threading.Thread(target=self._flush_thread_runner, daemon=True)
+        self._flush_thread.start()
+        logger.debug("Position monitoring started with batch flush thread")
 
     def stop(self):
         """Stop position monitoring and unsubscribe from all symbols"""
@@ -553,14 +630,27 @@ class PositionMonitor:
 
         logger.debug("Stopping position monitoring...")
 
+        # Mark as not running first to stop flush thread
+        self.is_running = False
+
+        # Flush any pending updates before stopping
+        try:
+            self._flush_pending_updates()
+        except Exception as e:
+            logger.error(f"Error flushing updates during stop: {e}")
+
+        # Wait for flush thread to finish
+        if self._flush_thread and self._flush_thread.is_alive():
+            self._flush_thread.join(timeout=5.0)
+
         # Unsubscribe from all symbols
         for key in list(self.subscribed_symbols):
             symbol, exchange = key.split('_', 1)
             self.unsubscribe_from_symbol(symbol, exchange)
 
-        self.is_running = False
         self.subscribed_symbols.clear()
         self.position_map.clear()
+        self._pending_price_updates.clear()
 
     def refresh_positions(self):
         """

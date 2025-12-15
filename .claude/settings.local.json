@@ -48,7 +48,9 @@
       "Bash(docker compose:*)",
       "Bash(.venvScriptspython.exe -m py_compile apptradingroutes.py)",
       "Bash(.venvScriptspython.exe -m py_compile websocket_service.py)",
-      "Bash(D:AI Bootcamp 2025Session31algomirror.venvScriptspython.exe -m py_compile \"D:\\AI Bootcamp 2025\\Session31\\algomirror\\websocket_service.py\")"
+      "Bash(D:AI Bootcamp 2025Session31algomirror.venvScriptspython.exe -m py_compile \"D:\\AI Bootcamp 2025\\Session31\\algomirror\\websocket_service.py\")",
+      "Bash(.venvScriptspython.exe -m py_compile \"D:\\AI Bootcamp 2025\\Session31\\algomirror\\app\\utils\\position_monitor.py\")",
+      "Bash(\".venv\\Scripts\\python.exe\" -m py_compile \"app\\utils\\position_monitor.py\")"
     ],
     "deny": [],
     "ask": []

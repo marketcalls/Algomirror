@@ -12,7 +12,7 @@ Key Features:
 Uses standard threading for background tasks
 """
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 from decimal import Decimal
 import pytz
@@ -64,7 +64,63 @@ class RiskManager:
         self.is_running = False
         self.monitored_strategies: Dict[int, Strategy] = {}
 
+        # Position cache to avoid redundant API calls
+        # Format: {account_id: {'positions': [], 'timestamp': datetime}}
+        self._positions_cache: Dict[int, Dict] = {}
+        self._cache_ttl_seconds = 3  # Cache positions for 3 seconds
+
         logger.debug("RiskManager initialized")
+
+    def _get_cached_positions(self, account: TradingAccount) -> Dict[str, float]:
+        """
+        Get positions from cache or fetch from API if cache expired.
+
+        Uses a 3-second cache to reduce API calls from 60/min to ~20/min per account.
+
+        Args:
+            account: Trading account to fetch positions for
+
+        Returns:
+            Dict mapping symbol to LTP price
+        """
+        now = datetime.now()
+        cache_entry = self._positions_cache.get(account.id)
+
+        # Check if cache is valid
+        if cache_entry:
+            cache_age = (now - cache_entry['timestamp']).total_seconds()
+            if cache_age < self._cache_ttl_seconds:
+                return cache_entry['positions']
+
+        # Fetch fresh positions from API
+        current_prices = {}
+        try:
+            client = ExtendedOpenAlgoAPI(
+                api_key=account.get_api_key(),
+                host=account.host_url
+            )
+            positions_response = client.positionbook()
+            if positions_response.get('status') == 'success':
+                positions_data = positions_response.get('data', [])
+                for pos in positions_data:
+                    symbol = pos.get('symbol', '')
+                    ltp = pos.get('ltp', 0)
+                    if symbol and ltp:
+                        current_prices[symbol] = float(ltp)
+
+            # Update cache
+            self._positions_cache[account.id] = {
+                'positions': current_prices,
+                'timestamp': now
+            }
+
+        except Exception as api_err:
+            logger.warning(f"Failed to fetch positions for account {account.account_name}: {api_err}")
+            # Return empty if API fails and no cache
+            if cache_entry:
+                return cache_entry['positions']
+
+        return current_prices
 
     def calculate_execution_pnl(self, execution: StrategyExecution) -> Tuple[float, float]:
         """
@@ -121,7 +177,7 @@ class RiskManager:
     def calculate_strategy_pnl(self, strategy: Strategy) -> Dict:
         """
         Calculate total P&L for a strategy across all executions.
-        Uses positions API to get real-time LTP for accurate P&L calculation.
+        Uses cached positions API to get real-time LTP for accurate P&L calculation.
 
         Args:
             strategy: Strategy to calculate P&L for
@@ -141,27 +197,13 @@ class RiskManager:
             # Get open executions to fetch current prices
             open_executions = [e for e in executions if e.status == 'entered']
 
-            # Build a map of current prices from positions API
+            # Build a map of current prices from cached positions API
             current_prices = {}
             if open_executions:
-                # Get primary account to fetch positions
+                # Get primary account to fetch positions (use cache to avoid repeated API calls)
                 account = open_executions[0].account
                 if account and account.is_active:
-                    try:
-                        client = ExtendedOpenAlgoAPI(
-                            api_key=account.get_api_key(),
-                            host=account.host_url
-                        )
-                        positions_response = client.positionbook()
-                        if positions_response.get('status') == 'success':
-                            positions_data = positions_response.get('data', [])
-                            for pos in positions_data:
-                                symbol = pos.get('symbol', '')
-                                ltp = pos.get('ltp', 0)
-                                if symbol and ltp:
-                                    current_prices[symbol] = float(ltp)
-                    except Exception as api_err:
-                        logger.warning(f"Failed to fetch positions for P&L: {api_err}")
+                    current_prices = self._get_cached_positions(account)
 
             for execution in executions:
                 # Use API price if available, otherwise fall back to execution.last_price
@@ -571,6 +613,10 @@ class RiskManager:
                     retry_delay = 1
                     response = None
 
+                    # Get product type - prefer execution's product, fallback to strategy's product_order_type
+                    # This ensures NRML entries exit as NRML, not MIS
+                    exit_product = execution.product or strategy.product_order_type or 'MIS'
+
                     for attempt in range(max_retries):
                         try:
                             response = place_order_with_freeze_check(
@@ -582,7 +628,7 @@ class RiskManager:
                                 action=exit_transaction,
                                 quantity=execution.quantity,
                                 price_type='MARKET',
-                                product=execution.product or 'MIS'
+                                product=exit_product
                             )
                             if response and isinstance(response, dict):
                                 logger.debug(f"[RISK EXIT] Order response for {execution.symbol}: {response}")
@@ -750,26 +796,32 @@ class RiskManager:
         """
         Run risk checks for all monitored strategies.
         Called by background scheduler.
+
+        Uses a subquery to get strategies with open positions efficiently.
+        Note: Strategy.executions uses lazy='dynamic' which doesn't support joinedload.
         """
         if not self.is_running:
             return
 
         try:
-            # Get all active strategies with risk monitoring enabled
-            strategies = Strategy.query.filter_by(
-                is_active=True,
-                risk_monitoring_enabled=True
+            # OPTIMIZED: Get strategy IDs with open positions in a single query
+            # Then fetch strategies - avoids N+1 pattern while respecting dynamic relationship
+            from sqlalchemy import exists
+
+            # Subquery to find strategies with at least one open position
+            has_open_positions = exists().where(
+                StrategyExecution.strategy_id == Strategy.id,
+                StrategyExecution.status == 'entered'
+            )
+
+            strategies_with_positions = Strategy.query.filter(
+                Strategy.is_active == True,
+                Strategy.risk_monitoring_enabled == True,
+                has_open_positions
             ).all()
 
-            for strategy in strategies:
-                # Only check strategies with open positions
-                has_open = StrategyExecution.query.filter_by(
-                    strategy_id=strategy.id,
-                    status='entered'
-                ).first()
-
-                if has_open:
-                    self.check_strategy(strategy)
+            for strategy in strategies_with_positions:
+                self.check_strategy(strategy)
 
         except Exception as e:
             logger.error(f"Error running risk checks: {e}")

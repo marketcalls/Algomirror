@@ -578,6 +578,10 @@ class SupertrendExitService:
                             retry_delay = 1
                             response = None
 
+                            # Get product type - prefer position's product, fallback to strategy's product_order_type
+                            # This ensures NRML entries exit as NRML, not MIS
+                            exit_product = position.product or product_type or 'MIS'
+
                             for attempt in range(max_retries):
                                 try:
                                     response = place_order_with_freeze_check(
@@ -589,7 +593,7 @@ class SupertrendExitService:
                                         action=close_action,
                                         quantity=position.quantity,
                                         price_type='MARKET',
-                                        product=product_type or 'MIS'
+                                        product=exit_product
                                     )
                                     if response and isinstance(response, dict):
                                         break

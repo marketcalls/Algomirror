@@ -1640,6 +1640,10 @@ def close_all_positions(strategy_id):
                     response = None
                     last_error = None
 
+                    # Get product type - prefer position's product, fallback to strategy's product_order_type
+                    # This ensures NRML entries exit as NRML, not MIS
+                    exit_product = position.product or product_type or 'MIS'
+
                     for attempt in range(max_retries):
                         try:
                             # Use freeze-aware order placement for close orders
@@ -1652,7 +1656,7 @@ def close_all_positions(strategy_id):
                                 action=close_action,
                                 quantity=position.quantity,
                                 price_type='MARKET',
-                                product=product_type or 'MIS'
+                                product=exit_product
                             )
                             if response and isinstance(response, dict):
                                 break

@@ -234,6 +234,7 @@ def create_app(config_name=None):
 
     # Initialize order status poller (Phase 2)
     from app.utils.order_status_poller import order_status_poller
+    order_status_poller.set_flask_app(app)  # Set app reference to avoid creating new app in thread
     order_status_poller.start()
     app.logger.debug('Order status poller started', extra={'event': 'poller_init'})
 
