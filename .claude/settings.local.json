@@ -50,7 +50,12 @@
       "Bash(.venvScriptspython.exe -m py_compile websocket_service.py)",
       "Bash(D:AI Bootcamp 2025Session31algomirror.venvScriptspython.exe -m py_compile \"D:\\AI Bootcamp 2025\\Session31\\algomirror\\websocket_service.py\")",
       "Bash(.venvScriptspython.exe -m py_compile \"D:\\AI Bootcamp 2025\\Session31\\algomirror\\app\\utils\\position_monitor.py\")",
-      "Bash(\".venv\\Scripts\\python.exe\" -m py_compile \"app\\utils\\position_monitor.py\")"
+      "Bash(\".venv\\Scripts\\python.exe\" -m py_compile \"app\\utils\\position_monitor.py\")",
+      "Bash(.venvScriptspython.exe -m flask db upgrade)",
+      "Bash(\".venv\\Scripts\\flask.exe\" db upgrade)",
+      "Bash(del \"D:\\AI Bootcamp 2025\\Session31\\algomirror\\migrations\\versions\\004_add_performance_indexes.py\")",
+      "Bash(\".venv\\Scripts\\python.exe\" migrate/migrate_all.py)",
+      "Bash(if exist \"D:\\AI Bootcamp 2025\\Session31\\algomirror\\migrations\\versions\\004_add_performance_indexes.py\" del \"D:\\AI Bootcamp 2025\\Session31\\algomirror\\migrations\\versions\\004_add_performance_indexes.py\")"
     ],
     "deny": [],
     "ask": []
