@@ -3358,13 +3358,30 @@ async function loadPositions(strategyId) {
                 }
             }
 
-            // Update Total P&L display
+            // Update Total P&L display - update ALL P&L elements
             if (data.total_pnl !== undefined) {
-                const pnlElement = document.getElementById('total-pnl-value');
-                if (pnlElement) {
-                    const pnl = parseFloat(data.total_pnl) || 0;
-                    pnlElement.textContent = `₹${pnl.toFixed(2)}`;
-                    pnlElement.className = pnl >= 0 ? 'font-bold text-2xl text-success' : 'font-bold text-2xl text-error';
+                const pnl = parseFloat(data.total_pnl) || 0;
+                const pnlClass = pnl >= 0 ? 'text-success' : 'text-error';
+
+                // Update main Total P&L (Orderbook tab)
+                const totalPnlEl = document.getElementById('total-pnl');
+                if (totalPnlEl) {
+                    totalPnlEl.textContent = `₹${pnl.toFixed(2)}`;
+                    totalPnlEl.className = `stat-value ${pnlClass}`;
+                }
+
+                // Update Positions tab Total P&L
+                const positionsPnlEl = document.getElementById('total-positions-pnl');
+                if (positionsPnlEl) {
+                    positionsPnlEl.textContent = `₹${pnl.toFixed(2)}`;
+                    positionsPnlEl.className = `stat-value ${pnlClass}`;
+                }
+
+                // Update Risk Monitor tab Total P&L
+                const riskMonitorPnlEl = document.getElementById('riskmonitor-total-pnl');
+                if (riskMonitorPnlEl) {
+                    riskMonitorPnlEl.textContent = `₹${pnl.toFixed(2)}`;
+                    riskMonitorPnlEl.className = `stat-value ${pnlClass}`;
                 }
 
                 // Update Risk Status Current P&L
