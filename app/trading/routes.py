@@ -1576,15 +1576,18 @@ def risk_status_stream():
                 entry_action = action.upper() if action else 'BUY'
                 exit_action = 'SELL' if entry_action == 'BUY' else 'BUY'
 
+                # Get product type - prefer execution's product, fallback to strategy's product_order_type
+                exit_product = execution.product or strategy.product_order_type or 'MIS'
+
                 # Place exit order using keyword arguments
-                app.logger.debug(f"[RISK MONITOR] Placing exit order on {account.account_name}: symbol={symbol}, action={exit_action}, qty={quantity}")
+                app.logger.debug(f"[RISK MONITOR] Placing exit order on {account.account_name}: symbol={symbol}, action={exit_action}, qty={quantity}, product={exit_product}")
                 response = client.placeorder(
                     strategy=strategy.name,
                     symbol=symbol,
                     action=exit_action,
                     exchange=exchange,
                     price_type='MARKET',
-                    product='MIS',  # Intraday
+                    product=exit_product,
                     quantity=str(quantity)
                 )
 
@@ -1600,7 +1603,7 @@ def risk_status_stream():
                         action=exit_action,
                         quantity=quantity,
                         order_type='MARKET',
-                        product='MIS',
+                        product=exit_product,
                         status='pending'
                     )
                     db.session.add(order)
@@ -1697,14 +1700,16 @@ def risk_status_stream():
                         entry_action = leg.action.upper() if leg else 'BUY'
                         exit_action = 'SELL' if entry_action == 'BUY' else 'BUY'
 
-                        print(f"[RISK MONITOR] {exit_reason.upper()}: Placing exit order for {execution.symbol} on {account.account_name}, action={exit_action}, qty={execution.quantity}", flush=True)
+                        # Get product type - prefer execution's product, fallback to strategy's product_order_type
+                        exit_product = execution.product or strategy.product_order_type or 'MIS'
+                        print(f"[RISK MONITOR] {exit_reason.upper()}: Placing exit order for {execution.symbol} on {account.account_name}, action={exit_action}, qty={execution.quantity}, product={exit_product}", flush=True)
                         response = client.placeorder(
                             strategy=strategy.name,
                             symbol=execution.symbol,
                             action=exit_action,
                             exchange=execution.exchange,
                             price_type='MARKET',
-                            product='MIS',
+                            product=exit_product,
                             quantity=str(execution.quantity)
                         )
 
@@ -1720,7 +1725,7 @@ def risk_status_stream():
                                 action=exit_action,
                                 quantity=execution.quantity,
                                 order_type='MARKET',
-                                product='MIS',
+                                product=exit_product,
                                 status='pending'
                             )
                             db.session.add(order)

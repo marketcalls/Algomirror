@@ -374,9 +374,12 @@ def close_account_positions(account_id):
                         })
                     return
 
-                # Get strategy for product type
+                # Get strategy for product type - prefer execution's product first
                 strategy = Strategy.query.get(exec_to_close.strategy_id)
-                product_type = strategy.product_order_type if strategy else (exec_to_close.product or 'MIS')
+                # Use execution.product first (preserves original entry product type),
+                # then strategy.product_order_type, then default to MIS
+                product_type = exec_to_close.product or (strategy.product_order_type if strategy else None) or 'MIS'
+                current_app.logger.debug(f"[EXIT PRODUCT] execution.product='{exec_to_close.product}', strategy.product_order_type='{strategy.product_order_type if strategy else None}', using='{product_type}'")
 
                 # Initialize client
                 acct = TradingAccount.query.get(exec_to_close.account_id)

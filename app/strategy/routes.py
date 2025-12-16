@@ -1635,6 +1635,7 @@ def close_all_positions(strategy_id):
                     # Get product type - prefer position's product, fallback to strategy's product_order_type
                     # This ensures NRML entries exit as NRML, not MIS
                     exit_product = position.product or product_type or 'MIS'
+                    logger.debug(f"[CLOSE EXIT] Product type: position.product='{position.product}', strategy_product='{product_type}', using='{exit_product}'")
 
                     for attempt in range(max_retries):
                         try:
@@ -2084,9 +2085,10 @@ def close_leg_all_accounts(strategy_id):
                         host=position.account.host_url
                     )
 
-                    # Use strategy's product_order_type (MIS/NRML), not leg's product_type (options/futures)
-                    # This matches the close_all_positions behavior
-                    position_product = product_type or 'MIS'
+                    # Get product type - prefer position's product, fallback to strategy's product_order_type
+                    # This ensures NRML entries exit as NRML, not MIS
+                    position_product = position.product or product_type or 'MIS'
+                    logger.debug(f"[LEG EXIT] Product type: position.product='{position.product}', strategy_product='{product_type}', using='{position_product}'")
 
                     # Try to verify position at broker level (optional - don't block close if verification fails)
                     try:

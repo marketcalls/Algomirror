@@ -123,6 +123,7 @@ class RiskManager:
         # This prevents 10+ API calls when all accounts are down
         max_failover_attempts = 3
         attempts = 0
+        skipped_due_to_cooldown = 0
 
         # Try each account in order
         for account in accounts:
@@ -134,6 +135,7 @@ class RiskManager:
             if account.id in self._failed_accounts:
                 fail_time = self._failed_accounts[account.id]
                 if (now - fail_time).total_seconds() < self._failed_account_cooldown:
+                    skipped_due_to_cooldown += 1
                     continue
                 else:
                     # Cooldown expired, remove from failed list
@@ -157,7 +159,17 @@ class RiskManager:
                 logger.warning(f"Price feed failed for account {account.account_name}, trying next...")
 
         # All attempts failed
-        logger.error(f"All {attempts} failover attempts failed to provide price feeds")
+        if attempts == 0 and skipped_due_to_cooldown > 0:
+            # All accounts in cooldown - clear cooldown and try again next cycle
+            logger.warning(f"All {skipped_due_to_cooldown} accounts in cooldown (failed recently). Will retry in {self._failed_account_cooldown}s")
+            # Reduce cooldown for next attempt if all accounts failed
+            if len(self._failed_accounts) == len(accounts):
+                # Clear oldest failure to allow retry
+                oldest_account = min(self._failed_accounts.keys(), key=lambda k: self._failed_accounts[k])
+                del self._failed_accounts[oldest_account]
+                logger.debug(f"Cleared cooldown for account {oldest_account} to allow retry")
+        elif attempts > 0:
+            logger.error(f"All {attempts} failover attempts failed to provide price feeds")
         return {}
 
     def _is_within_trading_hours(self) -> bool:
@@ -352,11 +364,11 @@ class RiskManager:
 
                 for exec in open_executions:
                     # Check if WebSocket price is stale or missing
-                    if not exec.last_price or not exec.last_price_updated_at:
+                    if not exec.last_price or not exec.last_price_updated:
                         needs_api_fallback = True
                         break
 
-                    price_age = (now - exec.last_price_updated_at).total_seconds()
+                    price_age = (now - exec.last_price_updated).total_seconds()
                     if price_age > stale_threshold:
                         needs_api_fallback = True
                         break
@@ -786,6 +798,7 @@ class RiskManager:
                     # Get product type - prefer execution's product, fallback to strategy's product_order_type
                     # This ensures NRML entries exit as NRML, not MIS
                     exit_product = execution.product or strategy.product_order_type or 'MIS'
+                    logger.debug(f"[RISK EXIT] Product type: execution.product='{execution.product}', strategy.product_order_type='{strategy.product_order_type}', exit_product='{exit_product}'")
 
                     for attempt in range(max_retries):
                         try:
