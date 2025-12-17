@@ -95,6 +95,9 @@ class SupertrendExitService:
         Monitor all strategies with Supertrend exit enabled
         Check each strategy based on its configured timeframe
         """
+        import uuid
+        cycle_id = str(uuid.uuid4())[:8]  # Unique ID for this execution cycle
+
         try:
             from app import create_app
 
@@ -102,6 +105,8 @@ class SupertrendExitService:
             app = create_app()
             with app.app_context():
                 from app import db
+
+                logger.info(f"[SUPERTREND CYCLE {cycle_id}] === Starting monitor_strategies ===")
 
                 # Track strategies processed in THIS execution cycle to prevent double-processing
                 # This prevents the RETRY loop from re-processing strategies that were just triggered
@@ -114,19 +119,25 @@ class SupertrendExitService:
                     is_active=True
                 ).all()
 
-                if strategies:
-                    logger.debug(f"Monitoring {len(strategies)} strategies with Supertrend exit enabled")
+                logger.info(f"[SUPERTREND CYCLE {cycle_id}] Found {len(strategies)} non-triggered strategies")
 
+                if strategies:
                     for strategy in strategies:
                         try:
                             # Check if we should monitor this strategy based on timeframe
-                            if self.should_check_strategy(strategy):
-                                logger.debug(f"Checking Supertrend for strategy {strategy.id} ({strategy.name})")
+                            should_check = self.should_check_strategy(strategy)
+                            logger.info(f"[SUPERTREND CYCLE {cycle_id}] Strategy {strategy.id} ({strategy.name}): should_check={should_check}")
+
+                            if should_check:
                                 # Track that we're processing this strategy in this cycle
                                 strategies_processed_this_cycle.add(strategy.id)
+                                logger.info(f"[SUPERTREND CYCLE {cycle_id}] Strategy {strategy.id}: Added to processed set, calling check_supertrend_exit")
                                 self.check_supertrend_exit(strategy, app)
+                                logger.info(f"[SUPERTREND CYCLE {cycle_id}] Strategy {strategy.id}: check_supertrend_exit completed")
                         except Exception as e:
                             logger.error(f"Error monitoring strategy {strategy.id}: {e}", exc_info=True)
+
+                logger.info(f"[SUPERTREND CYCLE {cycle_id}] Processed set after first loop: {strategies_processed_this_cycle}")
 
                 # RETRY MECHANISM: Check strategies where Supertrend was triggered but positions still open
                 # Only retry if enough time has passed since the trigger (to avoid race conditions)
@@ -136,23 +147,26 @@ class SupertrendExitService:
                     is_active=True
                 ).all()
 
+                logger.info(f"[SUPERTREND CYCLE {cycle_id}] Found {len(triggered_strategies)} triggered strategies for RETRY check")
+
                 for strategy in triggered_strategies:
                     try:
                         # CRITICAL: Skip if this strategy was just processed in the first loop
                         # This prevents double-trigger within the same execution cycle
                         if strategy.id in strategies_processed_this_cycle:
-                            logger.debug(f"[SUPERTREND RETRY] Strategy {strategy.id}: Skipping - already processed in this cycle")
+                            logger.info(f"[SUPERTREND CYCLE {cycle_id}] RETRY Strategy {strategy.id}: SKIPPING - in processed set")
                             continue
 
                         # Skip retry if trigger was too recent (within 30 seconds) to avoid race conditions
                         if strategy.supertrend_exit_triggered_at:
                             seconds_since_trigger = (get_ist_now() - strategy.supertrend_exit_triggered_at).total_seconds()
+                            logger.info(f"[SUPERTREND CYCLE {cycle_id}] RETRY Strategy {strategy.id}: triggered_at={strategy.supertrend_exit_triggered_at}, seconds_since={seconds_since_trigger:.2f}")
                             if seconds_since_trigger < 30:
-                                logger.debug(f"[SUPERTREND RETRY] Strategy {strategy.id}: Skipping retry, only {seconds_since_trigger:.0f}s since trigger")
+                                logger.info(f"[SUPERTREND CYCLE {cycle_id}] RETRY Strategy {strategy.id}: SKIPPING - only {seconds_since_trigger:.0f}s since trigger")
                                 continue
                         else:
                             # If triggered_at is None but triggered=True, skip to avoid issues
-                            logger.warning(f"[SUPERTREND RETRY] Strategy {strategy.id}: triggered=True but triggered_at is None, skipping")
+                            logger.warning(f"[SUPERTREND CYCLE {cycle_id}] RETRY Strategy {strategy.id}: triggered=True but triggered_at is None, SKIPPING")
                             continue
 
                         # Check if there are still open positions that don't have exit orders
@@ -170,11 +184,17 @@ class SupertrendExitService:
                                    pos.broker_order_status in ['rejected', 'cancelled'])
                         ]
 
+                        logger.info(f"[SUPERTREND CYCLE {cycle_id}] RETRY Strategy {strategy.id}: {len(open_positions)} open positions without exit orders")
+
                         if open_positions:
-                            logger.debug(f"[SUPERTREND RETRY] Strategy {strategy.id}: {len(open_positions)} positions without exit orders, retrying close")
+                            for pos in open_positions:
+                                logger.info(f"[SUPERTREND CYCLE {cycle_id}] RETRY Strategy {strategy.id}: Position {pos.id} - {pos.symbol}, status={pos.status}, exit_order_id={pos.exit_order_id}")
+                            logger.info(f"[SUPERTREND CYCLE {cycle_id}] RETRY Strategy {strategy.id}: Calling trigger_sequential_exit")
                             self.trigger_sequential_exit(strategy, f"Supertrend RETRY - {len(open_positions)} positions remaining", app)
                     except Exception as e:
                         logger.error(f"Error retrying Supertrend exit for strategy {strategy.id}: {e}", exc_info=True)
+
+                logger.info(f"[SUPERTREND CYCLE {cycle_id}] === Completed monitor_strategies ===")
 
         except Exception as e:
             logger.error(f"Error in monitor_strategies: {e}", exc_info=True)
@@ -547,8 +567,13 @@ class SupertrendExitService:
         """
         from app.utils.openalgo_client import ExtendedOpenAlgoAPI
         from app.utils.order_status_poller import order_status_poller
+        import traceback
 
         strategy_id = strategy.id  # Save ID before context switch
+        call_stack = ''.join(traceback.format_stack()[-5:-1])  # Get caller info
+
+        logger.info(f"[SUPERTREND EXIT] >>> trigger_sequential_exit CALLED for strategy {strategy_id}, reason: {exit_reason}")
+        logger.info(f"[SUPERTREND EXIT] Call stack:\n{call_stack}")
 
         try:
             with app.app_context():
@@ -556,18 +581,21 @@ class SupertrendExitService:
 
                 # ATOMIC CHECK-AND-SET: Re-fetch strategy with row lock to prevent race conditions
                 # This ensures only ONE call can proceed for a given strategy
+                logger.info(f"[SUPERTREND EXIT] Strategy {strategy_id}: Acquiring row lock...")
                 strategy = Strategy.query.with_for_update(nowait=False).get(strategy_id)
                 if not strategy:
                     logger.error(f"[SUPERTREND EXIT] Strategy {strategy_id} not found")
                     return
 
+                logger.info(f"[SUPERTREND EXIT] Strategy {strategy_id}: Lock acquired. triggered={strategy.supertrend_exit_triggered}, triggered_at={strategy.supertrend_exit_triggered_at}")
+
                 # CHECK if already triggered - if yes, skip (another call already handling it)
                 if strategy.supertrend_exit_triggered:
-                    logger.info(f"[SUPERTREND EXIT] Strategy {strategy_id} already triggered, skipping duplicate exit")
+                    logger.info(f"[SUPERTREND EXIT] Strategy {strategy_id}: ALREADY TRIGGERED - skipping duplicate exit")
                     db.session.rollback()  # Release the lock
                     return
 
-                logger.info(f"[SUPERTREND EXIT] Initiating sequential exit for strategy {strategy.id} ({strategy.name})")
+                logger.info(f"[SUPERTREND EXIT] Strategy {strategy_id}: NOT triggered yet, proceeding with exit")
 
                 # Mark strategy as triggered IMMEDIATELY and commit to release lock
                 # This prevents any other concurrent calls from proceeding
@@ -595,7 +623,9 @@ class SupertrendExitService:
                     logger.warning(f"[SUPERTREND EXIT] No open positions to close for strategy {strategy.id}")
                     return
 
-                logger.info(f"[SUPERTREND EXIT] Closing {len(open_executions)} positions sequentially")
+                logger.info(f"[SUPERTREND EXIT] Strategy {strategy.id}: Found {len(open_executions)} positions to close")
+                for ex in open_executions:
+                    logger.info(f"[SUPERTREND EXIT] Strategy {strategy.id}: Execution {ex.id} - {ex.symbol}, qty={ex.quantity}, status={ex.status}, exit_order_id={ex.exit_order_id}")
 
                 # Cache clients per account to avoid creating multiple instances
                 account_clients = {}
@@ -603,6 +633,7 @@ class SupertrendExitService:
 
                 # Get execution IDs to process (we'll re-query each one with lock)
                 execution_ids = [ex.id for ex in open_executions]
+                logger.info(f"[SUPERTREND EXIT] Strategy {strategy.id}: Processing execution IDs: {execution_ids}")
 
                 for exec_id in execution_ids:
                     try:
@@ -615,13 +646,15 @@ class SupertrendExitService:
 
                         # Check if already has exit order (another thread may have processed it)
                         if execution.exit_order_id:
-                            logger.debug(f"[SUPERTREND EXIT] Skipping {execution.symbol} - already has exit order {execution.exit_order_id}")
+                            logger.info(f"[SUPERTREND EXIT] Execution {exec_id}: SKIPPING - already has exit order {execution.exit_order_id}")
                             continue
 
                         # Check status is still 'entered'
                         if execution.status != 'entered':
-                            logger.debug(f"[SUPERTREND EXIT] Skipping {execution.symbol} - status is {execution.status}")
+                            logger.info(f"[SUPERTREND EXIT] Execution {exec_id}: SKIPPING - status is {execution.status}, not 'entered'")
                             continue
+
+                        logger.info(f"[SUPERTREND EXIT] Execution {exec_id}: PROCEEDING - status={execution.status}, exit_order_id={execution.exit_order_id}")
 
                         # Use the execution's account (NOT primary account)
                         account = execution.account
