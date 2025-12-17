@@ -70,12 +70,15 @@ class SupertrendExitService:
             # Schedule monitoring at the start of every minute (second=0) for precise candle close detection
             # This ensures checks happen exactly at 9:27:00, 9:30:00, etc.
             # The should_check_strategy function filters based on strategy timeframe
+            # max_instances=1 prevents overlapping executions if previous run takes longer than 1 minute
             self.scheduler.add_job(
                 func=self.monitor_strategies,
                 trigger='cron',
                 second=0,  # Run at :00 of every minute
                 id='supertrend_monitor',
-                replace_existing=True
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True  # Skip missed runs if system was busy
             )
 
             logger.debug("Supertrend Exit Service started - monitoring at start of each minute")
@@ -100,6 +103,10 @@ class SupertrendExitService:
             with app.app_context():
                 from app import db
 
+                # Track strategies processed in THIS execution cycle to prevent double-processing
+                # This prevents the RETRY loop from re-processing strategies that were just triggered
+                strategies_processed_this_cycle = set()
+
                 # Get all strategies with Supertrend exit enabled and not yet triggered
                 strategies = Strategy.query.filter_by(
                     supertrend_exit_enabled=True,
@@ -115,6 +122,8 @@ class SupertrendExitService:
                             # Check if we should monitor this strategy based on timeframe
                             if self.should_check_strategy(strategy):
                                 logger.debug(f"Checking Supertrend for strategy {strategy.id} ({strategy.name})")
+                                # Track that we're processing this strategy in this cycle
+                                strategies_processed_this_cycle.add(strategy.id)
                                 self.check_supertrend_exit(strategy, app)
                         except Exception as e:
                             logger.error(f"Error monitoring strategy {strategy.id}: {e}", exc_info=True)
@@ -129,12 +138,22 @@ class SupertrendExitService:
 
                 for strategy in triggered_strategies:
                     try:
+                        # CRITICAL: Skip if this strategy was just processed in the first loop
+                        # This prevents double-trigger within the same execution cycle
+                        if strategy.id in strategies_processed_this_cycle:
+                            logger.debug(f"[SUPERTREND RETRY] Strategy {strategy.id}: Skipping - already processed in this cycle")
+                            continue
+
                         # Skip retry if trigger was too recent (within 30 seconds) to avoid race conditions
                         if strategy.supertrend_exit_triggered_at:
                             seconds_since_trigger = (get_ist_now() - strategy.supertrend_exit_triggered_at).total_seconds()
                             if seconds_since_trigger < 30:
                                 logger.debug(f"[SUPERTREND RETRY] Strategy {strategy.id}: Skipping retry, only {seconds_since_trigger:.0f}s since trigger")
                                 continue
+                        else:
+                            # If triggered_at is None but triggered=True, skip to avoid issues
+                            logger.warning(f"[SUPERTREND RETRY] Strategy {strategy.id}: triggered=True but triggered_at is None, skipping")
+                            continue
 
                         # Check if there are still open positions that don't have exit orders
                         open_positions = StrategyExecution.query.filter_by(
