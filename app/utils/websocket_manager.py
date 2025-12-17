@@ -142,6 +142,11 @@ class ProfessionalWebSocketManager:
         self.ws_url = None
         self.api_key = None
 
+        # Cache for valid (non-zero) values to prevent zero-value issues
+        # WebSocket sometimes returns 0 which can trigger risk management incorrectly
+        self._valid_ltp_cache = {}  # {symbol_key: last_valid_ltp}
+        self._valid_quote_cache = {}  # {symbol_key: last_valid_quote}
+
     def create_connection_pool(self, primary_account, backup_accounts=None):
         """
         Create managed connection pool with multi-account failover capability
@@ -452,21 +457,86 @@ class ProfessionalWebSocketManager:
             self.data_processor.register_ltp_handler(handler)
 
     def get_ltp(self):
-        """Get cached LTP data from OpenAlgo SDK"""
+        """
+        Get cached LTP data from OpenAlgo SDK with zero-value protection.
+
+        If WebSocket returns 0 for a symbol, return the last valid cached value instead.
+        This prevents risk management from triggering incorrectly due to zero values.
+        """
         if self.client:
             try:
-                return self.client.get_ltp()
+                raw_data = self.client.get_ltp()
+                raw_ltp = raw_data.get('ltp', {})
+
+                # Validate and cache non-zero values
+                validated_ltp = {}
+                for symbol_key, ltp_value in raw_ltp.items():
+                    try:
+                        ltp_float = float(ltp_value) if ltp_value is not None else 0
+                    except (ValueError, TypeError):
+                        ltp_float = 0
+
+                    if ltp_float > 0:
+                        # Valid non-zero value - cache it and use it
+                        self._valid_ltp_cache[symbol_key] = ltp_float
+                        validated_ltp[symbol_key] = ltp_float
+                    elif symbol_key in self._valid_ltp_cache:
+                        # Zero value - use cached valid value instead
+                        logger.warning(f"[WS_LTP] Zero value received for {symbol_key}, using cached value: {self._valid_ltp_cache[symbol_key]}")
+                        validated_ltp[symbol_key] = self._valid_ltp_cache[symbol_key]
+                    else:
+                        # Zero value and no cache - skip this symbol
+                        logger.warning(f"[WS_LTP] Zero value received for {symbol_key}, no cached value available")
+
+                return {'ltp': validated_ltp}
             except Exception as e:
                 logger.error(f"Error getting LTP: {e}")
+
+        # If client not available, return cached values if any
+        if self._valid_ltp_cache:
+            return {'ltp': self._valid_ltp_cache.copy()}
         return {'ltp': {}}
 
     def get_quotes(self):
-        """Get cached Quote data from OpenAlgo SDK"""
+        """
+        Get cached Quote data from OpenAlgo SDK with zero-value protection.
+
+        If WebSocket returns 0 for LTP in a quote, return the last valid cached quote instead.
+        This prevents risk management from triggering incorrectly due to zero values.
+        """
         if self.client:
             try:
-                return self.client.get_quotes()
+                raw_data = self.client.get_quotes()
+                raw_quotes = raw_data.get('quote', {})
+
+                # Validate and cache quotes with non-zero LTP
+                validated_quotes = {}
+                for symbol_key, quote_data in raw_quotes.items():
+                    if isinstance(quote_data, dict):
+                        try:
+                            ltp = float(quote_data.get('ltp', 0)) if quote_data.get('ltp') is not None else 0
+                        except (ValueError, TypeError):
+                            ltp = 0
+
+                        if ltp > 0:
+                            # Valid quote with non-zero LTP - cache it and use it
+                            self._valid_quote_cache[symbol_key] = quote_data.copy()
+                            validated_quotes[symbol_key] = quote_data
+                        elif symbol_key in self._valid_quote_cache:
+                            # Zero LTP - use cached valid quote instead
+                            logger.warning(f"[WS_QUOTE] Zero LTP in quote for {symbol_key}, using cached quote")
+                            validated_quotes[symbol_key] = self._valid_quote_cache[symbol_key]
+                        else:
+                            # Zero value and no cache - skip this symbol
+                            logger.warning(f"[WS_QUOTE] Zero LTP in quote for {symbol_key}, no cached quote available")
+
+                return {'quote': validated_quotes}
             except Exception as e:
                 logger.error(f"Error getting quotes: {e}")
+
+        # If client not available, return cached values if any
+        if self._valid_quote_cache:
+            return {'quote': self._valid_quote_cache.copy()}
         return {'quote': {}}
 
     def get_depth(self):
