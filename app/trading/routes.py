@@ -1678,8 +1678,24 @@ def risk_status_stream():
                 # Cache clients per account to avoid creating multiple instances
                 account_clients = {}
 
+                # BUY-FIRST EXIT PRIORITY: Close SELL positions first (BUY orders), then BUY positions (SELL orders)
+                sell_positions = [ex for ex in open_executions if ex.leg and ex.leg.action == 'SELL']
+                buy_positions = [ex for ex in open_executions if ex.leg and ex.leg.action == 'BUY']
+                unknown_positions = [ex for ex in open_executions if not ex.leg]
+
+                # Reorder: SELL positions first (will place BUY close orders), then BUY positions
+                ordered_executions = sell_positions + buy_positions + unknown_positions
+
+                print(f"[RISK MONITOR] BUY-FIRST priority: {len(sell_positions)} SELL positions (close first), "
+                      f"{len(buy_positions)} BUY positions (close second)", flush=True)
+
                 success_count = 0
-                for execution in open_executions:
+                sell_count = len(sell_positions)
+
+                for idx, execution in enumerate(ordered_executions):
+                    # Log phase transitions
+                    if idx == sell_count and sell_positions and buy_positions:
+                        print(f"[RISK MONITOR PHASE 2] All SELL positions closed. Starting BUY position exits...", flush=True)
                     try:
                         # Use the execution's account (NOT primary account)
                         account = execution.account

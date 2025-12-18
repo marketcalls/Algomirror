@@ -1785,24 +1785,66 @@ def close_all_positions(strategy_id):
                             'error': str(e)
                         })
 
-        # Create and start threads for parallel execution with staggered delays
-        threads = []
-        logger.debug(f"[PARALLEL CLOSE] Starting parallel close for {len(open_positions)} positions")
+        # BUY-FIRST EXIT PRIORITY: Close SELL positions first (BUY orders), then BUY positions (SELL orders)
+        # This maintains covered positions during exit and reduces margin spikes
+        sell_positions = [p for p in open_positions if p.leg and p.leg.action == 'SELL']
+        buy_positions = [p for p in open_positions if p.leg and p.leg.action == 'BUY']
+        unknown_positions = [p for p in open_positions if not p.leg]
 
-        for idx, position in enumerate(open_positions):
-            thread = threading.Thread(
-                target=close_position_worker,
-                args=(position, strategy.name, strategy.product_order_type, idx, strategy.user_id),
-                name=f"ClosePosition_{position.symbol}_{position.account.account_name}"
-            )
-            threads.append(thread)
-            thread.start()
+        logger.debug(f"[BUY-FIRST EXIT] Separating {len(open_positions)} positions: "
+                    f"{len(sell_positions)} SELL (close first), {len(buy_positions)} BUY (close second)")
+        print(f"[EXIT] BUY-FIRST priority: {len(sell_positions)} SELL positions (close first), "
+              f"{len(buy_positions)} BUY positions (close second)")
 
-        # Wait for all threads to complete
-        for thread in threads:
-            thread.join(timeout=30)  # 30 second timeout per thread
+        # PHASE 1: Close SELL positions first (places BUY orders)
+        if sell_positions:
+            print(f"[EXIT PHASE 1] Closing {len(sell_positions)} SELL position(s) with BUY orders...")
+            logger.debug(f"[EXIT PHASE 1] Starting SELL position exits")
 
-        logger.debug(f"[PARALLEL CLOSE] All threads completed. Results: {len(results)}")
+            sell_threads = []
+            for idx, position in enumerate(sell_positions):
+                thread = threading.Thread(
+                    target=close_position_worker,
+                    args=(position, strategy.name, strategy.product_order_type, idx, strategy.user_id),
+                    name=f"CloseSELL_{position.symbol}_{position.account.account_name}"
+                )
+                sell_threads.append(thread)
+                thread.start()
+
+            # Wait for all SELL position closes to complete before BUY
+            for thread in sell_threads:
+                thread.join(timeout=30)
+
+            print(f"[EXIT PHASE 1] All SELL positions closed. Orders: {len(results)}")
+            logger.debug(f"[EXIT PHASE 1 COMPLETE] SELL positions closed: {len(results)}")
+
+        # PHASE 2: Close BUY positions (places SELL orders)
+        if buy_positions:
+            print(f"[EXIT PHASE 2] Closing {len(buy_positions)} BUY position(s) with SELL orders...")
+            logger.debug(f"[EXIT PHASE 2] Starting BUY position exits")
+
+            buy_threads = []
+            for idx, position in enumerate(buy_positions):
+                thread = threading.Thread(
+                    target=close_position_worker,
+                    args=(position, strategy.name, strategy.product_order_type, idx, strategy.user_id),
+                    name=f"CloseBUY_{position.symbol}_{position.account.account_name}"
+                )
+                buy_threads.append(thread)
+                thread.start()
+
+            # Wait for all BUY position closes to complete
+            for thread in buy_threads:
+                thread.join(timeout=30)
+
+            print(f"[EXIT PHASE 2] All BUY positions closed. Total: {len(results)}")
+            logger.debug(f"[EXIT PHASE 2 COMPLETE] BUY positions closed. Total: {len(results)}")
+
+        # Handle unknown positions (no leg reference) sequentially
+        for idx, position in enumerate(unknown_positions):
+            close_position_worker(position, strategy.name, strategy.product_order_type, idx, strategy.user_id)
+
+        logger.debug(f"[BUY-FIRST EXIT] All phases completed. Results: {len(results)}")
 
         # Calculate summary
         total_pnl = sum(r.get('pnl', 0) for r in results if r.get('status') == 'success')

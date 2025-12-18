@@ -765,7 +765,28 @@ class RiskManager:
             # Close each position with freeze-aware placement and retry logic
             from app.utils.freeze_quantity_handler import place_order_with_freeze_check
 
-            for idx, execution in enumerate(open_executions):
+            # BUY-FIRST EXIT PRIORITY: Close SELL positions first (BUY orders), then BUY positions (SELL orders)
+            sell_positions = [e for e in open_executions if e.leg and e.leg.action == 'SELL']
+            buy_positions = [e for e in open_executions if e.leg and e.leg.action == 'BUY']
+            unknown_positions = [e for e in open_executions if not e.leg]
+
+            # Reorder: SELL positions first (will place BUY close orders), then BUY positions (will place SELL close orders)
+            ordered_executions = sell_positions + buy_positions + unknown_positions
+
+            logger.debug(f"[RISK EXIT] BUY-FIRST priority: {len(sell_positions)} SELL positions (close first), "
+                        f"{len(buy_positions)} BUY positions (close second)")
+            print(f"[RISK EXIT] BUY-FIRST priority: {len(sell_positions)} SELL positions (close first), "
+                  f"{len(buy_positions)} BUY positions (close second)")
+
+            # Track phase transitions for logging
+            current_phase = 1 if sell_positions else 2
+            sell_count = len(sell_positions)
+
+            for idx, execution in enumerate(ordered_executions):
+                # Log phase transitions
+                if idx == sell_count and sell_positions and buy_positions:
+                    logger.debug(f"[RISK EXIT PHASE 2] All SELL positions closed. Starting BUY position exits...")
+                    print(f"[RISK EXIT PHASE 2] All SELL positions closed. Starting BUY position exits...")
                 logger.debug(f"[RISK EXIT] Processing execution {idx + 1}/{len(open_executions)}: ID={execution.id}, symbol={execution.symbol}")
                 try:
                     # Use the account from the execution (not primary account)

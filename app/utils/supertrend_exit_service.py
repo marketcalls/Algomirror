@@ -651,11 +651,29 @@ class SupertrendExitService:
                 account_clients = {}
                 success_count = 0
 
-                # Get execution IDs to process (we'll re-query each one with lock)
-                execution_ids = [ex.id for ex in open_executions]
-                logger.info(f"[SUPERTREND EXIT] Strategy {strategy.id}: Processing execution IDs: {execution_ids}")
+                # BUY-FIRST EXIT PRIORITY: Close SELL positions first (BUY orders), then BUY positions (SELL orders)
+                sell_positions = [ex for ex in open_executions if ex.leg and ex.leg.action == 'SELL']
+                buy_positions = [ex for ex in open_executions if ex.leg and ex.leg.action == 'BUY']
+                unknown_positions = [ex for ex in open_executions if not ex.leg]
 
-                for exec_id in execution_ids:
+                # Reorder: SELL positions first (will place BUY close orders), then BUY positions
+                ordered_executions = sell_positions + buy_positions + unknown_positions
+
+                logger.info(f"[SUPERTREND EXIT] BUY-FIRST priority: {len(sell_positions)} SELL positions (close first), "
+                           f"{len(buy_positions)} BUY positions (close second)")
+                print(f"[SUPERTREND EXIT] BUY-FIRST priority: {len(sell_positions)} SELL positions (close first), "
+                      f"{len(buy_positions)} BUY positions (close second)")
+
+                # Get execution IDs to process (we'll re-query each one with lock)
+                execution_ids = [ex.id for ex in ordered_executions]
+                sell_count = len(sell_positions)
+                logger.info(f"[SUPERTREND EXIT] Strategy {strategy.id}: Processing execution IDs (ordered): {execution_ids}")
+
+                for idx, exec_id in enumerate(execution_ids):
+                    # Log phase transitions
+                    if idx == sell_count and sell_positions and buy_positions:
+                        logger.info(f"[SUPERTREND EXIT PHASE 2] All SELL positions closed. Starting BUY position exits...")
+                        print(f"[SUPERTREND EXIT PHASE 2] All SELL positions closed. Starting BUY position exits...")
                     try:
                         # ATOMIC: Re-query execution with row lock to prevent race conditions
                         # This ensures only ONE thread can process this execution

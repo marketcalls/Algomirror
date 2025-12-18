@@ -472,20 +472,75 @@ def close_account_positions(account_id):
                         'error': str(e)
                     })
 
-    # Create and start threads for parallel execution
-    threads = []
-    for idx, execution in enumerate(open_executions):
-        thread = threading.Thread(
-            target=close_position_worker,
-            args=(execution, idx),
-            name=f"AccountClose_{execution.symbol}"
-        )
-        threads.append(thread)
-        thread.start()
+    # BUY-FIRST EXIT PRIORITY: Close SELL positions first (BUY orders), then BUY positions (SELL orders)
+    # Need to get leg action for each execution
+    sell_positions = []
+    buy_positions = []
+    unknown_positions = []
 
-    # Wait for all threads to complete
-    for thread in threads:
-        thread.join(timeout=30)
+    for execution in open_executions:
+        leg = StrategyLeg.query.get(execution.leg_id) if execution.leg_id else None
+        if leg and leg.action == 'SELL':
+            sell_positions.append(execution)
+        elif leg and leg.action == 'BUY':
+            buy_positions.append(execution)
+        else:
+            unknown_positions.append(execution)
+
+    current_app.logger.debug(f"[BUY-FIRST EXIT] Separating {len(open_executions)} positions: "
+                f"{len(sell_positions)} SELL (close first), {len(buy_positions)} BUY (close second)")
+    print(f"[EXIT] BUY-FIRST priority: {len(sell_positions)} SELL positions (close first), "
+          f"{len(buy_positions)} BUY positions (close second)")
+
+    # PHASE 1: Close SELL positions first (places BUY orders)
+    if sell_positions:
+        print(f"[EXIT PHASE 1] Closing {len(sell_positions)} SELL position(s) with BUY orders...")
+        current_app.logger.debug(f"[EXIT PHASE 1] Starting SELL position exits")
+
+        sell_threads = []
+        for idx, execution in enumerate(sell_positions):
+            thread = threading.Thread(
+                target=close_position_worker,
+                args=(execution, idx),
+                name=f"AccountCloseSELL_{execution.symbol}"
+            )
+            sell_threads.append(thread)
+            thread.start()
+
+        # Wait for all SELL position closes to complete before BUY
+        for thread in sell_threads:
+            thread.join(timeout=30)
+
+        print(f"[EXIT PHASE 1] All SELL positions closed. Orders: {len(results)}")
+        current_app.logger.debug(f"[EXIT PHASE 1 COMPLETE] SELL positions closed: {len(results)}")
+
+    # PHASE 2: Close BUY positions (places SELL orders)
+    if buy_positions:
+        print(f"[EXIT PHASE 2] Closing {len(buy_positions)} BUY position(s) with SELL orders...")
+        current_app.logger.debug(f"[EXIT PHASE 2] Starting BUY position exits")
+
+        buy_threads = []
+        for idx, execution in enumerate(buy_positions):
+            thread = threading.Thread(
+                target=close_position_worker,
+                args=(execution, idx),
+                name=f"AccountCloseBUY_{execution.symbol}"
+            )
+            buy_threads.append(thread)
+            thread.start()
+
+        # Wait for all BUY position closes to complete
+        for thread in buy_threads:
+            thread.join(timeout=30)
+
+        print(f"[EXIT PHASE 2] All BUY positions closed. Total: {len(results)}")
+        current_app.logger.debug(f"[EXIT PHASE 2 COMPLETE] BUY positions closed. Total: {len(results)}")
+
+    # Handle unknown positions (no leg reference) sequentially
+    for idx, execution in enumerate(unknown_positions):
+        close_position_worker(execution, idx)
+
+    current_app.logger.debug(f"[BUY-FIRST EXIT] All phases completed. Results: {len(results)}")
 
     # Calculate results
     successful = [r for r in results if r.get('status') == 'success']

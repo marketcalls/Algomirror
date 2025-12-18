@@ -166,7 +166,16 @@ class StrategyExecutor:
         return margin
 
     def execute(self) -> List[Dict[str, Any]]:
-        """Execute strategy across all selected accounts with PARALLEL leg execution"""
+        """
+        Execute strategy across all selected accounts with BUY-FIRST priority.
+
+        Execution order:
+        1. All BUY legs execute in parallel across all accounts
+        2. Wait for all BUY orders to be placed
+        3. All SELL legs execute in parallel across all accounts
+
+        This ensures covered positions (buys before sells) and reduces margin requirements.
+        """
         if not self.accounts:
             raise ValueError("No active accounts selected for strategy")
 
@@ -176,43 +185,82 @@ class StrategyExecutor:
 
         print(f"\n[EXECUTE START] Strategy {self.strategy.id} - {self.strategy.name}")
         print(f"[EXECUTE] Total legs: {len(all_legs)}, Unexecuted legs: {len(legs)}")
-        print(f"[EXECUTE MODE] PARALLEL EXECUTION (Phase 1+2)")
+        print(f"[EXECUTE MODE] BUY-FIRST PRIORITY EXECUTION")
         for leg in legs:
             print(f"  Leg {leg.leg_number}: {leg.instrument} {leg.action} {leg.option_type} {leg.strike_selection} offset={leg.strike_offset}")
 
         if not legs:
             raise ValueError("No unexecuted legs found for this strategy")
 
-        logger.debug(f"[PARALLEL MODE] Executing strategy {self.strategy.id}: {len(legs)} legs across "
-                   f"{len(self.accounts)} accounts in PARALLEL mode")
+        # Separate legs by action: BUY legs execute first, then SELL legs
+        buy_legs = [leg for leg in legs if leg.action == 'BUY']
+        sell_legs = [leg for leg in legs if leg.action == 'SELL']
+
+        print(f"[EXECUTE] BUY legs: {len(buy_legs)}, SELL legs: {len(sell_legs)}")
+        logger.debug(f"[BUY-FIRST MODE] Executing strategy {self.strategy.id}: {len(buy_legs)} BUY legs, "
+                   f"{len(sell_legs)} SELL legs across {len(self.accounts)} accounts")
 
         # PRE-CALCULATION PHASE: Calculate quantities for straddles/strangles/spreads
         # This ensures all related legs get the same quantity
         if self.use_margin_calculator:
             self._pre_calculate_multi_leg_quantities(legs)
 
-        # PHASE 1: Execute all legs in PARALLEL using threads
         results = []
-        threads = []
         results_lock = create_lock()
 
-        for i, leg in enumerate(legs, 1):
-            logger.debug(f"[LEG {i}] Starting parallel thread for leg {i}/{len(legs)}: "
-                       f"{leg.instrument} {leg.action} {leg.option_type if leg.product_type == 'options' else ''}")
+        # PHASE 1: Execute all BUY legs in PARALLEL
+        if buy_legs:
+            print(f"\n[PHASE 1] Executing {len(buy_legs)} BUY leg(s) across {len(self.accounts)} accounts...")
+            logger.debug(f"[PHASE 1] Starting BUY legs execution")
 
-            thread = threading.Thread(
-                target=self._execute_leg_parallel,
-                args=(leg, results, results_lock),
-                name=f"Leg-{i}-{leg.instrument}",
-                daemon=False
-            )
-            thread.start()
-            threads.append(thread)
+            buy_threads = []
+            for i, leg in enumerate(buy_legs, 1):
+                logger.debug(f"[BUY LEG {i}] Starting parallel thread: "
+                           f"{leg.instrument} {leg.action} {leg.option_type if leg.product_type == 'options' else ''}")
 
-        # Wait for all legs to complete
-        logger.debug(f"[WAITING] Waiting for {len(threads)} legs to complete...")
-        for thread in threads:
-            thread.join()
+                thread = threading.Thread(
+                    target=self._execute_leg_parallel,
+                    args=(leg, results, results_lock),
+                    name=f"BUY-Leg-{leg.leg_number}-{leg.instrument}",
+                    daemon=False
+                )
+                thread.start()
+                buy_threads.append(thread)
+
+            # Wait for all BUY legs to complete before proceeding to SELL
+            logger.debug(f"[PHASE 1] Waiting for {len(buy_threads)} BUY legs to complete...")
+            for thread in buy_threads:
+                thread.join()
+
+            print(f"[PHASE 1] All BUY orders placed. Orders so far: {len(results)}")
+            logger.debug(f"[PHASE 1 COMPLETE] All BUY legs completed. Orders: {len(results)}")
+
+        # PHASE 2: Execute all SELL legs in PARALLEL (after BUY legs complete)
+        if sell_legs:
+            print(f"\n[PHASE 2] Executing {len(sell_legs)} SELL leg(s) across {len(self.accounts)} accounts...")
+            logger.debug(f"[PHASE 2] Starting SELL legs execution")
+
+            sell_threads = []
+            for i, leg in enumerate(sell_legs, 1):
+                logger.debug(f"[SELL LEG {i}] Starting parallel thread: "
+                           f"{leg.instrument} {leg.action} {leg.option_type if leg.product_type == 'options' else ''}")
+
+                thread = threading.Thread(
+                    target=self._execute_leg_parallel,
+                    args=(leg, results, results_lock),
+                    name=f"SELL-Leg-{leg.leg_number}-{leg.instrument}",
+                    daemon=False
+                )
+                thread.start()
+                sell_threads.append(thread)
+
+            # Wait for all SELL legs to complete
+            logger.debug(f"[PHASE 2] Waiting for {len(sell_threads)} SELL legs to complete...")
+            for thread in sell_threads:
+                thread.join()
+
+            print(f"[PHASE 2] All SELL orders placed. Total orders: {len(results)}")
+            logger.debug(f"[PHASE 2 COMPLETE] All SELL legs completed. Total orders: {len(results)}")
 
         logger.debug(f"[COMPLETED] All {len(legs)} legs completed. Total orders: {len(results)}")
         print(f"[EXECUTE END] Total orders placed: {len(results)}")
@@ -2092,11 +2140,39 @@ class StrategyExecutor:
         return total_pnl
 
     def exit_all_positions(self, executions: List[StrategyExecution]) -> List[Dict]:
-        """Exit all active positions"""
-        results = []
+        """
+        Exit all active positions with BUY-FIRST priority.
 
-        for execution in executions:
+        Exit order:
+        1. Close SELL positions first (places BUY orders to close)
+        2. Close BUY positions second (places SELL orders to close)
+
+        This maintains covered positions during exit and reduces margin spikes.
+        """
+        results = []
+        results_lock = create_lock()
+
+        # Separate positions by original action
+        # SELL positions close with BUY orders (execute first)
+        # BUY positions close with SELL orders (execute second)
+        sell_positions = [e for e in executions if e.leg and e.leg.action == 'SELL']
+        buy_positions = [e for e in executions if e.leg and e.leg.action == 'BUY']
+
+        # Handle positions without leg reference (fallback to sequential)
+        unknown_positions = [e for e in executions if not e.leg]
+
+        print(f"[EXIT] BUY-FIRST priority: {len(sell_positions)} SELL positions (close first), "
+              f"{len(buy_positions)} BUY positions (close second)")
+        logger.debug(f"[EXIT] Separating {len(executions)} positions: "
+                    f"{len(sell_positions)} SELL, {len(buy_positions)} BUY, {len(unknown_positions)} unknown")
+
+        def exit_position_worker(execution, thread_index):
+            """Worker to exit a single position"""
             try:
+                # Staggered delay to prevent race conditions
+                if thread_index > 0:
+                    sleep(thread_index * 0.3)
+
                 account = execution.account
                 client = ExtendedOpenAlgoAPI(
                     api_key=account.get_api_key(),
@@ -2105,19 +2181,72 @@ class StrategyExecutor:
 
                 self._exit_position(execution, client, reason='manual_exit')
 
-                results.append({
-                    'symbol': execution.symbol,
-                    'account': account.account_name,
-                    'status': 'exited'
-                })
+                with results_lock:
+                    results.append({
+                        'symbol': execution.symbol,
+                        'account': account.account_name,
+                        'status': 'exited',
+                        'original_action': execution.leg.action if execution.leg else 'unknown'
+                    })
 
             except Exception as e:
                 logger.error(f"Error exiting position {execution.id}: {e}")
-                results.append({
-                    'symbol': execution.symbol,
-                    'account': execution.account.account_name if execution.account else 'Unknown',
-                    'status': 'error',
-                    'error': str(e)
-                })
+                with results_lock:
+                    results.append({
+                        'symbol': execution.symbol,
+                        'account': execution.account.account_name if execution.account else 'Unknown',
+                        'status': 'error',
+                        'error': str(e)
+                    })
+
+        # PHASE 1: Close SELL positions first (BUY close orders)
+        if sell_positions:
+            print(f"[EXIT PHASE 1] Closing {len(sell_positions)} SELL position(s) with BUY orders...")
+            logger.debug(f"[EXIT PHASE 1] Starting SELL position exits")
+
+            sell_threads = []
+            for i, execution in enumerate(sell_positions):
+                thread = threading.Thread(
+                    target=exit_position_worker,
+                    args=(execution, i),
+                    name=f"ExitSELL-{execution.symbol}",
+                    daemon=False
+                )
+                thread.start()
+                sell_threads.append(thread)
+
+            # Wait for all SELL position exits to complete
+            for thread in sell_threads:
+                thread.join()
+
+            print(f"[EXIT PHASE 1] All SELL positions closed. Orders: {len(results)}")
+            logger.debug(f"[EXIT PHASE 1 COMPLETE] SELL positions exited: {len(results)}")
+
+        # PHASE 2: Close BUY positions (SELL close orders)
+        if buy_positions:
+            print(f"[EXIT PHASE 2] Closing {len(buy_positions)} BUY position(s) with SELL orders...")
+            logger.debug(f"[EXIT PHASE 2] Starting BUY position exits")
+
+            buy_threads = []
+            for i, execution in enumerate(buy_positions):
+                thread = threading.Thread(
+                    target=exit_position_worker,
+                    args=(execution, i),
+                    name=f"ExitBUY-{execution.symbol}",
+                    daemon=False
+                )
+                thread.start()
+                buy_threads.append(thread)
+
+            # Wait for all BUY position exits to complete
+            for thread in buy_threads:
+                thread.join()
+
+            print(f"[EXIT PHASE 2] All BUY positions closed. Total orders: {len(results)}")
+            logger.debug(f"[EXIT PHASE 2 COMPLETE] BUY positions exited. Total: {len(results)}")
+
+        # Handle unknown positions sequentially (fallback)
+        for execution in unknown_positions:
+            exit_position_worker(execution, 0)
 
         return results
