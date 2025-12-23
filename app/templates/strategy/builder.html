@@ -721,8 +721,10 @@
                                 </a>
                             </div>
                         </div>
+                        {% endif %}
 
-                        <!-- Combined Premium (for Supertrend strategies) -->
+                        <!-- Combined Premium (for Supertrend OR TSL strategies with multi-leg) -->
+                        {% if strategy.supertrend_exit_enabled or (strategy.trailing_sl and strategy.trailing_sl > 0) %}
                         <div class="bg-base-100 rounded-lg p-3">
                             <div class="flex justify-between text-sm mb-2">
                                 <span class="flex items-center gap-1">
@@ -748,6 +750,13 @@
                                     <span class="badge badge-sm ml-1" id="riskSupertrendSignal">--</span>
                                 </div>
                             </div>
+                            {% if not strategy.supertrend_exit_enabled %}
+                            <div class="mt-2">
+                                <a href="{{ url_for('tradingview.strategy_monitor', strategy_id=strategy.id) }}" class="btn btn-primary btn-xs" target="_blank">
+                                    View Spread Monitor
+                                </a>
+                            </div>
+                            {% endif %}
                         </div>
                         {% endif %}
                     </div>
@@ -3183,9 +3192,9 @@ async function fetchCombinedPremium() {
     }
 }
 
-// Start combined premium polling when page loads (if supertrend is enabled)
+// Start combined premium polling when page loads (if supertrend OR TSL is enabled)
 // Check using Jinja value for initial page load
-{% if strategy and strategy.supertrend_exit_enabled %}
+{% if strategy and (strategy.supertrend_exit_enabled or (strategy.trailing_sl and strategy.trailing_sl > 0)) %}
 if (strategyIdForRisk) {
     document.addEventListener('DOMContentLoaded', function() {
         // Delay slightly to let other initializations complete
