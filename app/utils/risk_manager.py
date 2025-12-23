@@ -766,6 +766,11 @@ class RiskManager:
         Returns:
             bool: True if all positions closed successfully
         """
+        # ENTRY LOG - Confirm function is called
+        logger.warning(f"[CLOSE_POSITIONS] ENTERED close_strategy_positions for {strategy.name}, event_type={risk_event.event_type}")
+        print(f"[CLOSE_POSITIONS] ========== STARTING CLOSE FOR {strategy.name} ==========")
+        print(f"[CLOSE_POSITIONS] Event type: {risk_event.event_type}")
+
         try:
             # Get all open executions
             open_executions = StrategyExecution.query.filter_by(
@@ -774,13 +779,16 @@ class RiskManager:
             ).all()
 
             if not open_executions:
-                logger.debug(f"No open positions to close for {strategy.name}")
+                logger.warning(f"[CLOSE_POSITIONS] No open positions found for {strategy.name}")
+                print(f"[CLOSE_POSITIONS] No open positions to close for {strategy.name}")
                 return True
 
             # Log all executions we're about to close
-            logger.debug(f"[RISK EXIT] Strategy {strategy.name}: Found {len(open_executions)} open positions to close")
+            logger.warning(f"[RISK EXIT] Strategy {strategy.name}: Found {len(open_executions)} open positions to close")
+            print(f"[RISK EXIT] Found {len(open_executions)} positions to close:")
             for exec in open_executions:
-                logger.debug(f"[RISK EXIT]   - Execution {exec.id}: {exec.symbol} on account {exec.account.account_name if exec.account else 'NONE'}, qty={exec.quantity}")
+                logger.warning(f"[RISK EXIT]   - Execution {exec.id}: {exec.symbol} on account {exec.account.account_name if exec.account else 'NONE'}, qty={exec.quantity}")
+                print(f"[RISK EXIT]   - ID={exec.id}, {exec.symbol}, account={exec.account.account_name if exec.account else 'NONE'}, qty={exec.quantity}")
 
             exit_order_ids = []
             success_count = 0
@@ -934,15 +942,17 @@ class RiskManager:
             db.session.add(risk_event)
             db.session.commit()
 
-            logger.debug(
-                f"[RISK EXIT] Completed for {strategy.name}: "
+            logger.warning(
+                f"[RISK EXIT] COMPLETED for {strategy.name}: "
                 f"{success_count} success, {fail_count} failed out of {len(open_executions)} total"
             )
+            print(f"[RISK EXIT] ========== COMPLETED: {success_count} success, {fail_count} failed ==========")
 
             return success_count > 0
 
         except Exception as e:
-            logger.error(f"Error closing strategy positions: {e}")
+            logger.error(f"[CLOSE_POSITIONS] EXCEPTION in close_strategy_positions: {e}", exc_info=True)
+            print(f"[CLOSE_POSITIONS] EXCEPTION: {e}")
             db.session.rollback()
             return False
 
@@ -1019,6 +1029,8 @@ class RiskManager:
                 db.session.commit()
 
                 # Trailing SL always triggers exit
+                logger.warning(f"[TSL] Calling close_strategy_positions for {strategy.name} (FIRST TRIGGER)")
+                print(f"[TSL] Calling close_strategy_positions for {strategy.name} (FIRST TRIGGER)")
                 self.close_strategy_positions(strategy, risk_event)
             else:
                 # RETRY MECHANISM: If TSL was already triggered but positions still open, retry closing
@@ -1028,7 +1040,8 @@ class RiskManager:
                         status='entered'
                     ).count()
                     if open_positions > 0:
-                        logger.debug(f"[TSL RETRY] Strategy {strategy.name}: TSL triggered but {open_positions} positions still open, retrying close")
+                        logger.warning(f"[TSL RETRY] Strategy {strategy.name}: TSL triggered but {open_positions} positions still open, RETRYING close")
+                        print(f"[TSL RETRY] Strategy {strategy.name}: {open_positions} positions still open - RETRYING CLOSE")
                         # Create a retry risk event
                         retry_event = RiskEvent(
                             strategy_id=strategy.id,
