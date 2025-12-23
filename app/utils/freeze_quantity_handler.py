@@ -89,6 +89,15 @@ def place_order_with_freeze_check(client, user_id: int, **order_params) -> Dict:
     symbol = order_params.get('symbol')
     quantity = int(order_params.get('quantity', 0))
 
+    # CRITICAL: Reject orders with invalid quantity
+    if quantity <= 0:
+        logger.error(f"[FREEZE_HANDLER] Rejecting order for {symbol}: quantity={quantity} is invalid (must be > 0)")
+        return {
+            'status': 'error',
+            'message': f'Invalid quantity: {quantity}. Quantity must be greater than 0.',
+            'orderid': None
+        }
+
     # Check if we need to split the order
     should_split, freeze_qty = should_split_order(user_id, symbol, quantity)
 

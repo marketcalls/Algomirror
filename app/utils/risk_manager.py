@@ -697,6 +697,29 @@ class RiskManager:
             strategy.trailing_sl_trigger_pnl = current_stop
             db.session.commit()
 
+            # SANITY CHECK: Prevent false triggers due to P&L calculation issues
+            # If P&L is 0 (or very close) but peak was significantly higher, this is likely a data issue
+            # Don't trigger exit in this case - wait for valid P&L data
+            if abs(current_pnl) < 1.0 and current_peak > 50.0:
+                logger.warning(
+                    f"[TSL SANITY CHECK] Strategy {strategy.name}: P&L={current_pnl:.2f} appears invalid "
+                    f"(near 0 but peak was {current_peak:.2f}). Skipping exit trigger - likely data issue."
+                )
+                print(f"[TSL SANITY] Skipping exit for {strategy.name}: P&L={current_pnl:.2f}, Peak={current_peak:.2f} - likely data issue")
+                return None
+
+            # SANITY CHECK 2: If current stop is positive (profit-locked) but P&L suddenly dropped to 0 or negative
+            # AND the drop is more than 80% of peak, this is likely a data issue
+            if current_stop > 0 and current_pnl <= 0 and current_peak > 100:
+                pnl_drop_pct = ((current_peak - current_pnl) / current_peak) * 100 if current_peak > 0 else 0
+                if pnl_drop_pct > 80:
+                    logger.warning(
+                        f"[TSL SANITY CHECK] Strategy {strategy.name}: P&L dropped {pnl_drop_pct:.1f}% from peak "
+                        f"({current_peak:.2f} -> {current_pnl:.2f}). Skipping exit trigger - likely data issue."
+                    )
+                    print(f"[TSL SANITY] Skipping exit for {strategy.name}: {pnl_drop_pct:.1f}% drop from peak - likely data issue")
+                    return None
+
             # Exit when P&L drops to or below current stop
             if current_pnl <= current_stop:
                 # State transition: ACTIVE -> TRIGGERED
@@ -704,6 +727,7 @@ class RiskManager:
                     f"[TSL STATE] Strategy {strategy.name}: ACTIVE -> TRIGGERED | "
                     f"P&L={current_pnl:.2f} <= Stop={current_stop:.2f} (Peak={current_peak:.2f}, Initial={strategy.trailing_sl_initial_stop:.2f})"
                 )
+                print(f"[TSL TRIGGERED] {strategy.name}: P&L={current_pnl:.2f} <= Stop={current_stop:.2f}")
 
                 # Store exit reason and timestamp
                 exit_reason = f"TSL: P&L {current_pnl:.2f} <= Stop {current_stop:.2f} (Peak: {current_peak:.2f}, Initial: {strategy.trailing_sl_initial_stop:.2f})"
@@ -789,6 +813,17 @@ class RiskManager:
                     print(f"[RISK EXIT PHASE 2] All SELL positions closed. Starting BUY position exits...")
                 logger.debug(f"[RISK EXIT] Processing execution {idx + 1}/{len(open_executions)}: ID={execution.id}, symbol={execution.symbol}")
                 try:
+                    # CRITICAL: Skip if quantity is 0 or None (position already closed at broker level)
+                    if not execution.quantity or execution.quantity <= 0:
+                        logger.warning(f"[RISK EXIT] SKIPPING execution {execution.id} for {execution.symbol}: quantity is {execution.quantity} (position may already be closed)")
+                        print(f"[RISK EXIT] SKIPPING {execution.symbol}: quantity={execution.quantity}")
+                        # Mark as exited since there's nothing to close
+                        execution.status = 'exited'
+                        execution.exit_reason = f"{risk_event.event_type}_no_quantity"
+                        execution.exit_time = datetime.utcnow()
+                        db.session.commit()
+                        continue
+
                     # Use the account from the execution (not primary account)
                     # Each execution might be on a different account in multi-account setups
                     account = execution.account
@@ -821,6 +856,10 @@ class RiskManager:
                     exit_product = execution.product or strategy.product_order_type or 'MIS'
                     logger.debug(f"[RISK EXIT] Product type: execution.product='{execution.product}', strategy.product_order_type='{strategy.product_order_type}', exit_product='{exit_product}'")
 
+                    # Log the exact order parameters being sent
+                    logger.info(f"[RISK EXIT] ORDER PARAMS: symbol={execution.symbol}, action={exit_transaction}, qty={execution.quantity}, exchange={execution.exchange}, product={exit_product}")
+                    print(f"[RISK EXIT] Placing order: {exit_transaction} {execution.quantity} {execution.symbol} on {account.account_name}")
+
                     for attempt in range(max_retries):
                         try:
                             response = place_order_with_freeze_check(
@@ -834,11 +873,14 @@ class RiskManager:
                                 price_type='MARKET',
                                 product=exit_product
                             )
+                            # Log the full response for debugging
+                            logger.info(f"[RISK EXIT] Order response for {execution.symbol}: {response}")
+                            print(f"[RISK EXIT] Response for {execution.symbol}: {response}")
                             if response and isinstance(response, dict):
-                                logger.debug(f"[RISK EXIT] Order response for {execution.symbol}: {response}")
                                 break
                         except Exception as api_error:
                             logger.warning(f"[RISK EXIT] Attempt {attempt + 1}/{max_retries} failed for {execution.symbol} on {account.account_name}: {api_error}")
+                            print(f"[RISK EXIT] Attempt {attempt + 1}/{max_retries} FAILED: {api_error}")
                             if attempt < max_retries - 1:
                                 import time
                                 time.sleep(retry_delay)
@@ -851,10 +893,11 @@ class RiskManager:
                         exit_order_ids.append(order_id)
                         success_count += 1
 
-                        logger.debug(
+                        logger.info(
                             f"[RISK EXIT] SUCCESS: Exit order placed for {execution.symbol} on {account.account_name}: "
                             f"Order ID {order_id}"
                         )
+                        print(f"[RISK EXIT] SUCCESS: {execution.symbol} on {account.account_name} - Order ID: {order_id}")
 
                         # Update execution status - poller will update to exited with actual fill price
                         execution.status = 'exit_pending'
@@ -875,13 +918,16 @@ class RiskManager:
                     else:
                         fail_count += 1
                         error_msg = response.get('message') if response else 'No response'
+                        full_response = str(response) if response else 'None'
                         logger.error(
-                            f"[RISK EXIT] FAILED: Exit order for {execution.symbol} on {account.account_name}: {error_msg}"
+                            f"[RISK EXIT] FAILED: Exit order for {execution.symbol} on {account.account_name}: {error_msg} | Full response: {full_response}"
                         )
+                        print(f"[RISK EXIT] FAILED: {execution.symbol} on {account.account_name} - {error_msg}")
 
                 except Exception as e:
                     fail_count += 1
                     logger.error(f"[RISK EXIT] EXCEPTION for {execution.symbol}: {e}", exc_info=True)
+                    print(f"[RISK EXIT] EXCEPTION: {execution.symbol} - {e}")
 
             # Update risk event with order IDs
             risk_event.exit_order_ids = exit_order_ids
