@@ -71,7 +71,8 @@
       "Bash(\".venv\\\\Scripts\\\\python.exe\" -m py_compile \"D:\\\\AI Bootcamp 2025\\\\Session31\\\\algomirror\\\\app\\\\utils\\\\risk_manager.py\")",
       "Bash(\".venv\\\\Scripts\\\\python.exe\" -m py_compile \"D:\\\\AI Bootcamp 2025\\\\Session31\\\\algomirror\\\\app\\\\utils\\\\freeze_quantity_handler.py\")",
       "Bash(\".venv\\\\Scripts\\\\python.exe\" -m py_compile \"D:\\\\AI Bootcamp 2025\\\\Session31\\\\algomirror\\\\app\\\\utils\\\\position_monitor.py\")",
-      "Bash(\".venv\\\\Scripts\\\\python.exe\" -m py_compile \"D:\\\\AI Bootcamp 2025\\\\Session31\\\\algomirror\\\\app\\\\strategy\\\\routes.py\")"
+      "Bash(\".venv\\\\Scripts\\\\python.exe\" -m py_compile \"D:\\\\AI Bootcamp 2025\\\\Session31\\\\algomirror\\\\app\\\\strategy\\\\routes.py\")",
+      "Bash(\".venv\\\\Scripts\\\\python.exe\" -m py_compile \"D:\\\\AI Bootcamp 2025\\\\Session31\\\\algomirror\\\\app\\\\models.py\")"
     ],
     "deny": [],
     "ask": []

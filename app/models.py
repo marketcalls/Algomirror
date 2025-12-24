@@ -741,8 +741,8 @@ class TradeQuality(db.Model):
             {
                 'quality_grade': 'A',
                 'margin_percentage': 95.0,
-                'risk_level': 'conservative',
-                'description': 'Conservative approach - Uses 95% of available margin'
+                'risk_level': 'aggressive',
+                'description': 'Aggressive approach - Uses 95% of available margin (higher risk)'
             },
             {
                 'quality_grade': 'B',
@@ -753,8 +753,8 @@ class TradeQuality(db.Model):
             {
                 'quality_grade': 'C',
                 'margin_percentage': 36.0,
-                'risk_level': 'aggressive',
-                'description': 'Aggressive approach - Uses 36% of available margin'
+                'risk_level': 'conservative',
+                'description': 'Conservative approach - Uses 36% of available margin (lower risk)'
             }
         ]
 
@@ -770,6 +770,14 @@ class TradeQuality(db.Model):
                     **default
                 )
                 db.session.add(quality)
+            else:
+                # Fix existing incorrect labels (Grade A was 'conservative', Grade C was 'aggressive')
+                if quality.quality_grade == 'A' and quality.risk_level == 'conservative':
+                    quality.risk_level = 'aggressive'
+                    quality.description = default['description']
+                elif quality.quality_grade == 'C' and quality.risk_level == 'aggressive':
+                    quality.risk_level = 'conservative'
+                    quality.description = default['description']
 
         db.session.commit()
 
