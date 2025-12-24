@@ -373,11 +373,16 @@ class StrategyExecutor:
                 'error': f'Invalid quantity: {base_quantity}'
             }]
 
-        # Execute on each account (using parallel threads)
-        threads = []
-        logger.debug(f"Executing leg {leg.leg_number} on {len(self.accounts)} accounts: {[a.account_name for a in self.accounts]}")
+        # Execute on each account (using parallel threads with BATCHING for scalability)
+        # BATCH_SIZE limits concurrent threads to prevent resource exhaustion
+        BATCH_SIZE = 5  # Max 5 concurrent threads at a time
+        all_threads = []
+        accounts_to_process = []
 
-        thread_index = 0
+        logger.debug(f"Executing leg {leg.leg_number} on {len(self.accounts)} accounts: {[a.account_name for a in self.accounts]}")
+        print(f"[EXECUTE] Leg {leg.leg_number}: Processing {len(self.accounts)} accounts in batches of {BATCH_SIZE}")
+
+        # First, prepare all accounts with their quantities
         for account in self.accounts:
             # Calculate quantity for this specific account if using margin calculator
             if self.use_margin_calculator:
@@ -395,23 +400,53 @@ class StrategyExecutor:
             else:
                 quantity = base_quantity
 
-            logger.debug(f"Starting thread for account {account.account_name}, leg {leg.leg_number}, qty {quantity}")
-            thread = threading.Thread(
-                target=self._execute_on_account,
-                args=(account, leg, symbol, exchange, quantity, results, thread_index),
-                daemon=True
-            )
-            thread.start()
-            threads.append(thread)
-            thread_index += 1
+            accounts_to_process.append((account, quantity))
 
-        logger.debug(f"Waiting for {len(threads)} threads to complete for leg {leg.leg_number}")
+        # Process accounts in batches
+        total_accounts = len(accounts_to_process)
+        batch_num = 0
 
-        # Wait for all threads to complete
-        for thread in threads:
-            thread.join()
+        for batch_start in range(0, total_accounts, BATCH_SIZE):
+            batch_end = min(batch_start + BATCH_SIZE, total_accounts)
+            batch_accounts = accounts_to_process[batch_start:batch_end]
+            batch_num += 1
 
-        logger.debug(f"All threads completed for leg {leg.leg_number}. Total results: {len(results)}")
+            logger.debug(f"[BATCH {batch_num}] Processing accounts {batch_start + 1}-{batch_end} of {total_accounts}")
+            print(f"[BATCH {batch_num}] Processing {len(batch_accounts)} accounts...")
+
+            threads = []
+            thread_index = 0
+
+            for account, quantity in batch_accounts:
+                logger.debug(f"Starting thread for account {account.account_name}, leg {leg.leg_number}, qty {quantity}")
+                thread = threading.Thread(
+                    target=self._execute_on_account,
+                    args=(account, leg, symbol, exchange, quantity, results, thread_index),
+                    daemon=True
+                )
+                thread.start()
+                threads.append(thread)
+                all_threads.append(thread)
+                thread_index += 1
+
+            # Wait for this batch to complete before starting next batch
+            THREAD_TIMEOUT = 60
+            for thread in threads:
+                thread.join(timeout=THREAD_TIMEOUT)
+                if thread.is_alive():
+                    logger.error(f"[THREAD TIMEOUT] Thread still running after {THREAD_TIMEOUT}s in batch {batch_num}")
+
+            logger.debug(f"[BATCH {batch_num}] Completed. Total results so far: {len(results)}")
+
+            # Small delay between batches to let DB settle
+            if batch_end < total_accounts:
+                sleep(0.2)
+
+        logger.debug(f"All {batch_num} batches completed for leg {leg.leg_number}. Total results: {len(results)}")
+
+        # Count expected vs actual orders
+        expected_orders = len(self.accounts)
+        actual_results = len(results)
 
         # Mark leg as executed in the main session after all accounts complete
         # Check if at least one order succeeded or is pending (pending = order placed but not filled yet)
@@ -419,11 +454,98 @@ class StrategyExecutor:
         failed_orders = [r for r in results if r.get('status') in ['failed', 'error']]
         skipped_orders = [r for r in results if r.get('status') == 'skipped']
 
-        logger.debug(f"Leg {leg.leg_number} execution summary: {len(successful_orders)} success/pending, {len(failed_orders)} failed, {len(skipped_orders)} skipped")
+        logger.warning(f"[LEG {leg.leg_number} SUMMARY] Expected: {expected_orders} accounts | "
+                      f"Success: {len(successful_orders)} | Failed: {len(failed_orders)} | Skipped: {len(skipped_orders)} | "
+                      f"Total results: {actual_results}")
+        print(f"[LEG {leg.leg_number} SUMMARY] Expected: {expected_orders} | Success: {len(successful_orders)} | "
+              f"Failed: {len(failed_orders)} | Skipped: {len(skipped_orders)}")
 
-        # Log details of any failures
+        # CRITICAL: Check for missing orders (results < expected)
+        if actual_results < expected_orders:
+            # Find which accounts are missing from results
+            result_accounts = set(r.get('account') for r in results)
+            all_accounts = set(a.account_name for a in self.accounts)
+            missing_accounts = all_accounts - result_accounts
+
+            for missing_account in missing_accounts:
+                logger.error(f"[MISSING ORDER] Account {missing_account} has NO result for leg {leg.leg_number} - thread may have failed silently!")
+                print(f"[MISSING ORDER] Account {missing_account} - NO RESULT!")
+                # Add a failed result for tracking
+                results.append({
+                    'account': missing_account,
+                    'symbol': symbol,
+                    'status': 'error',
+                    'error': 'Thread failed silently - no response received',
+                    'leg': leg.leg_number
+                })
+
+            # Recalculate after adding missing
+            failed_orders = [r for r in results if r.get('status') in ['failed', 'error']]
+
+        # RETRY MECHANISM: Retry failed accounts (up to 2 additional attempts)
+        if failed_orders and len(successful_orders) > 0:
+            # Only retry if some succeeded (avoid infinite retry on systemic issues)
+            failed_account_names = [r.get('account') for r in failed_orders]
+            logger.warning(f"[RETRY] {len(failed_orders)} accounts failed, attempting retry: {failed_account_names}")
+            print(f"[RETRY] Retrying {len(failed_orders)} failed accounts: {failed_account_names}")
+
+            for retry_attempt in range(2):  # Up to 2 retries
+                if not failed_orders:
+                    break
+
+                retry_threads = []
+                retry_results = []
+
+                for failed_result in failed_orders[:]:  # Copy list to iterate
+                    failed_account_name = failed_result.get('account')
+                    # Find the account object
+                    account = next((a for a in self.accounts if a.account_name == failed_account_name), None)
+                    if not account:
+                        continue
+
+                    # Determine quantity for retry
+                    if self.use_margin_calculator:
+                        retry_quantity = self._calculate_quantity(leg, 1, account)
+                        if retry_quantity <= 0:
+                            continue
+                    else:
+                        retry_quantity = base_quantity
+
+                    logger.debug(f"[RETRY {retry_attempt + 1}] Retrying {failed_account_name} for leg {leg.leg_number}")
+
+                    thread = threading.Thread(
+                        target=self._execute_on_account,
+                        args=(account, leg, symbol, exchange, retry_quantity, retry_results, retry_attempt),
+                        daemon=True
+                    )
+                    thread.start()
+                    retry_threads.append(thread)
+                    sleep(0.5)  # Stagger retries
+
+                # Wait for retry threads
+                for thread in retry_threads:
+                    thread.join(timeout=THREAD_TIMEOUT)
+
+                # Check retry results
+                for retry_result in retry_results:
+                    if retry_result.get('status') in ['success', 'pending']:
+                        # Remove from failed, add to successful
+                        account_name = retry_result.get('account')
+                        failed_orders = [f for f in failed_orders if f.get('account') != account_name]
+                        successful_orders.append(retry_result)
+                        # Update the original results list
+                        results[:] = [r for r in results if r.get('account') != account_name or r.get('status') in ['success', 'pending']]
+                        results.append(retry_result)
+                        logger.warning(f"[RETRY SUCCESS] Account {account_name} succeeded on retry {retry_attempt + 1}")
+                        print(f"[RETRY SUCCESS] {account_name} succeeded on retry!")
+
+            if failed_orders:
+                logger.error(f"[RETRY EXHAUSTED] {len(failed_orders)} accounts still failed after retries: "
+                           f"{[f.get('account') for f in failed_orders]}")
+
+        # Log details of any remaining failures
         for failed in failed_orders:
-            logger.error(f"Failed order on {failed.get('account', 'unknown')}: {failed.get('error', 'unknown error')}")
+            logger.error(f"[FINAL FAILURE] Order failed on {failed.get('account', 'unknown')}: {failed.get('error', 'unknown error')}")
 
         # Note: is_executed=True is now set in the MAIN session after all threads complete
         # This thread-level attempt is kept as a backup but may fail due to session conflicts
@@ -2141,7 +2263,13 @@ class StrategyExecutor:
 
     def exit_all_positions(self, executions: List[StrategyExecution]) -> List[Dict]:
         """
-        Exit all active positions with BUY-FIRST priority.
+        Exit all active positions with BUY-FIRST priority and robust order placement.
+
+        Features:
+        - Batch execution (5 positions at a time) for scalability
+        - Thread timeout (60 seconds) to prevent hanging
+        - Retry mechanism (up to 2 retries) for failed orders
+        - Verification and missing order detection
 
         Exit order:
         1. Close SELL positions first (places BUY orders to close)
@@ -2151,6 +2279,8 @@ class StrategyExecutor:
         """
         results = []
         results_lock = create_lock()
+        BATCH_SIZE = 5
+        THREAD_TIMEOUT = 60
 
         # Separate positions by original action
         # SELL positions close with BUY orders (execute first)
@@ -2166,87 +2296,267 @@ class StrategyExecutor:
         logger.debug(f"[EXIT] Separating {len(executions)} positions: "
                     f"{len(sell_positions)} SELL, {len(buy_positions)} BUY, {len(unknown_positions)} unknown")
 
-        def exit_position_worker(execution, thread_index):
-            """Worker to exit a single position"""
+        def exit_position_worker(execution, thread_index, retry_attempt=0):
+            """Worker to exit a single position with retry mechanism"""
             try:
                 # Staggered delay to prevent race conditions
-                if thread_index > 0:
+                if thread_index > 0 and retry_attempt == 0:
                     sleep(thread_index * 0.3)
 
                 account = execution.account
+                if not account:
+                    raise Exception("No account associated with execution")
+
                 client = ExtendedOpenAlgoAPI(
                     api_key=account.get_api_key(),
                     host=account.host_url
                 )
 
-                self._exit_position(execution, client, reason='manual_exit')
+                # Call exit with retry logic built into _exit_position_with_retry
+                success = self._exit_position_with_retry(execution, client, reason='manual_exit')
 
                 with results_lock:
-                    results.append({
-                        'symbol': execution.symbol,
-                        'account': account.account_name,
-                        'status': 'exited',
-                        'original_action': execution.leg.action if execution.leg else 'unknown'
-                    })
+                    if success:
+                        results.append({
+                            'execution_id': execution.id,
+                            'symbol': execution.symbol,
+                            'account': account.account_name,
+                            'status': 'exited',
+                            'original_action': execution.leg.action if execution.leg else 'unknown'
+                        })
+                    else:
+                        results.append({
+                            'execution_id': execution.id,
+                            'symbol': execution.symbol,
+                            'account': account.account_name,
+                            'status': 'error',
+                            'error': 'Exit order failed after retries'
+                        })
 
             except Exception as e:
                 logger.error(f"Error exiting position {execution.id}: {e}")
                 with results_lock:
                     results.append({
+                        'execution_id': execution.id,
                         'symbol': execution.symbol,
                         'account': execution.account.account_name if execution.account else 'Unknown',
                         'status': 'error',
                         'error': str(e)
                     })
 
+        def process_positions_in_batches(positions, phase_name):
+            """Process positions in batches with timeout"""
+            total = len(positions)
+            batch_num = 0
+
+            for batch_start in range(0, total, BATCH_SIZE):
+                batch_end = min(batch_start + BATCH_SIZE, total)
+                batch = positions[batch_start:batch_end]
+                batch_num += 1
+
+                logger.debug(f"[EXIT {phase_name} BATCH {batch_num}] Processing {len(batch)} positions...")
+                print(f"[EXIT {phase_name} BATCH {batch_num}] Processing {len(batch)} positions...")
+
+                threads = []
+                for i, execution in enumerate(batch):
+                    thread = threading.Thread(
+                        target=exit_position_worker,
+                        args=(execution, i),
+                        name=f"Exit{phase_name}-{execution.symbol}",
+                        daemon=True
+                    )
+                    thread.start()
+                    threads.append(thread)
+
+                # Wait for batch to complete with timeout
+                for thread in threads:
+                    thread.join(timeout=THREAD_TIMEOUT)
+                    if thread.is_alive():
+                        logger.error(f"[EXIT TIMEOUT] Thread {thread.name} still running after {THREAD_TIMEOUT}s")
+
+                # Small delay between batches
+                if batch_end < total:
+                    sleep(0.2)
+
         # PHASE 1: Close SELL positions first (BUY close orders)
         if sell_positions:
             print(f"[EXIT PHASE 1] Closing {len(sell_positions)} SELL position(s) with BUY orders...")
             logger.debug(f"[EXIT PHASE 1] Starting SELL position exits")
-
-            sell_threads = []
-            for i, execution in enumerate(sell_positions):
-                thread = threading.Thread(
-                    target=exit_position_worker,
-                    args=(execution, i),
-                    name=f"ExitSELL-{execution.symbol}",
-                    daemon=False
-                )
-                thread.start()
-                sell_threads.append(thread)
-
-            # Wait for all SELL position exits to complete
-            for thread in sell_threads:
-                thread.join()
-
-            print(f"[EXIT PHASE 1] All SELL positions closed. Orders: {len(results)}")
-            logger.debug(f"[EXIT PHASE 1 COMPLETE] SELL positions exited: {len(results)}")
+            process_positions_in_batches(sell_positions, "SELL")
+            print(f"[EXIT PHASE 1] All SELL positions processed. Results: {len(results)}")
+            logger.debug(f"[EXIT PHASE 1 COMPLETE] SELL positions processed: {len(results)}")
 
         # PHASE 2: Close BUY positions (SELL close orders)
         if buy_positions:
             print(f"[EXIT PHASE 2] Closing {len(buy_positions)} BUY position(s) with SELL orders...")
             logger.debug(f"[EXIT PHASE 2] Starting BUY position exits")
-
-            buy_threads = []
-            for i, execution in enumerate(buy_positions):
-                thread = threading.Thread(
-                    target=exit_position_worker,
-                    args=(execution, i),
-                    name=f"ExitBUY-{execution.symbol}",
-                    daemon=False
-                )
-                thread.start()
-                buy_threads.append(thread)
-
-            # Wait for all BUY position exits to complete
-            for thread in buy_threads:
-                thread.join()
-
-            print(f"[EXIT PHASE 2] All BUY positions closed. Total orders: {len(results)}")
-            logger.debug(f"[EXIT PHASE 2 COMPLETE] BUY positions exited. Total: {len(results)}")
+            process_positions_in_batches(buy_positions, "BUY")
+            print(f"[EXIT PHASE 2] All BUY positions processed. Total results: {len(results)}")
+            logger.debug(f"[EXIT PHASE 2 COMPLETE] BUY positions processed. Total: {len(results)}")
 
         # Handle unknown positions sequentially (fallback)
         for execution in unknown_positions:
             exit_position_worker(execution, 0)
 
+        # VERIFICATION: Check for missing/failed orders
+        expected_count = len(executions)
+        actual_count = len(results)
+        success_count = len([r for r in results if r.get('status') == 'exited'])
+        error_count = len([r for r in results if r.get('status') == 'error'])
+
+        logger.warning(f"[EXIT SUMMARY] Expected: {expected_count} | Success: {success_count} | Failed: {error_count}")
+        print(f"[EXIT SUMMARY] Expected: {expected_count} | Success: {success_count} | Failed: {error_count}")
+
+        # Check for missing results
+        if actual_count < expected_count:
+            result_exec_ids = set(r.get('execution_id') for r in results if r.get('execution_id'))
+            all_exec_ids = set(e.id for e in executions)
+            missing_exec_ids = all_exec_ids - result_exec_ids
+
+            for missing_id in missing_exec_ids:
+                missing_exec = next((e for e in executions if e.id == missing_id), None)
+                if missing_exec:
+                    logger.error(f"[EXIT MISSING] Execution {missing_id} ({missing_exec.symbol}) has no result - thread may have failed!")
+                    print(f"[EXIT MISSING] {missing_exec.symbol} - NO RESULT!")
+                    results.append({
+                        'execution_id': missing_id,
+                        'symbol': missing_exec.symbol,
+                        'account': missing_exec.account.account_name if missing_exec.account else 'Unknown',
+                        'status': 'error',
+                        'error': 'Thread failed silently - no response received'
+                    })
+
+        # RETRY: Retry failed orders (up to 2 times)
+        failed_results = [r for r in results if r.get('status') == 'error']
+        if failed_results and success_count > 0:
+            logger.warning(f"[EXIT RETRY] {len(failed_results)} orders failed, attempting retry...")
+            print(f"[EXIT RETRY] Retrying {len(failed_results)} failed orders...")
+
+            for retry_attempt in range(2):
+                if not failed_results:
+                    break
+
+                retry_threads = []
+                for failed in failed_results[:]:
+                    exec_id = failed.get('execution_id')
+                    if not exec_id:
+                        continue
+
+                    execution = next((e for e in executions if e.id == exec_id), None)
+                    if not execution or not execution.account:
+                        continue
+
+                    # Check if already exited (another retry may have succeeded)
+                    db.session.refresh(execution)
+                    if execution.status == 'exited' or execution.exit_order_id:
+                        failed_results.remove(failed)
+                        continue
+
+                    logger.debug(f"[EXIT RETRY {retry_attempt + 1}] Retrying {execution.symbol} on {execution.account.account_name}")
+
+                    thread = threading.Thread(
+                        target=exit_position_worker,
+                        args=(execution, 0, retry_attempt + 1),
+                        daemon=True
+                    )
+                    thread.start()
+                    retry_threads.append((thread, failed))
+
+                # Wait for retry threads
+                for thread, failed in retry_threads:
+                    thread.join(timeout=THREAD_TIMEOUT)
+
+                # Check which ones succeeded now
+                failed_results = [r for r in results if r.get('status') == 'error']
+                sleep(0.5)
+
         return results
+
+    def _exit_position_with_retry(self, execution: StrategyExecution, client: ExtendedOpenAlgoAPI,
+                                   reason: str = 'exit_condition') -> bool:
+        """Exit a position with retry mechanism. Returns True on success."""
+        max_retries = 3
+        retry_delay = 1
+
+        for attempt in range(max_retries):
+            try:
+                # Reverse the action
+                exit_action = 'SELL' if execution.leg.action == 'BUY' else 'BUY'
+
+                # Use freeze-aware order placement for exit orders
+                from app.utils.freeze_quantity_handler import place_order_with_freeze_check
+
+                response = place_order_with_freeze_check(
+                    client=client,
+                    user_id=self.strategy.user_id,
+                    strategy=self.strategy.name,
+                    symbol=execution.symbol,
+                    action=exit_action,
+                    exchange=execution.exchange,
+                    price_type='MARKET',
+                    product=execution.product or self.strategy.product_order_type or 'MIS',
+                    quantity=execution.quantity
+                )
+
+                if response and response.get('status') == 'success':
+                    # Get the exit order ID
+                    exit_order_id = response.get('orderid')
+
+                    # Update original execution status
+                    execution.status = 'exited'
+                    execution.exit_time = datetime.utcnow()
+                    execution.exit_reason = reason
+
+                    # Fetch exit order details to get executed price
+                    order_status_response = client.orderstatus(
+                        order_id=exit_order_id,
+                        strategy=self.strategy.name
+                    )
+
+                    exit_avg_price = None
+                    if order_status_response.get('status') == 'success':
+                        order_data = order_status_response.get('data', {})
+                        exit_avg_price = order_data.get('average_price')
+                        execution.broker_order_status = order_data.get('order_status')
+
+                        # If exit price is missing/zero, wait and re-fetch
+                        if not exit_avg_price or exit_avg_price == 0:
+                            logger.warning(f"[EXIT] Exit price missing for {execution.symbol}, waiting 3s to re-fetch...")
+                            sleep(3)
+
+                            retry_response = client.orderstatus(
+                                order_id=exit_order_id,
+                                strategy=self.strategy.name
+                            )
+                            if retry_response.get('status') == 'success':
+                                retry_data = retry_response.get('data', {})
+                                retry_exit_price = retry_data.get('average_price')
+                                if retry_exit_price and retry_exit_price > 0:
+                                    exit_avg_price = retry_exit_price
+
+                    # Calculate realized P&L
+                    if exit_avg_price and exit_avg_price > 0:
+                        execution.exit_price = exit_avg_price
+                        if execution.leg.action == 'BUY':
+                            execution.realized_pnl = (exit_avg_price - execution.entry_price) * execution.quantity
+                        else:
+                            execution.realized_pnl = (execution.entry_price - exit_avg_price) * execution.quantity
+                    else:
+                        execution.realized_pnl = execution.unrealized_pnl if execution.unrealized_pnl else 0
+
+                    db.session.commit()
+                    logger.debug(f"[EXIT SUCCESS] {execution.symbol} exited, Order ID: {exit_order_id}")
+                    return True
+                else:
+                    error_msg = response.get('message', 'Unknown') if response else 'No response'
+                    logger.warning(f"[EXIT] Attempt {attempt + 1}/{max_retries} failed for {execution.symbol}: {error_msg}")
+
+            except Exception as e:
+                logger.warning(f"[EXIT] Attempt {attempt + 1}/{max_retries} exception for {execution.symbol}: {e}")
+
+            if attempt < max_retries - 1:
+                sleep(retry_delay)
+                retry_delay *= 2
+
+        logger.error(f"[EXIT FAILED] {execution.symbol} failed after {max_retries} attempts")
+        return False

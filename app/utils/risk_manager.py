@@ -1011,6 +1011,24 @@ class RiskManager:
             db.session.add(risk_event)
             db.session.commit()
 
+            # VERIFICATION: Check for positions that still don't have exit orders
+            if fail_count > 0:
+                logger.error(f"[RISK EXIT] WARNING: {fail_count} exit orders FAILED!")
+                print(f"[RISK EXIT] CRITICAL: {fail_count} orders failed - checking which positions still need exit...")
+
+                # Re-query to find positions that still need exit
+                still_open = StrategyExecution.query.filter_by(
+                    strategy_id=strategy.id,
+                    status='entered'
+                ).all()
+
+                for exec_still_open in still_open:
+                    if not exec_still_open.exit_order_id:
+                        logger.error(f"[RISK EXIT] MISSING EXIT: Execution {exec_still_open.id} ({exec_still_open.symbol}) on "
+                                    f"{exec_still_open.account.account_name if exec_still_open.account else 'Unknown'} still has no exit order!")
+                        print(f"[RISK EXIT] MISSING: {exec_still_open.symbol} on "
+                              f"{exec_still_open.account.account_name if exec_still_open.account else 'Unknown'} - NEEDS MANUAL INTERVENTION!")
+
             logger.warning(
                 f"[RISK EXIT] COMPLETED for {strategy.name}: "
                 f"{success_count} success, {fail_count} failed out of {len(open_executions)} total"

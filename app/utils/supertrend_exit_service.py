@@ -718,19 +718,42 @@ class SupertrendExitService:
 
                         logger.info(f"[SUPERTREND EXIT] Placing exit for {execution.symbol} on {account.account_name}, action={exit_action}, qty={execution.quantity}, product={exit_product}")
 
-                        # Place order using freeze quantity handler
+                        # Place order using freeze quantity handler with retry mechanism
                         from app.utils.freeze_quantity_handler import place_order_with_freeze_check
-                        response = place_order_with_freeze_check(
-                            client=client,
-                            user_id=strategy.user_id,
-                            strategy=strategy.name,
-                            symbol=execution.symbol,
-                            exchange=execution.exchange,
-                            action=exit_action,
-                            quantity=execution.quantity,
-                            price_type='MARKET',
-                            product=exit_product
-                        )
+                        import time as time_module
+
+                        max_retries = 3
+                        retry_delay = 1
+                        response = None
+
+                        for attempt in range(max_retries):
+                            try:
+                                response = place_order_with_freeze_check(
+                                    client=client,
+                                    user_id=strategy.user_id,
+                                    strategy=strategy.name,
+                                    symbol=execution.symbol,
+                                    exchange=execution.exchange,
+                                    action=exit_action,
+                                    quantity=execution.quantity,
+                                    price_type='MARKET',
+                                    product=exit_product
+                                )
+                                if response and isinstance(response, dict):
+                                    if response.get('status') == 'success':
+                                        break  # Success, exit retry loop
+                                    else:
+                                        # API returned error, retry
+                                        logger.warning(f"[SUPERTREND EXIT] Attempt {attempt + 1}/{max_retries} returned error for {execution.symbol}: {response.get('message', 'Unknown')}")
+                            except Exception as api_error:
+                                logger.warning(f"[SUPERTREND EXIT] Attempt {attempt + 1}/{max_retries} failed for {execution.symbol} on {account.account_name}: {api_error}")
+
+                            if attempt < max_retries - 1:
+                                time_module.sleep(retry_delay)
+                                retry_delay *= 2  # Exponential backoff
+                            else:
+                                if not response:
+                                    response = {'status': 'error', 'message': f'API error after {max_retries} retries'}
 
                         if response and response.get('status') == 'success':
                             order_id = response.get('orderid')
@@ -761,6 +784,22 @@ class SupertrendExitService:
                     except Exception as e:
                         logger.error(f"[SUPERTREND EXIT] Exception closing execution {exec_id}: {str(e)}", exc_info=True)
                         db.session.rollback()  # Release lock on exception
+
+                # VERIFICATION: Check for missing/failed orders
+                fail_count = len(execution_ids) - success_count
+                if fail_count > 0:
+                    logger.error(f"[SUPERTREND EXIT] WARNING: {fail_count} exit orders FAILED out of {len(execution_ids)} total!")
+                    print(f"[SUPERTREND EXIT] CRITICAL: {fail_count} orders failed - manual intervention may be required!")
+
+                    # Log which executions still don't have exit orders
+                    for exec_id in execution_ids:
+                        try:
+                            exec_check = StrategyExecution.query.get(exec_id)
+                            if exec_check and exec_check.status == 'entered' and not exec_check.exit_order_id:
+                                logger.error(f"[SUPERTREND EXIT] MISSING EXIT: Execution {exec_id} ({exec_check.symbol}) still has no exit order!")
+                                print(f"[SUPERTREND EXIT] MISSING: {exec_check.symbol} on {exec_check.account.account_name if exec_check.account else 'Unknown'}")
+                        except Exception:
+                            pass
 
                 logger.info(f"[SUPERTREND EXIT] Completed: {success_count}/{len(execution_ids)} exit orders placed")
 
