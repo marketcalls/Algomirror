@@ -716,7 +716,20 @@ class SupertrendExitService:
                         # Get product type - prefer execution's product, fallback to strategy's product_order_type
                         exit_product = execution.product or strategy.product_order_type or 'MIS'
 
-                        logger.info(f"[SUPERTREND EXIT] Placing exit for {execution.symbol} on {account.account_name}, action={exit_action}, qty={execution.quantity}, product={exit_product}")
+                        # RELIABILITY FIX: Mark as exit_pending BEFORE placing order
+                        # This prevents other processes from trying to exit this position
+                        execution.status = 'exit_pending'
+                        execution.exit_reason = exit_reason
+                        execution.exit_time = datetime.utcnow()
+                        db.session.commit()  # Commit immediately to claim this execution
+
+                        # Store values we need for order placement
+                        exec_id = execution.id
+                        exec_symbol = execution.symbol
+                        exec_exchange = execution.exchange
+                        exec_quantity = execution.quantity
+
+                        logger.info(f"[SUPERTREND EXIT] Placing exit for {exec_symbol} on {account.account_name}, action={exit_action}, qty={exec_quantity}, product={exit_product}")
 
                         # Place order using freeze quantity handler with retry mechanism
                         from app.utils.freeze_quantity_handler import place_order_with_freeze_check
@@ -732,10 +745,10 @@ class SupertrendExitService:
                                     client=client,
                                     user_id=strategy.user_id,
                                     strategy=strategy.name,
-                                    symbol=execution.symbol,
-                                    exchange=execution.exchange,
+                                    symbol=exec_symbol,
+                                    exchange=exec_exchange,
                                     action=exit_action,
-                                    quantity=execution.quantity,
+                                    quantity=exec_quantity,
                                     price_type='MARKET',
                                     product=exit_product
                                 )
@@ -744,9 +757,9 @@ class SupertrendExitService:
                                         break  # Success, exit retry loop
                                     else:
                                         # API returned error, retry
-                                        logger.warning(f"[SUPERTREND EXIT] Attempt {attempt + 1}/{max_retries} returned error for {execution.symbol}: {response.get('message', 'Unknown')}")
+                                        logger.warning(f"[SUPERTREND EXIT] Attempt {attempt + 1}/{max_retries} returned error for {exec_symbol}: {response.get('message', 'Unknown')}")
                             except Exception as api_error:
-                                logger.warning(f"[SUPERTREND EXIT] Attempt {attempt + 1}/{max_retries} failed for {execution.symbol} on {account.account_name}: {api_error}")
+                                logger.warning(f"[SUPERTREND EXIT] Attempt {attempt + 1}/{max_retries} failed for {exec_symbol} on {account.account_name}: {api_error}")
 
                             if attempt < max_retries - 1:
                                 time_module.sleep(retry_delay)
@@ -755,14 +768,14 @@ class SupertrendExitService:
                                 if not response:
                                     response = {'status': 'error', 'message': f'API error after {max_retries} retries'}
 
+                        # Re-fetch execution with lock to update order ID
+                        execution = StrategyExecution.query.with_for_update(nowait=False).get(exec_id)
+
                         if response and response.get('status') == 'success':
                             order_id = response.get('orderid')
 
-                            # Update execution immediately and COMMIT to release lock
-                            execution.status = 'exit_pending'
+                            # Update with the actual order ID
                             execution.exit_order_id = order_id
-                            execution.exit_time = datetime.utcnow()
-                            execution.exit_reason = exit_reason
                             execution.broker_order_status = 'open'
                             db.session.commit()  # Commit each execution to release row lock
                             success_count += 1
@@ -775,11 +788,16 @@ class SupertrendExitService:
                                 strategy_name=strategy.name
                             )
 
-                            logger.info(f"[SUPERTREND EXIT] Exit order {order_id} placed for {execution.symbol} on {account.account_name}")
+                            logger.info(f"[SUPERTREND EXIT] Exit order {order_id} placed for {exec_symbol} on {account.account_name}")
                         else:
                             error_msg = response.get('message', 'Unknown error') if response else 'No response'
-                            logger.error(f"[SUPERTREND EXIT] Failed to place exit for {execution.symbol} on {account.account_name}: {error_msg}")
-                            db.session.rollback()  # Release lock on failure
+                            logger.error(f"[SUPERTREND EXIT] Failed to place exit for {exec_symbol} on {account.account_name}: {error_msg}")
+
+                            # RELIABILITY FIX: Revert status to 'entered' so retry can pick it up
+                            execution.status = 'entered'
+                            execution.exit_reason = f"failed: {error_msg[:100]}"
+                            execution.exit_time = None
+                            db.session.commit()  # Commit to release lock
 
                     except Exception as e:
                         logger.error(f"[SUPERTREND EXIT] Exception closing execution {exec_id}: {str(e)}", exc_info=True)

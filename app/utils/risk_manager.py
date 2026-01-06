@@ -34,6 +34,177 @@ from app.utils.openalgo_client import ExtendedOpenAlgoAPI
 logger = logging.getLogger(__name__)
 
 
+def verify_broker_positions(strategy: Strategy, accounts: List[TradingAccount] = None) -> Dict:
+    """
+    RELIABILITY FIX: Verify positions with broker before closing.
+
+    This function checks the broker's actual positionbook and compares with
+    AlgoMirror's database to detect discrepancies.
+
+    Returns:
+        Dict with:
+        - broker_positions: {account_id: {symbol: quantity}}
+        - db_positions: {account_id: {symbol: execution_id}}
+        - missing_at_broker: Positions in DB but not at broker (already closed)
+        - missing_in_db: Positions at broker but marked closed in DB
+        - quantity_mismatch: Positions with different quantities
+    """
+    result = {
+        'broker_positions': {},
+        'db_positions': {},
+        'missing_at_broker': [],
+        'missing_in_db': [],
+        'quantity_mismatch': [],
+        'synced_count': 0
+    }
+
+    try:
+        # Get all accounts that have executions for this strategy
+        if accounts is None:
+            execution_account_ids = db.session.query(StrategyExecution.account_id).filter(
+                StrategyExecution.strategy_id == strategy.id
+            ).distinct().all()
+            account_ids = [a[0] for a in execution_account_ids]
+            accounts = TradingAccount.query.filter(TradingAccount.id.in_(account_ids)).all()
+
+        for account in accounts:
+            if not account.is_active:
+                continue
+
+            account_id = account.id
+            result['broker_positions'][account_id] = {}
+            result['db_positions'][account_id] = {}
+
+            try:
+                # Fetch broker positions
+                client = ExtendedOpenAlgoAPI(
+                    api_key=account.get_api_key(),
+                    host=account.host_url
+                )
+                positionbook = client.positionbook()
+
+                if positionbook.get('status') == 'success':
+                    broker_data = positionbook.get('data', [])
+                    for pos in broker_data:
+                        symbol = pos.get('symbol', '')
+                        qty = int(pos.get('quantity', 0))
+                        if qty != 0:  # Only track non-zero positions
+                            result['broker_positions'][account_id][symbol] = {
+                                'quantity': qty,
+                                'product': pos.get('product', 'MIS'),
+                                'exchange': pos.get('exchange', 'NFO'),
+                                'ltp': pos.get('ltp', 0),
+                                'pnl': pos.get('pnl', 0)
+                            }
+
+            except Exception as e:
+                logger.error(f"[VERIFY] Failed to fetch positionbook for {account.account_name}: {e}")
+
+            # Get DB positions for this account
+            db_executions = StrategyExecution.query.filter(
+                StrategyExecution.strategy_id == strategy.id,
+                StrategyExecution.account_id == account_id,
+                StrategyExecution.status == 'entered'
+            ).all()
+
+            for exec in db_executions:
+                result['db_positions'][account_id][exec.symbol] = {
+                    'execution_id': exec.id,
+                    'quantity': exec.quantity,
+                    'product': exec.product,
+                    'exchange': exec.exchange
+                }
+
+            # Compare and detect discrepancies
+            broker_symbols = set(result['broker_positions'][account_id].keys())
+            db_symbols = set(result['db_positions'][account_id].keys())
+
+            # Positions in DB but not at broker (already closed at broker)
+            for symbol in db_symbols - broker_symbols:
+                exec_info = result['db_positions'][account_id][symbol]
+                result['missing_at_broker'].append({
+                    'account_id': account_id,
+                    'account_name': account.account_name,
+                    'symbol': symbol,
+                    'execution_id': exec_info['execution_id'],
+                    'db_quantity': exec_info['quantity']
+                })
+
+                # AUTO-SYNC: Mark as exited since broker doesn't have it
+                execution = StrategyExecution.query.get(exec_info['execution_id'])
+                if execution and execution.status == 'entered':
+                    logger.warning(f"[SYNC] Position {symbol} on {account.account_name} not found at broker - marking as exited")
+                    execution.status = 'exited'
+                    execution.exit_reason = 'broker_position_not_found'
+                    execution.exit_time = datetime.utcnow()
+                    db.session.commit()
+                    result['synced_count'] += 1
+
+            # Positions at broker but marked closed in DB
+            for symbol in broker_symbols - db_symbols:
+                broker_info = result['broker_positions'][account_id][symbol]
+                # Check if there's a closed execution for this symbol
+                closed_exec = StrategyExecution.query.filter(
+                    StrategyExecution.strategy_id == strategy.id,
+                    StrategyExecution.account_id == account_id,
+                    StrategyExecution.symbol == symbol,
+                    StrategyExecution.status.in_(['exited', 'failed'])
+                ).first()
+
+                if closed_exec:
+                    result['missing_in_db'].append({
+                        'account_id': account_id,
+                        'account_name': account.account_name,
+                        'symbol': symbol,
+                        'broker_quantity': broker_info['quantity'],
+                        'execution_id': closed_exec.id,
+                        'current_status': closed_exec.status
+                    })
+
+                    # AUTO-SYNC: Re-open the execution since broker still has it
+                    if closed_exec.status in ['exited', 'failed']:
+                        logger.warning(f"[SYNC] Position {symbol} on {account.account_name} found at broker but marked {closed_exec.status} - reopening")
+                        closed_exec.status = 'entered'
+                        closed_exec.quantity = abs(broker_info['quantity'])
+                        closed_exec.exit_order_id = None
+                        closed_exec.exit_price = None
+                        closed_exec.exit_time = None
+                        closed_exec.exit_reason = None
+                        closed_exec.broker_order_status = 'complete'
+                        db.session.commit()
+                        result['synced_count'] += 1
+
+            # Check for quantity mismatches
+            for symbol in broker_symbols & db_symbols:
+                broker_qty = abs(result['broker_positions'][account_id][symbol]['quantity'])
+                db_qty = result['db_positions'][account_id][symbol]['quantity']
+                if broker_qty != db_qty:
+                    result['quantity_mismatch'].append({
+                        'account_id': account_id,
+                        'account_name': account.account_name,
+                        'symbol': symbol,
+                        'broker_quantity': broker_qty,
+                        'db_quantity': db_qty
+                    })
+
+                    # AUTO-SYNC: Update DB quantity to match broker
+                    exec_id = result['db_positions'][account_id][symbol]['execution_id']
+                    execution = StrategyExecution.query.get(exec_id)
+                    if execution:
+                        logger.warning(f"[SYNC] Quantity mismatch for {symbol} on {account.account_name}: DB={db_qty}, Broker={broker_qty} - updating DB")
+                        execution.quantity = broker_qty
+                        db.session.commit()
+                        result['synced_count'] += 1
+
+        logger.info(f"[VERIFY] Position verification complete: {result['synced_count']} positions synced, "
+                   f"{len(result['missing_at_broker'])} closed at broker, {len(result['missing_in_db'])} reopened from broker")
+
+    except Exception as e:
+        logger.error(f"[VERIFY] Error verifying broker positions: {e}", exc_info=True)
+
+    return result
+
+
 class RiskManager:
     """
     Singleton service to monitor and enforce risk thresholds.
@@ -828,6 +999,12 @@ class RiskManager:
         IMPORTANT: For multi-account strategies, each execution is closed on its own account.
         This ensures orders are placed to the correct broker account.
 
+        RELIABILITY FIXES (v2.0):
+        - Uses row-level locking to prevent concurrent exit orders
+        - Marks status as exit_pending BEFORE placing order (atomic)
+        - Validates quantity > 0 at query level
+        - Clears SQLAlchemy session cache before processing
+
         Args:
             strategy: Strategy to close
             risk_event: Risk event that triggered the closure
@@ -841,10 +1018,31 @@ class RiskManager:
         print(f"[CLOSE_POSITIONS] Event type: {risk_event.event_type}")
 
         try:
-            # Get all open executions
-            open_executions = StrategyExecution.query.filter_by(
-                strategy_id=strategy.id,
-                status='entered'
+            # RELIABILITY FIX: Clear SQLAlchemy cache to ensure fresh data
+            db.session.expire_all()
+
+            # RELIABILITY FIX: Verify positions with broker before closing
+            # This syncs the database with actual broker positions
+            try:
+                verify_result = verify_broker_positions(strategy)
+                if verify_result['synced_count'] > 0:
+                    logger.warning(f"[CLOSE_POSITIONS] Synced {verify_result['synced_count']} positions with broker before closing")
+                    print(f"[CLOSE_POSITIONS] Synced {verify_result['synced_count']} positions with broker")
+                    # Refresh session after sync
+                    db.session.expire_all()
+            except Exception as verify_error:
+                logger.error(f"[CLOSE_POSITIONS] Failed to verify broker positions: {verify_error}")
+                # Continue with close anyway
+
+            # Get all open executions with IMPROVED FILTERS:
+            # - status='entered' (not already exiting/exited)
+            # - exit_order_id IS NULL (no exit order placed yet)
+            # - quantity > 0 (has something to close)
+            open_executions = StrategyExecution.query.filter(
+                StrategyExecution.strategy_id == strategy.id,
+                StrategyExecution.status == 'entered',
+                StrategyExecution.exit_order_id.is_(None),  # No exit order yet
+                StrategyExecution.quantity > 0  # Has quantity to close
             ).all()
 
             if not open_executions:
@@ -883,29 +1081,38 @@ class RiskManager:
             current_phase = 1 if sell_positions else 2
             sell_count = len(sell_positions)
 
-            for idx, execution in enumerate(ordered_executions):
+            # Get execution IDs for row locking (we'll re-query each with lock)
+            execution_ids = [ex.id for ex in ordered_executions]
+
+            for idx, exec_id in enumerate(execution_ids):
                 # Log phase transitions
                 if idx == sell_count and sell_positions and buy_positions:
                     logger.debug(f"[RISK EXIT PHASE 2] All SELL positions closed. Starting BUY position exits...")
                     print(f"[RISK EXIT PHASE 2] All SELL positions closed. Starting BUY position exits...")
-                logger.debug(f"[RISK EXIT] Processing execution {idx + 1}/{len(open_executions)}: ID={execution.id}, symbol={execution.symbol}")
+
                 try:
-                    # CRITICAL: Re-fetch execution to get latest state (prevent race condition/double orders)
-                    execution = StrategyExecution.query.get(execution.id)
+                    # RELIABILITY FIX: Use row-level locking to prevent concurrent modifications
+                    # with_for_update() ensures only one process can modify this execution at a time
+                    execution = StrategyExecution.query.with_for_update(nowait=False).get(exec_id)
+
                     if not execution:
-                        logger.warning(f"[RISK EXIT] Execution {execution.id} no longer exists, skipping")
+                        logger.warning(f"[RISK EXIT] Execution {exec_id} no longer exists, skipping")
                         continue
+
+                    logger.debug(f"[RISK EXIT] Processing execution {idx + 1}/{len(execution_ids)}: ID={execution.id}, symbol={execution.symbol}")
 
                     # CRITICAL: Skip if exit order already placed (prevent double orders)
                     if execution.exit_order_id:
                         logger.warning(f"[RISK EXIT] SKIPPING execution {execution.id} for {execution.symbol}: exit_order_id={execution.exit_order_id} already exists (preventing double order)")
                         print(f"[RISK EXIT] SKIPPING {execution.symbol}: exit order already placed")
+                        db.session.rollback()  # Release the row lock
                         continue
 
                     # CRITICAL: Skip if status is not 'entered' (already exiting or exited)
-                    if execution.status not in ['entered', 'exit_pending']:
+                    if execution.status not in ['entered']:
                         logger.warning(f"[RISK EXIT] SKIPPING execution {execution.id}: status={execution.status} (not entered)")
                         print(f"[RISK EXIT] SKIPPING {execution.symbol}: status={execution.status}")
+                        db.session.rollback()  # Release the row lock
                         continue
 
                     # CRITICAL: Skip if quantity is 0 or None (position already closed at broker level)
@@ -919,11 +1126,30 @@ class RiskManager:
                         db.session.commit()
                         continue
 
+                    # RELIABILITY FIX: Mark as exit_pending BEFORE placing order
+                    # This prevents other processes from trying to exit this position
+                    execution.status = 'exit_pending'
+                    execution.exit_reason = risk_event.event_type
+                    execution.exit_time = datetime.utcnow()
+                    db.session.commit()  # Commit immediately to claim this execution
+
+                    # Store values we need before releasing the lock
+                    exec_id = execution.id
+                    exec_symbol = execution.symbol
+                    exec_exchange = execution.exchange
+                    exec_quantity = execution.quantity
+                    exec_product = execution.product
+
                     # Use the account from the execution (not primary account)
                     # Each execution might be on a different account in multi-account setups
                     account = execution.account
                     if not account or not account.is_active:
                         logger.error(f"[RISK EXIT] Account not found or inactive for execution {execution.id}")
+                        # Revert status since we can't process
+                        execution.status = 'entered'
+                        execution.exit_reason = None
+                        execution.exit_time = None
+                        db.session.commit()
                         fail_count += 1
                         continue
 
@@ -939,7 +1165,7 @@ class RiskManager:
                     leg_action = execution.leg.action.upper() if execution.leg else 'BUY'
                     exit_transaction = 'SELL' if leg_action == 'BUY' else 'BUY'
 
-                    logger.debug(f"[RISK EXIT] Placing {exit_transaction} order for {execution.symbol}, qty={execution.quantity} on {account.account_name}")
+                    logger.debug(f"[RISK EXIT] Placing {exit_transaction} order for {exec_symbol}, qty={exec_quantity} on {account.account_name}")
 
                     # Place exit order with freeze-aware placement and retry logic
                     max_retries = 3
@@ -948,12 +1174,12 @@ class RiskManager:
 
                     # Get product type - prefer execution's product, fallback to strategy's product_order_type
                     # This ensures NRML entries exit as NRML, not MIS
-                    exit_product = execution.product or strategy.product_order_type or 'MIS'
-                    logger.debug(f"[RISK EXIT] Product type: execution.product='{execution.product}', strategy.product_order_type='{strategy.product_order_type}', exit_product='{exit_product}'")
+                    exit_product = exec_product or strategy.product_order_type or 'MIS'
+                    logger.debug(f"[RISK EXIT] Product type: execution.product='{exec_product}', strategy.product_order_type='{strategy.product_order_type}', exit_product='{exit_product}'")
 
                     # Log the exact order parameters being sent
-                    logger.info(f"[RISK EXIT] ORDER PARAMS: symbol={execution.symbol}, action={exit_transaction}, qty={execution.quantity}, exchange={execution.exchange}, product={exit_product}")
-                    print(f"[RISK EXIT] Placing order: {exit_transaction} {execution.quantity} {execution.symbol} on {account.account_name}")
+                    logger.info(f"[RISK EXIT] ORDER PARAMS: symbol={exec_symbol}, action={exit_transaction}, qty={exec_quantity}, exchange={exec_exchange}, product={exit_product}")
+                    print(f"[RISK EXIT] Placing order: {exit_transaction} {exec_quantity} {exec_symbol} on {account.account_name}")
 
                     for attempt in range(max_retries):
                         try:
@@ -961,30 +1187,30 @@ class RiskManager:
                                 client=client,
                                 user_id=strategy.user_id,
                                 strategy=strategy.name,
-                                symbol=execution.symbol,
-                                exchange=execution.exchange,
+                                symbol=exec_symbol,
+                                exchange=exec_exchange,
                                 action=exit_transaction,
-                                quantity=execution.quantity,
+                                quantity=exec_quantity,
                                 price_type='MARKET',
                                 product=exit_product
                             )
                             # Log the full response for debugging
-                            logger.info(f"[RISK EXIT] Order response for {execution.symbol}: {response}")
-                            print(f"[RISK EXIT] Response for {execution.symbol}: {response}")
+                            logger.info(f"[RISK EXIT] Order response for {exec_symbol}: {response}")
+                            print(f"[RISK EXIT] Response for {exec_symbol}: {response}")
                             # FIXED: Only break on SUCCESS, not on any dict response
                             if response and isinstance(response, dict) and response.get('status') == 'success':
                                 break
                             elif response and isinstance(response, dict):
                                 # API returned error, log and retry
                                 error_msg = response.get('message', 'Unknown error')
-                                logger.warning(f"[RISK EXIT] Attempt {attempt + 1}/{max_retries} API error for {execution.symbol}: {error_msg}")
+                                logger.warning(f"[RISK EXIT] Attempt {attempt + 1}/{max_retries} API error for {exec_symbol}: {error_msg}")
                                 print(f"[RISK EXIT] Attempt {attempt + 1}/{max_retries} API ERROR: {error_msg}")
                                 if attempt < max_retries - 1:
                                     import time
                                     time.sleep(retry_delay)
                                     retry_delay *= 2
                         except Exception as api_error:
-                            logger.warning(f"[RISK EXIT] Attempt {attempt + 1}/{max_retries} failed for {execution.symbol} on {account.account_name}: {api_error}")
+                            logger.warning(f"[RISK EXIT] Attempt {attempt + 1}/{max_retries} failed for {exec_symbol} on {account.account_name}: {api_error}")
                             print(f"[RISK EXIT] Attempt {attempt + 1}/{max_retries} FAILED: {api_error}")
                             if attempt < max_retries - 1:
                                 import time
@@ -993,31 +1219,30 @@ class RiskManager:
                             else:
                                 response = {'status': 'error', 'message': f'API error after {max_retries} retries: {api_error}'}
 
+                    # Re-fetch execution with lock to update order ID
+                    execution = StrategyExecution.query.with_for_update(nowait=False).get(exec_id)
+
                     if response and response.get('status') == 'success':
                         order_id = response.get('orderid')
                         exit_order_ids.append(order_id)
                         success_count += 1
 
                         logger.info(
-                            f"[RISK EXIT] SUCCESS: Exit order placed for {execution.symbol} on {account.account_name}: "
+                            f"[RISK EXIT] SUCCESS: Exit order placed for {exec_symbol} on {account.account_name}: "
                             f"Order ID {order_id}"
                         )
-                        print(f"[RISK EXIT] SUCCESS: {execution.symbol} on {account.account_name} - Order ID: {order_id}")
+                        print(f"[RISK EXIT] SUCCESS: {exec_symbol} on {account.account_name} - Order ID: {order_id}")
 
-                        # CRITICAL: Update exit_order_id and commit IMMEDIATELY to prevent double orders
-                        # This marks the execution as "exit in progress" so other threads won't place another order
-                        execution.status = 'exit_pending'
+                        # Update with the actual order ID
                         execution.exit_order_id = order_id
                         execution.broker_order_status = 'open'
-                        execution.exit_time = datetime.utcnow()
-                        execution.exit_reason = risk_event.event_type
-                        db.session.commit()  # Commit immediately to prevent race condition
+                        db.session.commit()
 
                         # Add exit order to poller to get actual fill price (same as entry orders)
                         from app.utils.order_status_poller import order_status_poller
                         order_status_poller.add_order(
                             execution_id=execution.id,
-                            account=execution.account,
+                            account=account,
                             order_id=order_id,
                             strategy_name=strategy.name
                         )
@@ -1027,14 +1252,21 @@ class RiskManager:
                         error_msg = response.get('message') if response else 'No response'
                         full_response = str(response) if response else 'None'
                         logger.error(
-                            f"[RISK EXIT] FAILED: Exit order for {execution.symbol} on {account.account_name}: {error_msg} | Full response: {full_response}"
+                            f"[RISK EXIT] FAILED: Exit order for {exec_symbol} on {account.account_name}: {error_msg} | Full response: {full_response}"
                         )
-                        print(f"[RISK EXIT] FAILED: {execution.symbol} on {account.account_name} - {error_msg}")
+                        print(f"[RISK EXIT] FAILED: {exec_symbol} on {account.account_name} - {error_msg}")
+
+                        # RELIABILITY FIX: Revert status to 'entered' so retry can pick it up
+                        execution.status = 'entered'
+                        execution.exit_reason = f"failed: {error_msg[:100]}"
+                        execution.exit_time = None
+                        db.session.commit()
 
                 except Exception as e:
                     fail_count += 1
-                    logger.error(f"[RISK EXIT] EXCEPTION for {execution.symbol}: {e}", exc_info=True)
-                    print(f"[RISK EXIT] EXCEPTION: {execution.symbol} - {e}")
+                    logger.error(f"[RISK EXIT] EXCEPTION for execution {exec_id}: {e}", exc_info=True)
+                    print(f"[RISK EXIT] EXCEPTION: execution {exec_id} - {e}")
+                    db.session.rollback()  # Release any locks on exception
 
             # Update risk event with order IDs
             risk_event.exit_order_ids = exit_order_ids
@@ -1096,21 +1328,29 @@ class RiskManager:
                     self.close_strategy_positions(strategy, risk_event)
             else:
                 # RETRY MECHANISM: If max loss was already triggered but positions still open, retry closing
+                # RELIABILITY FIX: Add time-based guard to prevent premature retries
                 if strategy.max_loss_triggered_at:
-                    open_positions = StrategyExecution.query.filter_by(
-                        strategy_id=strategy.id,
-                        status='entered'
-                    ).count()
-                    if open_positions > 0:
-                        logger.debug(f"[MAX LOSS RETRY] Strategy {strategy.name}: Max loss triggered but {open_positions} positions still open, retrying close")
-                        retry_event = RiskEvent(
-                            strategy_id=strategy.id,
-                            event_type='max_loss_retry',
-                            threshold_value=strategy.max_loss,
-                            current_value=0,
-                            action_taken='close_remaining'
-                        )
-                        self.close_strategy_positions(strategy, retry_event)
+                    # Only retry if at least 10 seconds have passed since first trigger
+                    seconds_since_trigger = (datetime.utcnow() - strategy.max_loss_triggered_at).total_seconds()
+                    if seconds_since_trigger < 10:
+                        logger.debug(f"[MAX LOSS RETRY] Skipping - only {seconds_since_trigger:.1f}s since trigger (need 10s)")
+                    else:
+                        # Check for positions still in 'entered' status (not exit_pending)
+                        open_positions = StrategyExecution.query.filter(
+                            StrategyExecution.strategy_id == strategy.id,
+                            StrategyExecution.status == 'entered',
+                            StrategyExecution.exit_order_id.is_(None)  # No exit order yet
+                        ).count()
+                        if open_positions > 0:
+                            logger.debug(f"[MAX LOSS RETRY] Strategy {strategy.name}: Max loss triggered {seconds_since_trigger:.1f}s ago but {open_positions} positions still open, retrying close")
+                            retry_event = RiskEvent(
+                                strategy_id=strategy.id,
+                                event_type='max_loss_retry',
+                                threshold_value=strategy.max_loss,
+                                current_value=0,
+                                action_taken='close_remaining'
+                            )
+                            self.close_strategy_positions(strategy, retry_event)
 
             # Check max profit
             risk_event = self.check_max_profit(strategy)
@@ -1123,21 +1363,29 @@ class RiskManager:
                     self.close_strategy_positions(strategy, risk_event)
             else:
                 # RETRY MECHANISM: If max profit was already triggered but positions still open, retry closing
+                # RELIABILITY FIX: Add time-based guard to prevent premature retries
                 if strategy.max_profit_triggered_at:
-                    open_positions = StrategyExecution.query.filter_by(
-                        strategy_id=strategy.id,
-                        status='entered'
-                    ).count()
-                    if open_positions > 0:
-                        logger.debug(f"[MAX PROFIT RETRY] Strategy {strategy.name}: Max profit triggered but {open_positions} positions still open, retrying close")
-                        retry_event = RiskEvent(
-                            strategy_id=strategy.id,
-                            event_type='max_profit_retry',
-                            threshold_value=strategy.max_profit,
-                            current_value=0,
-                            action_taken='close_remaining'
-                        )
-                        self.close_strategy_positions(strategy, retry_event)
+                    # Only retry if at least 10 seconds have passed since first trigger
+                    seconds_since_trigger = (datetime.utcnow() - strategy.max_profit_triggered_at).total_seconds()
+                    if seconds_since_trigger < 10:
+                        logger.debug(f"[MAX PROFIT RETRY] Skipping - only {seconds_since_trigger:.1f}s since trigger (need 10s)")
+                    else:
+                        # Check for positions still in 'entered' status (not exit_pending)
+                        open_positions = StrategyExecution.query.filter(
+                            StrategyExecution.strategy_id == strategy.id,
+                            StrategyExecution.status == 'entered',
+                            StrategyExecution.exit_order_id.is_(None)  # No exit order yet
+                        ).count()
+                        if open_positions > 0:
+                            logger.debug(f"[MAX PROFIT RETRY] Strategy {strategy.name}: Max profit triggered {seconds_since_trigger:.1f}s ago but {open_positions} positions still open, retrying close")
+                            retry_event = RiskEvent(
+                                strategy_id=strategy.id,
+                                event_type='max_profit_retry',
+                                threshold_value=strategy.max_profit,
+                                current_value=0,
+                                action_taken='close_remaining'
+                            )
+                            self.close_strategy_positions(strategy, retry_event)
 
             # Check trailing SL
             risk_event = self.check_trailing_sl(strategy)
@@ -1151,23 +1399,31 @@ class RiskManager:
                 self.close_strategy_positions(strategy, risk_event)
             else:
                 # RETRY MECHANISM: If TSL was already triggered but positions still open, retry closing
+                # RELIABILITY FIX: Add time-based guard to prevent premature retries
                 if strategy.trailing_sl_triggered_at:
-                    open_positions = StrategyExecution.query.filter_by(
-                        strategy_id=strategy.id,
-                        status='entered'
-                    ).count()
-                    if open_positions > 0:
-                        logger.warning(f"[TSL RETRY] Strategy {strategy.name}: TSL triggered but {open_positions} positions still open, RETRYING close")
-                        print(f"[TSL RETRY] Strategy {strategy.name}: {open_positions} positions still open - RETRYING CLOSE")
-                        # Create a retry risk event
-                        retry_event = RiskEvent(
-                            strategy_id=strategy.id,
-                            event_type='trailing_sl_retry',
-                            threshold_value=strategy.trailing_sl_trigger_pnl,
-                            current_value=0,  # Will be recalculated
-                            action_taken='close_remaining'
-                        )
-                        self.close_strategy_positions(strategy, retry_event)
+                    # Only retry if at least 10 seconds have passed since first trigger
+                    seconds_since_trigger = (datetime.utcnow() - strategy.trailing_sl_triggered_at).total_seconds()
+                    if seconds_since_trigger < 10:
+                        logger.debug(f"[TSL RETRY] Skipping - only {seconds_since_trigger:.1f}s since trigger (need 10s)")
+                    else:
+                        # Check for positions still in 'entered' status (not exit_pending)
+                        open_positions = StrategyExecution.query.filter(
+                            StrategyExecution.strategy_id == strategy.id,
+                            StrategyExecution.status == 'entered',
+                            StrategyExecution.exit_order_id.is_(None)  # No exit order yet
+                        ).count()
+                        if open_positions > 0:
+                            logger.warning(f"[TSL RETRY] Strategy {strategy.name}: TSL triggered {seconds_since_trigger:.1f}s ago but {open_positions} positions still open, RETRYING close")
+                            print(f"[TSL RETRY] Strategy {strategy.name}: {open_positions} positions still open - RETRYING CLOSE")
+                            # Create a retry risk event
+                            retry_event = RiskEvent(
+                                strategy_id=strategy.id,
+                                event_type='trailing_sl_retry',
+                                threshold_value=strategy.trailing_sl_trigger_pnl,
+                                current_value=0,  # Will be recalculated
+                                action_taken='close_remaining'
+                            )
+                            self.close_strategy_positions(strategy, retry_event)
 
         except Exception as e:
             logger.error(f"Error checking strategy {strategy.name}: {e}")

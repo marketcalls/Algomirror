@@ -584,8 +584,8 @@ class TradingSettings(db.Model):
         # Freeze quantities are based on exchange rules
         # Updated freeze quantities as per NSE circular effective Dec 1, 2025
         defaults = [
-            {'symbol': 'NIFTY', 'lot_size': 75, 'next_month_lot_size': 75, 'freeze_quantity': 1800, 'max_lots_per_order': 24},
-            {'symbol': 'BANKNIFTY', 'lot_size': 35, 'next_month_lot_size': 30, 'freeze_quantity': 600, 'max_lots_per_order': 17},
+            {'symbol': 'NIFTY', 'lot_size': 65, 'next_month_lot_size': 65, 'freeze_quantity': 1755, 'max_lots_per_order': 27},
+            {'symbol': 'BANKNIFTY', 'lot_size': 30, 'next_month_lot_size': 30, 'freeze_quantity': 600, 'max_lots_per_order': 20},
             {'symbol': 'SENSEX', 'lot_size': 20, 'next_month_lot_size': 20, 'freeze_quantity': 1000, 'max_lots_per_order': 50},
         ]
 

@@ -322,23 +322,79 @@ class OrderStatusPoller:
                             self.pending_orders.pop(execution_id, None)
 
                 elif broker_status in ['rejected', 'cancelled']:
-                    execution.status = 'failed'
-                    execution.broker_order_status = broker_status
-                    db.session.commit()
+                    # RELIABILITY FIX: Don't immediately mark as failed
+                    # Some brokers report rejected/cancelled then update to complete later
+                    # Verify by checking tradebook/positionbook for actual execution
 
-                    # Notify PositionMonitor of cancelled order
-                    try:
-                        position_monitor = get_position_monitor()
-                        position_monitor.on_order_cancelled(execution)
-                        logger.debug(f"[POSITION MONITOR] Notified of order cancel: {order_id}")
-                    except Exception as e:
-                        logger.error(f"[POSITION MONITOR] Error notifying order cancel: {e}")
-
-                    # Remove from polling queue
+                    # Count how many times we've seen rejected/cancelled for this order
                     with self._lock:
-                        self.pending_orders.pop(execution_id, None)
+                        if execution_id in self.pending_orders:
+                            if 'rejected_count' not in self.pending_orders[execution_id]:
+                                self.pending_orders[execution_id]['rejected_count'] = 0
+                            self.pending_orders[execution_id]['rejected_count'] += 1
+                            rejected_count = self.pending_orders[execution_id]['rejected_count']
+                        else:
+                            rejected_count = 1
 
-                    logger.warning(f"[REJECTED] Order {order_id} {broker_status.upper()} ({order_info['account_name']})")
+                    # Only mark as failed after seeing rejected 3 times AND verifying no position exists
+                    if rejected_count >= 3:
+                        # Final verification: Check if trade actually executed by looking at tradebook
+                        try:
+                            tradebook_response = client.tradebook()
+                            if tradebook_response.get('status') == 'success':
+                                trades = tradebook_response.get('data', [])
+                                # Check if this order_id appears in tradebook (meaning it was actually executed)
+                                trade_found = any(
+                                    str(trade.get('orderid', '')) == str(order_id) or
+                                    str(trade.get('order_id', '')) == str(order_id)
+                                    for trade in trades
+                                )
+                                if trade_found:
+                                    # Order was actually executed! Don't mark as failed
+                                    logger.warning(f"[REVERSAL] Order {order_id} shows {broker_status} but found in tradebook - marking as complete")
+                                    execution.status = 'entered' if execution.order_id == order_id else 'exited'
+                                    execution.broker_order_status = 'complete'
+                                    # Try to get price from tradebook
+                                    for trade in trades:
+                                        if str(trade.get('orderid', '')) == str(order_id) or str(trade.get('order_id', '')) == str(order_id):
+                                            trade_price = trade.get('average_price') or trade.get('avgprice') or trade.get('price', 0)
+                                            if trade_price and float(trade_price) > 0:
+                                                if execution.order_id == order_id:
+                                                    execution.entry_price = float(trade_price)
+                                                else:
+                                                    execution.exit_price = float(trade_price)
+                                            break
+                                    db.session.commit()
+                                    with self._lock:
+                                        self.pending_orders.pop(execution_id, None)
+                                    logger.info(f"[SAVED] Order {order_id} recovered from {broker_status} to complete")
+                                    return  # Don't mark as failed
+                        except Exception as tb_error:
+                            logger.warning(f"[TRADEBOOK CHECK] Failed to verify order {order_id}: {tb_error}")
+
+                        # Order truly rejected/cancelled - mark as failed
+                        execution.status = 'failed'
+                        execution.broker_order_status = broker_status
+                        db.session.commit()
+
+                        # Notify PositionMonitor of cancelled order
+                        try:
+                            position_monitor = get_position_monitor()
+                            position_monitor.on_order_cancelled(execution)
+                            logger.debug(f"[POSITION MONITOR] Notified of order cancel: {order_id}")
+                        except Exception as e:
+                            logger.error(f"[POSITION MONITOR] Error notifying order cancel: {e}")
+
+                        # Remove from polling queue
+                        with self._lock:
+                            self.pending_orders.pop(execution_id, None)
+
+                        logger.warning(f"[REJECTED] Order {order_id} confirmed {broker_status.upper()} after {rejected_count} checks ({order_info['account_name']})")
+                    else:
+                        # Keep in queue and check again
+                        execution.broker_order_status = broker_status
+                        db.session.commit()
+                        logger.warning(f"[PENDING VERIFY] Order {order_id} shows {broker_status} ({rejected_count}/3 checks) - will re-verify ({order_info['account_name']})")
 
                 else:  # Still 'open'
                     execution.broker_order_status = 'open'

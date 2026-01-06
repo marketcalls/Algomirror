@@ -1633,10 +1633,18 @@ def close_all_positions(strategy_id):
         request_data = request.get_json(silent=True) or {}
         account_id = request_data.get('account_id') if request_data else None
 
-        # Build query for open positions
-        query = StrategyExecution.query.filter_by(
-            strategy_id=strategy_id,
-            status='entered'
+        # RELIABILITY FIX: Clear SQLAlchemy cache to ensure fresh data
+        db.session.expire_all()
+
+        # Build query for open positions with IMPROVED FILTERS:
+        # - status='entered' (not already exiting/exited)
+        # - exit_order_id IS NULL (no exit order placed yet)
+        # - quantity > 0 (has something to close)
+        query = StrategyExecution.query.filter(
+            StrategyExecution.strategy_id == strategy_id,
+            StrategyExecution.status == 'entered',
+            StrategyExecution.exit_order_id.is_(None),  # No exit order yet
+            StrategyExecution.quantity > 0  # Has quantity to close
         )
 
         # If account_id provided, filter by that account only
@@ -1669,7 +1677,13 @@ def close_all_positions(strategy_id):
         results_lock = threading.Lock()
 
         def close_position_worker(position, strategy_name, product_type, thread_index, user_id):
-            """Worker function to close a single position in parallel"""
+            """Worker function to close a single position in parallel
+
+            RELIABILITY FIXES (v2.0):
+            - Uses row-level locking to prevent concurrent exit orders
+            - Marks status as exit_pending BEFORE placing order
+            - Validates position state before processing
+            """
             import time
 
             # Add staggered delay based on thread index to prevent OpenAlgo race condition
@@ -1680,12 +1694,57 @@ def close_all_positions(strategy_id):
                 time.sleep(delay)
                 logger.debug(f"[THREAD {thread_index}] Waited {delay:.2f}s to prevent race condition")
 
+            # Store position ID - we'll re-fetch with lock inside app context
+            position_id = position.id
+
             # Create Flask app context for this thread
             app = create_app()
 
             with app.app_context():
                 try:
+                    # RELIABILITY FIX: Use row-level locking to prevent concurrent modifications
+                    position = StrategyExecution.query.with_for_update(nowait=False).get(position_id)
+
+                    if not position:
+                        logger.warning(f"[THREAD] Position {position_id} no longer exists, skipping")
+                        return
+
+                    # CRITICAL: Skip if exit order already placed (prevent double orders)
+                    if position.exit_order_id:
+                        logger.warning(f"[THREAD] SKIPPING position {position_id}: exit_order_id={position.exit_order_id} already exists")
+                        db.session.rollback()  # Release row lock
+                        return
+
+                    # CRITICAL: Skip if status is not 'entered'
+                    if position.status != 'entered':
+                        logger.warning(f"[THREAD] SKIPPING position {position_id}: status={position.status} (not entered)")
+                        db.session.rollback()  # Release row lock
+                        return
+
+                    # CRITICAL: Skip if quantity is 0 or None
+                    if not position.quantity or position.quantity <= 0:
+                        logger.warning(f"[THREAD] SKIPPING position {position_id}: quantity={position.quantity}")
+                        position.status = 'exited'
+                        position.exit_reason = 'manual_close_no_quantity'
+                        position.exit_time = datetime.utcnow()
+                        db.session.commit()
+                        return
+
+                    # RELIABILITY FIX: Mark as exit_pending BEFORE placing order
+                    position.status = 'exit_pending'
+                    position.exit_reason = 'manual_close'
+                    position.exit_time = datetime.utcnow()
+                    db.session.commit()  # Commit immediately to claim this position
+
                     logger.debug(f"[THREAD] Closing position: {position.symbol} on account {position.account.account_name}, leg {position.leg.leg_number}")
+
+                    # Store values we need before potentially releasing lock
+                    pos_symbol = position.symbol
+                    pos_exchange = position.exchange
+                    pos_quantity = position.quantity
+                    pos_product = position.product
+                    pos_entry_price = position.entry_price
+                    leg_action = position.leg.action if position.leg else 'BUY'
 
                     # Reverse the position
                     client = ExtendedOpenAlgoAPI(
@@ -1694,9 +1753,9 @@ def close_all_positions(strategy_id):
                     )
 
                     # Reverse action for closing
-                    close_action = 'SELL' if position.leg.action == 'BUY' else 'BUY'
+                    close_action = 'SELL' if leg_action == 'BUY' else 'BUY'
 
-                    logger.debug(f"[THREAD] Placing close order: {close_action} {position.quantity} {position.symbol} on {position.exchange}")
+                    logger.debug(f"[THREAD] Placing close order: {close_action} {pos_quantity} {pos_symbol} on {pos_exchange}")
 
                     # Place close order with freeze-aware placement and retry logic
                     from app.utils.freeze_quantity_handler import place_order_with_freeze_check
@@ -1708,8 +1767,8 @@ def close_all_positions(strategy_id):
 
                     # Get product type - prefer position's product, fallback to strategy's product_order_type
                     # This ensures NRML entries exit as NRML, not MIS
-                    exit_product = position.product or product_type or 'MIS'
-                    logger.debug(f"[CLOSE EXIT] Product type: position.product='{position.product}', strategy_product='{product_type}', using='{exit_product}'")
+                    exit_product = pos_product or product_type or 'MIS'
+                    logger.debug(f"[CLOSE EXIT] Product type: position.product='{pos_product}', strategy_product='{product_type}', using='{exit_product}'")
 
                     for attempt in range(max_retries):
                         try:
@@ -1718,15 +1777,24 @@ def close_all_positions(strategy_id):
                                 client=client,
                                 user_id=user_id,
                                 strategy=strategy_name,
-                                symbol=position.symbol,
-                                exchange=position.exchange,
+                                symbol=pos_symbol,
+                                exchange=pos_exchange,
                                 action=close_action,
-                                quantity=position.quantity,
+                                quantity=pos_quantity,
                                 price_type='MARKET',
                                 product=exit_product
                             )
-                            if response and isinstance(response, dict):
+                            # FIXED: Only break on SUCCESS, not on any dict response
+                            if response and isinstance(response, dict) and response.get('status') == 'success':
                                 break
+                            elif response and isinstance(response, dict):
+                                # API returned error, log and retry
+                                error_msg = response.get('message', 'Unknown error')
+                                logger.warning(f"[RETRY] Close order attempt {attempt + 1}/{max_retries} API error: {error_msg}")
+                                if attempt < max_retries - 1:
+                                    import time as time_sleep
+                                    time_sleep.sleep(retry_delay)
+                                    retry_delay *= 2
                         except Exception as api_error:
                             last_error = str(api_error)
                             logger.warning(f"[RETRY] Close order attempt {attempt + 1}/{max_retries} failed: {last_error}")
@@ -1737,36 +1805,33 @@ def close_all_positions(strategy_id):
                             else:
                                 response = {'status': 'error', 'message': f'API error after {max_retries} retries: {last_error}'}
 
-                    logger.debug(f"[THREAD] Close order response for {position.symbol}: {response}")
+                    logger.debug(f"[THREAD] Close order response for {pos_symbol}: {response}")
+
+                    # Re-fetch position with lock to update order ID
+                    position_to_update = StrategyExecution.query.with_for_update(nowait=False).get(position_id)
 
                     if response and response.get('status') == 'success':
                         # Get exit order ID from response
                         exit_order_id = response.get('orderid')
 
-                        # Get fresh position from database to avoid stale data
-                        position_to_update = StrategyExecution.query.get(position.id)
-
                         if position_to_update:
-                            # Update position status to exit_pending (poller will update to 'exited' with actual fill price)
-                            position_to_update.status = 'exit_pending'
-                            position_to_update.exit_order_id = exit_order_id  # Store the real exit order ID
-                            position_to_update.exit_time = datetime.utcnow()
-                            position_to_update.exit_reason = 'manual_close'
+                            # Update with the actual order ID (status already set to exit_pending)
+                            position_to_update.exit_order_id = exit_order_id
                             position_to_update.broker_order_status = 'open'  # Will be updated by poller
 
                             # Set preliminary exit price from LTP (will be updated by poller with actual fill price)
                             try:
-                                quote = client.quotes(symbol=position.symbol, exchange=position.exchange)
+                                quote = client.quotes(symbol=pos_symbol, exchange=pos_exchange)
                                 position_to_update.exit_price = float(quote.get('data', {}).get('ltp', 0))
                             except Exception as quote_error:
-                                logger.warning(f"[THREAD] Failed to fetch exit price for {position.symbol}: {quote_error}")
-                                position_to_update.exit_price = position_to_update.entry_price  # Fallback to entry price
+                                logger.warning(f"[THREAD] Failed to fetch exit price for {pos_symbol}: {quote_error}")
+                                position_to_update.exit_price = pos_entry_price  # Fallback to entry price
 
                             # Calculate preliminary realized P&L (will be updated by poller with actual fill price)
-                            if position.leg.action == 'BUY':
-                                position_to_update.realized_pnl = (position_to_update.exit_price - position_to_update.entry_price) * position_to_update.quantity
+                            if leg_action == 'BUY':
+                                position_to_update.realized_pnl = (position_to_update.exit_price - pos_entry_price) * pos_quantity
                             else:
-                                position_to_update.realized_pnl = (position_to_update.entry_price - position_to_update.exit_price) * position_to_update.quantity
+                                position_to_update.realized_pnl = (pos_entry_price - position_to_update.exit_price) * pos_quantity
 
                             # Commit position update
                             db.session.commit()
@@ -1777,46 +1842,54 @@ def close_all_positions(strategy_id):
                                 execution_id=position_to_update.id,
                                 account=position.account,
                                 order_id=exit_order_id,
-                                strategy_name=position.strategy.name if position.strategy else 'Unknown'
+                                strategy_name=strategy_name
                             )
 
-                            logger.debug(f"[THREAD SUCCESS] Exit order placed for {position.symbol}, order_id: {exit_order_id} (polling for fill price)")
+                            logger.debug(f"[THREAD SUCCESS] Exit order placed for {pos_symbol}, order_id: {exit_order_id} (polling for fill price)")
 
                             with results_lock:
                                 results.append({
-                                    'symbol': position.symbol,
+                                    'symbol': pos_symbol,
                                     'account': position.account.account_name,
                                     'status': 'success',
                                     'pnl': position_to_update.realized_pnl
                                 })
                         else:
-                            logger.error(f"[THREAD] Position {position.id} not found in database")
+                            logger.error(f"[THREAD] Position {position_id} not found in database")
                             with results_lock:
                                 results.append({
-                                    'symbol': position.symbol,
-                                    'account': position.account.account_name,
+                                    'symbol': pos_symbol,
+                                    'account': position.account.account_name if position else 'unknown',
                                     'status': 'error',
                                     'error': 'Position not found in database'
                                 })
                     else:
                         error_msg = response.get('message', 'Unknown error') if response else 'No response from API'
-                        logger.error(f"[THREAD FAILED] Failed to close {position.symbol}: {error_msg}")
+                        logger.error(f"[THREAD FAILED] Failed to close {pos_symbol}: {error_msg}")
+
+                        # RELIABILITY FIX: Revert status to 'entered' so retry can pick it up
+                        if position_to_update:
+                            position_to_update.status = 'entered'
+                            position_to_update.exit_reason = f"failed: {error_msg[:100]}"
+                            position_to_update.exit_time = None
+                            db.session.commit()
 
                         with results_lock:
                             results.append({
-                                'symbol': position.symbol,
-                                'account': position.account.account_name,
+                                'symbol': pos_symbol,
+                                'account': position.account.account_name if position else 'unknown',
                                 'status': 'failed',
                                 'error': error_msg
                             })
 
                 except Exception as e:
-                    logger.error(f"[THREAD ERROR] Exception closing position {position.symbol}: {str(e)}", exc_info=True)
+                    logger.error(f"[THREAD ERROR] Exception closing position {position_id}: {str(e)}", exc_info=True)
+                    db.session.rollback()  # Release any locks on exception
 
                     with results_lock:
                         results.append({
-                            'symbol': position.symbol,
-                            'account': getattr(position.account, 'account_name', 'unknown'),
+                            'symbol': pos_symbol if 'pos_symbol' in locals() else 'unknown',
+                            'account': position.account.account_name if position and hasattr(position, 'account') else 'unknown',
                             'status': 'error',
                             'error': str(e)
                         })
@@ -1926,24 +1999,30 @@ def close_individual_position(strategy_id):
                 'message': 'Missing required parameters'
             }), 400
 
-        # Find the open position in database
-        # Note: product is stored in the leg, not in StrategyExecution
-        position = StrategyExecution.query.filter_by(
-            strategy_id=strategy_id,
-            symbol=symbol,
-            exchange=exchange,
-            account_id=account_id,
-            status='entered'
+        # RELIABILITY FIX: Clear SQLAlchemy cache to ensure fresh data
+        db.session.expire_all()
+
+        # Find the open position in database with row lock
+        # RELIABILITY FIX: Added filters for exit_order_id and quantity validation
+        position = StrategyExecution.query.with_for_update(nowait=False).filter(
+            StrategyExecution.strategy_id == strategy_id,
+            StrategyExecution.symbol == symbol,
+            StrategyExecution.exchange == exchange,
+            StrategyExecution.account_id == account_id,
+            StrategyExecution.status == 'entered',
+            StrategyExecution.exit_order_id.is_(None),  # No exit order yet
+            StrategyExecution.quantity > 0  # Has quantity to close
         ).first()
 
         if not position:
             return jsonify({
                 'status': 'error',
-                'message': 'Position not found or already closed in database'
+                'message': 'Position not found, already closed, or exit already in progress'
             }), 404
 
         # Check if order was rejected/cancelled
         if hasattr(position, 'broker_order_status') and position.broker_order_status in ['rejected', 'cancelled']:
+            db.session.rollback()  # Release lock
             return jsonify({
                 'status': 'error',
                 'message': 'Cannot close rejected/cancelled order'
@@ -2009,10 +2088,22 @@ def close_individual_position(strategy_id):
         from app.utils.freeze_quantity_handler import place_order_with_freeze_check
         import time
 
-        # Reverse action for closing
-        close_action = 'SELL' if position.leg.action == 'BUY' else 'BUY'
+        # Store values before potentially modifying position
+        position_id = position.id
+        pos_quantity = position.quantity
+        pos_entry_price = position.entry_price
+        leg_action = position.leg.action if position.leg else 'BUY'
 
-        logger.debug(f"Closing individual position: {close_action} {position.quantity} {symbol} on {exchange}")
+        # Reverse action for closing
+        close_action = 'SELL' if leg_action == 'BUY' else 'BUY'
+
+        # RELIABILITY FIX: Mark as exit_pending BEFORE placing order
+        position.status = 'exit_pending'
+        position.exit_reason = 'manual_close'
+        position.exit_time = datetime.utcnow()
+        db.session.commit()  # Commit immediately to claim this position
+
+        logger.debug(f"Closing individual position: {close_action} {pos_quantity} {symbol} on {exchange}")
 
         # Place close order with freeze-aware placement and retry logic
         max_retries = 3
@@ -2029,12 +2120,19 @@ def close_individual_position(strategy_id):
                     symbol=symbol,
                     exchange=exchange,
                     action=close_action,
-                    quantity=position.quantity,
+                    quantity=pos_quantity,
                     price_type='MARKET',
                     product=position_product
                 )
-                if response and isinstance(response, dict):
+                # FIXED: Only break on SUCCESS
+                if response and isinstance(response, dict) and response.get('status') == 'success':
                     break
+                elif response and isinstance(response, dict):
+                    error_msg = response.get('message', 'Unknown error')
+                    logger.warning(f"[RETRY] Close position attempt {attempt + 1}/{max_retries} API error: {error_msg}")
+                    if attempt < max_retries - 1:
+                        time.sleep(retry_delay)
+                        retry_delay *= 2
             except Exception as api_error:
                 last_error = str(api_error)
                 logger.warning(f"[RETRY] Close position attempt {attempt + 1}/{max_retries} failed: {last_error}")
@@ -2046,15 +2144,15 @@ def close_individual_position(strategy_id):
 
         logger.debug(f"Close position response for {symbol}: {response}")
 
+        # Re-fetch position with lock to update order ID
+        position = StrategyExecution.query.with_for_update(nowait=False).get(position_id)
+
         if response and response.get('status') == 'success':
             # Get exit order ID from response
             exit_order_id = response.get('orderid')
 
-            # Update position status to exit_pending (poller will update to 'exited' with actual fill price)
-            position.status = 'exit_pending'
+            # Update with the actual order ID
             position.exit_order_id = exit_order_id
-            position.exit_time = datetime.utcnow()
-            position.exit_reason = 'manual_close'
             position.broker_order_status = 'open'  # Will be updated by poller
 
             # Set preliminary exit price from LTP (will be updated by poller with actual fill price)
@@ -2063,13 +2161,13 @@ def close_individual_position(strategy_id):
                 position.exit_price = float(quote.get('data', {}).get('ltp', 0))
             except Exception as quote_error:
                 logger.warning(f"Failed to fetch exit price for {symbol}: {quote_error}")
-                position.exit_price = position.entry_price
+                position.exit_price = pos_entry_price
 
             # Calculate preliminary P&L (will be updated by poller with actual fill price)
-            if position.leg.action == 'BUY':
-                pnl = (position.exit_price - position.entry_price) * position.quantity
+            if leg_action == 'BUY':
+                pnl = (position.exit_price - pos_entry_price) * pos_quantity
             else:
-                pnl = (position.entry_price - position.exit_price) * position.quantity
+                pnl = (pos_entry_price - position.exit_price) * pos_quantity
 
             position.realized_pnl = pnl
 
@@ -2079,9 +2177,9 @@ def close_individual_position(strategy_id):
             from app.utils.order_status_poller import order_status_poller
             order_status_poller.add_order(
                 execution_id=position.id,
-                account=position.account,
+                account=account,
                 order_id=exit_order_id,
-                strategy_name=position.strategy.name if position.strategy else 'Unknown'
+                strategy_name=strategy.name
             )
 
             logger.debug(f"Exit order placed for {symbol}, order_id: {exit_order_id} (polling for fill price)")
@@ -2095,6 +2193,13 @@ def close_individual_position(strategy_id):
         else:
             error_msg = response.get('message', 'Failed to place close order') if response else 'No response from broker'
             logger.error(f"Failed to close position {symbol}: {error_msg}")
+
+            # RELIABILITY FIX: Revert status to 'entered' so retry can pick it up
+            position.status = 'entered'
+            position.exit_reason = f"failed: {error_msg[:100]}"
+            position.exit_time = None
+            db.session.commit()
+
             return jsonify({
                 'status': 'error',
                 'message': error_msg
@@ -2141,11 +2246,19 @@ def close_leg_all_accounts(strategy_id):
                 'message': f'Leg {leg_number} not found'
             }), 404
 
-        # Get all open positions for this leg
-        open_positions = StrategyExecution.query.filter_by(
-            strategy_id=strategy_id,
-            leg_id=leg.id,
-            status='entered'
+        # RELIABILITY FIX: Clear SQLAlchemy cache to ensure fresh data
+        db.session.expire_all()
+
+        # Get all open positions for this leg with IMPROVED FILTERS:
+        # - status='entered' (not already exiting/exited)
+        # - exit_order_id IS NULL (no exit order placed yet)
+        # - quantity > 0 (has something to close)
+        open_positions = StrategyExecution.query.filter(
+            StrategyExecution.strategy_id == strategy_id,
+            StrategyExecution.leg_id == leg.id,
+            StrategyExecution.status == 'entered',
+            StrategyExecution.exit_order_id.is_(None),  # No exit order yet
+            StrategyExecution.quantity > 0  # Has quantity to close
         ).all()
 
         # Filter out rejected/cancelled orders
@@ -2185,15 +2298,48 @@ def close_leg_all_accounts(strategy_id):
 
             with app.app_context():
                 try:
-                    # CRITICAL FIX: Reload position in this thread's session
-                    # The position object passed from main thread is attached to a different session
-                    # We must reload it here to ensure changes persist when committed
-                    position = StrategyExecution.query.get(position_id)
+                    # RELIABILITY FIX: Use row-level locking to prevent concurrent modifications
+                    position = StrategyExecution.query.with_for_update(nowait=False).get(position_id)
                     if not position:
                         logger.error(f"[THREAD] Position {position_id} not found in database")
                         return
 
-                    logger.debug(f"[THREAD] Closing leg position: {position.symbol} on account {position.account.account_name}, leg {position.leg.leg_number}")
+                    # CRITICAL: Skip if exit order already placed (prevent double orders)
+                    if position.exit_order_id:
+                        logger.warning(f"[THREAD] SKIPPING position {position_id}: exit_order_id={position.exit_order_id} already exists")
+                        db.session.rollback()  # Release row lock
+                        return
+
+                    # CRITICAL: Skip if status is not 'entered'
+                    if position.status != 'entered':
+                        logger.warning(f"[THREAD] SKIPPING position {position_id}: status={position.status} (not entered)")
+                        db.session.rollback()  # Release row lock
+                        return
+
+                    # CRITICAL: Skip if quantity is 0 or None
+                    if not position.quantity or position.quantity <= 0:
+                        logger.warning(f"[THREAD] SKIPPING position {position_id}: quantity={position.quantity}")
+                        position.status = 'exited'
+                        position.exit_reason = 'leg_close_no_quantity'
+                        position.exit_time = datetime.utcnow()
+                        db.session.commit()
+                        return
+
+                    # RELIABILITY FIX: Mark as exit_pending BEFORE placing order
+                    position.status = 'exit_pending'
+                    position.exit_reason = 'leg_close'
+                    position.exit_time = datetime.utcnow()
+                    db.session.commit()  # Commit immediately to claim this position
+
+                    # Store values we need for order placement
+                    pos_symbol = position.symbol
+                    pos_exchange = position.exchange
+                    pos_quantity = position.quantity
+                    pos_product = position.product
+                    pos_entry_price = position.entry_price
+                    leg_action = position.leg.action if position.leg else 'BUY'
+
+                    logger.debug(f"[THREAD] Closing leg position: {pos_symbol} on account {position.account.account_name}, leg {position.leg.leg_number}")
 
                     # Create API client
                     client = ExtendedOpenAlgoAPI(
@@ -2245,9 +2391,9 @@ def close_leg_all_accounts(strategy_id):
                         logger.warning(f"[THREAD] Error verifying position at broker: {e}. Continuing with close attempt.")
 
                     # Reverse action for closing
-                    close_action = 'SELL' if position.leg.action == 'BUY' else 'BUY'
+                    close_action = 'SELL' if leg_action == 'BUY' else 'BUY'
 
-                    logger.debug(f"[THREAD] Placing close order: {close_action} {position.quantity} {position.symbol} on {position.exchange}")
+                    logger.debug(f"[THREAD] Placing close order: {close_action} {pos_quantity} {pos_symbol} on {pos_exchange}")
 
                     # Place close order with freeze-aware placement and retry logic
                     from app.utils.freeze_quantity_handler import place_order_with_freeze_check
@@ -2263,15 +2409,22 @@ def close_leg_all_accounts(strategy_id):
                                 client=client,
                                 user_id=user_id,
                                 strategy=strategy_name,
-                                symbol=position.symbol,
-                                exchange=position.exchange,
+                                symbol=pos_symbol,
+                                exchange=pos_exchange,
                                 action=close_action,
-                                quantity=position.quantity,
+                                quantity=pos_quantity,
                                 price_type='MARKET',
                                 product=position_product
                             )
-                            if response and isinstance(response, dict):
+                            # FIXED: Only break on SUCCESS
+                            if response and isinstance(response, dict) and response.get('status') == 'success':
                                 break
+                            elif response and isinstance(response, dict):
+                                error_msg = response.get('message', 'Unknown error')
+                                logger.warning(f"[RETRY] Close leg order attempt {attempt + 1}/{max_retries} API error: {error_msg}")
+                                if attempt < max_retries - 1:
+                                    time.sleep(retry_delay)
+                                    retry_delay *= 2
                         except Exception as api_error:
                             last_error = str(api_error)
                             logger.warning(f"[RETRY] Close leg order attempt {attempt + 1}/{max_retries} failed: {last_error}")
@@ -2281,31 +2434,26 @@ def close_leg_all_accounts(strategy_id):
                             else:
                                 response = {'status': 'error', 'message': f'API error after {max_retries} retries: {last_error}'}
 
-                    logger.debug(f"[THREAD] Close leg order response for {position.symbol}: {response}")
+                    logger.debug(f"[THREAD] Close leg order response for {pos_symbol}: {response}")
+
+                    # Re-fetch position with lock to update order ID
+                    position_to_update = StrategyExecution.query.with_for_update(nowait=False).get(position_id)
 
                     if response and response.get('status') == 'success':
                         # Get exit order ID from response
                         exit_order_id = response.get('orderid')
 
-                        # Get fresh position from database to avoid stale data
-                        position_to_update = StrategyExecution.query.get(position.id)
-
                         if position_to_update:
-                            # Update position status - set to exit_pending, poller will update to exited with actual fill price
-                            position_to_update.status = 'exit_pending'
+                            # Update with the actual order ID (status already set to exit_pending)
                             position_to_update.exit_order_id = exit_order_id
-                            position_to_update.exit_time = datetime.utcnow()
-                            position_to_update.exit_reason = 'manual_leg_close'
                             position_to_update.broker_order_status = 'open'
-
-                            # Commit the pending status
                             db.session.commit()
 
                             # Add exit order to poller to get actual fill price (same as entry orders)
                             from app.utils.order_status_poller import order_status_poller
                             order_status_poller.add_order(
                                 execution_id=position_to_update.id,
-                                account=position_to_update.account,
+                                account=position.account,
                                 order_id=exit_order_id,
                                 strategy_name=strategy_name
                             )
@@ -2313,24 +2461,31 @@ def close_leg_all_accounts(strategy_id):
                             with results_lock:
                                 results.append({
                                     'status': 'success',
-                                    'symbol': position.symbol,
+                                    'symbol': pos_symbol,
                                     'account': position.account.account_name,
                                     'pnl': 0,  # P&L will be calculated by poller when fill price is received
                                     'orderid': exit_order_id
                                 })
 
-                            logger.debug(f"[THREAD] Exit order placed for leg position: {position.symbol}, Exit Order: {exit_order_id} (awaiting fill price from poller)")
+                            logger.debug(f"[THREAD] Exit order placed for leg position: {pos_symbol}, Exit Order: {exit_order_id} (awaiting fill price from poller)")
                         else:
-                            logger.error(f"[THREAD] Position {position.id} not found in database after close")
+                            logger.error(f"[THREAD] Position {position_id} not found in database after close")
                             with results_lock:
                                 results.append({
                                     'status': 'error',
-                                    'symbol': position.symbol,
-                                    'account': position.account.account_name,
+                                    'symbol': pos_symbol,
+                                    'account': position.account.account_name if position else 'unknown',
                                     'error': 'Position not found in database'
                                 })
                     else:
                         error_msg = response.get('message', 'Failed to place close order') if response else 'No response from broker'
+
+                        # RELIABILITY FIX: Revert status to 'entered' so retry can pick it up
+                        if position_to_update:
+                            position_to_update.status = 'entered'
+                            position_to_update.exit_reason = f"failed: {error_msg[:100]}"
+                            position_to_update.exit_time = None
+                            db.session.commit()
                         with results_lock:
                             results.append({
                                 'status': 'failed',

@@ -39,9 +39,9 @@ def get_freeze_quantity(user_id: int, symbol: str) -> int:
         logger.debug(f"Freeze quantity for {base_symbol}: {setting.freeze_quantity}")
         return setting.freeze_quantity
 
-    # Default freeze quantities if not found (as per NSE circular Dec 2025)
+    # Default freeze quantities if not found (as per NSE circular Jan 2026)
     defaults = {
-        'NIFTY': 1800,
+        'NIFTY': 1755,
         'BANKNIFTY': 600,
         'SENSEX': 1000
     }

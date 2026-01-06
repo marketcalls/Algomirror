@@ -1050,31 +1050,70 @@ class StrategyExecutor:
 
                     elif leg.expiry == 'current_month':
                         # For FUTURES: Use index-based selection (first contract = current month)
-                        # For OPTIONS: Find the last expiry of current month (monthly expiry)
+                        # For OPTIONS: Find the MONTHLY expiry (last expiry of the month, not weekly)
                         if leg.product_type == 'futures':
                             # Futures typically have 3 contracts: current, next, far
                             # current_month = first expiry (index 0)
                             selected_expiry = sorted_expiries[0] if sorted_expiries else None
                             logger.debug(f"[EXPIRY] FUTURES current_month: using first expiry = {selected_expiry}")
                         else:
-                            # Options: find last expiry of current month
+                            # OPTIONS: Find MONTHLY expiry (last expiry of the month)
+                            # Monthly expiry is typically last Thu (NSE) or last Fri (BSE/SENSEX)
                             current_month = dt.now().month
                             current_year = dt.now().year
-                            logger.debug(f"[EXPIRY] OPTIONS Looking for current_month: month={current_month}, year={current_year}")
+                            today = dt.now().date()
+                            logger.debug(f"[EXPIRY] OPTIONS Looking for current_month MONTHLY expiry: month={current_month}, year={current_year}")
 
+                            # Group expiries by month to find monthly (last of each month)
+                            expiries_by_month = {}
                             for exp_str in sorted_expiries:
                                 exp_date = parse_expiry(exp_str)
-                                if exp_date.month == current_month and exp_date.year == current_year:
-                                    selected_expiry = exp_str
+                                if exp_date == dt.max:
+                                    continue
+                                key = (exp_date.year, exp_date.month)
+                                if key not in expiries_by_month:
+                                    expiries_by_month[key] = []
+                                expiries_by_month[key].append((exp_date, exp_str))
 
-                            # If no current month expiry found, use the first available
-                            if not selected_expiry and sorted_expiries:
-                                selected_expiry = sorted_expiries[0]
-                                logger.debug(f"[EXPIRY] No current_month expiry, using first available: {selected_expiry}")
+                            # Sort expiries within each month and get the LAST one (monthly)
+                            monthly_expiries = {}
+                            for key, month_exps in expiries_by_month.items():
+                                sorted_month = sorted(month_exps, key=lambda x: x[0])
+                                monthly_expiries[key] = sorted_month[-1]  # Last expiry of month
+
+                            logger.debug(f"[EXPIRY] Monthly expiries: {monthly_expiries}")
+
+                            # Look for current month's MONTHLY expiry
+                            current_key = (current_year, current_month)
+                            if current_key in monthly_expiries:
+                                monthly_date, monthly_str = monthly_expiries[current_key]
+                                # Only use if it's in the future (or today)
+                                if monthly_date.date() >= today:
+                                    selected_expiry = monthly_str
+                                    logger.debug(f"[EXPIRY] Found current_month MONTHLY expiry: {selected_expiry}")
+
+                            # If no current month monthly, or it's in the past, use next month's MONTHLY
+                            if not selected_expiry:
+                                next_month = (current_month % 12) + 1
+                                next_year = current_year + 1 if next_month == 1 else current_year
+                                next_key = (next_year, next_month)
+                                if next_key in monthly_expiries:
+                                    _, monthly_str = monthly_expiries[next_key]
+                                    selected_expiry = monthly_str
+                                    logger.debug(f"[EXPIRY] Current month passed, using next_month MONTHLY: {selected_expiry}")
+
+                            # Final fallback: use first future monthly expiry
+                            if not selected_expiry:
+                                for key in sorted(monthly_expiries.keys()):
+                                    exp_date, exp_str = monthly_expiries[key]
+                                    if exp_date.date() >= today:
+                                        selected_expiry = exp_str
+                                        logger.debug(f"[EXPIRY] Fallback to first future MONTHLY: {selected_expiry}")
+                                        break
 
                     elif leg.expiry == 'next_month':
                         # For FUTURES: Use index-based selection (second contract = next month)
-                        # For OPTIONS: Find the last expiry of next month (monthly expiry)
+                        # For OPTIONS: Find the MONTHLY expiry of next month (last expiry of next month)
                         if leg.product_type == 'futures':
                             # Futures typically have 3 contracts: current, next, far
                             # next_month = second expiry (index 1)
@@ -1086,26 +1125,55 @@ class StrategyExecutor:
                                 selected_expiry = sorted_expiries[0] if sorted_expiries else None
                                 logger.warning(f"[EXPIRY] FUTURES next_month: only {len(sorted_expiries)} expiry available, using index[0] = {selected_expiry}")
                         else:
-                            # Options: find last expiry of next month
+                            # OPTIONS: Find MONTHLY expiry of next month (last expiry of month)
                             current_month = dt.now().month
                             current_year = dt.now().year
                             next_month = (current_month % 12) + 1
                             next_year = current_year + 1 if next_month == 1 else current_year
-                            logger.debug(f"[EXPIRY] OPTIONS Looking for next_month: month={next_month}, year={next_year}")
+                            logger.debug(f"[EXPIRY] OPTIONS Looking for next_month MONTHLY expiry: month={next_month}, year={next_year}")
 
+                            # Group expiries by month to find monthly (last of each month)
+                            expiries_by_month = {}
                             for exp_str in sorted_expiries:
                                 exp_date = parse_expiry(exp_str)
-                                if exp_date.month == next_month and exp_date.year == next_year:
-                                    selected_expiry = exp_str
+                                if exp_date == dt.max:
+                                    continue
+                                key = (exp_date.year, exp_date.month)
+                                if key not in expiries_by_month:
+                                    expiries_by_month[key] = []
+                                expiries_by_month[key].append((exp_date, exp_str))
 
-                            # If no next month expiry found, find first expiry in a future month
+                            # Sort expiries within each month and get the LAST one (monthly)
+                            monthly_expiries = {}
+                            for key, month_exps in expiries_by_month.items():
+                                sorted_month = sorted(month_exps, key=lambda x: x[0])
+                                monthly_expiries[key] = sorted_month[-1]  # Last expiry of month
+
+                            # Look for next month's MONTHLY expiry
+                            next_key = (next_year, next_month)
+                            if next_key in monthly_expiries:
+                                _, monthly_str = monthly_expiries[next_key]
+                                selected_expiry = monthly_str
+                                logger.debug(f"[EXPIRY] Found next_month MONTHLY expiry: {selected_expiry}")
+
+                            # If no next month monthly found, look for the month after
                             if not selected_expiry:
-                                logger.warning(f"[EXPIRY] No exact next_month match, looking for next available month")
-                                for exp_str in sorted_expiries:
-                                    exp_date = parse_expiry(exp_str)
-                                    if exp_date.year > current_year or (exp_date.year == current_year and exp_date.month > current_month):
+                                month_after = (next_month % 12) + 1
+                                year_after = next_year + 1 if month_after == 1 else next_year
+                                after_key = (year_after, month_after)
+                                if after_key in monthly_expiries:
+                                    _, monthly_str = monthly_expiries[after_key]
+                                    selected_expiry = monthly_str
+                                    logger.debug(f"[EXPIRY] Using month after next MONTHLY: {selected_expiry}")
+
+                            # Final fallback: use first available MONTHLY after current month
+                            if not selected_expiry:
+                                logger.warning(f"[EXPIRY] No exact next_month MONTHLY, looking for next available")
+                                for key in sorted(monthly_expiries.keys()):
+                                    exp_date, exp_str = monthly_expiries[key]
+                                    if key > (current_year, current_month):
                                         selected_expiry = exp_str
-                                        logger.debug(f"[EXPIRY] Using next available month expiry: {selected_expiry}")
+                                        logger.debug(f"[EXPIRY] Using next available MONTHLY: {selected_expiry}")
                                         break
 
                     if selected_expiry:
@@ -2549,15 +2617,63 @@ class StrategyExecutor:
 
     def _exit_position_with_retry(self, execution: StrategyExecution, client: ExtendedOpenAlgoAPI,
                                    reason: str = 'exit_condition') -> bool:
-        """Exit a position with retry mechanism. Returns True on success."""
+        """Exit a position with retry mechanism. Returns True on success.
+
+        RELIABILITY FIXES (v2.0):
+        - Uses row-level locking to prevent concurrent exit orders
+        - Marks status as exit_pending BEFORE placing order
+        - Validates position state before processing
+        """
         max_retries = 3
         retry_delay = 1
+        exec_id = execution.id
+
+        # RELIABILITY FIX: Use row-level locking
+        execution = StrategyExecution.query.with_for_update(nowait=False).get(exec_id)
+        if not execution:
+            logger.warning(f"[EXIT] Execution {exec_id} no longer exists")
+            return False
+
+        # CRITICAL: Skip if exit order already placed
+        if execution.exit_order_id:
+            logger.warning(f"[EXIT] SKIPPING execution {exec_id}: exit_order_id={execution.exit_order_id} already exists")
+            db.session.rollback()
+            return True  # Consider already exited as success
+
+        # CRITICAL: Skip if status is not 'entered'
+        if execution.status != 'entered':
+            logger.warning(f"[EXIT] SKIPPING execution {exec_id}: status={execution.status} (not entered)")
+            db.session.rollback()
+            return execution.status in ['exit_pending', 'exited']
+
+        # CRITICAL: Skip if quantity is 0 or None
+        if not execution.quantity or execution.quantity <= 0:
+            logger.warning(f"[EXIT] SKIPPING execution {exec_id}: quantity={execution.quantity}")
+            execution.status = 'exited'
+            execution.exit_reason = f"{reason}_no_quantity"
+            execution.exit_time = datetime.utcnow()
+            db.session.commit()
+            return True
+
+        # RELIABILITY FIX: Mark as exit_pending BEFORE placing order
+        execution.status = 'exit_pending'
+        execution.exit_reason = reason
+        execution.exit_time = datetime.utcnow()
+        db.session.commit()  # Commit immediately to claim this execution
+
+        # Store values we need for order placement
+        exec_symbol = execution.symbol
+        exec_exchange = execution.exchange
+        exec_quantity = execution.quantity
+        exec_product = execution.product
+        exec_entry_price = execution.entry_price
+        leg_action = execution.leg.action if execution.leg else 'BUY'
+
+        # Reverse the action
+        exit_action = 'SELL' if leg_action == 'BUY' else 'BUY'
 
         for attempt in range(max_retries):
             try:
-                # Reverse the action
-                exit_action = 'SELL' if execution.leg.action == 'BUY' else 'BUY'
-
                 # Use freeze-aware order placement for exit orders
                 from app.utils.freeze_quantity_handler import place_order_with_freeze_check
 
@@ -2565,22 +2681,24 @@ class StrategyExecutor:
                     client=client,
                     user_id=self.strategy.user_id,
                     strategy=self.strategy.name,
-                    symbol=execution.symbol,
+                    symbol=exec_symbol,
                     action=exit_action,
-                    exchange=execution.exchange,
+                    exchange=exec_exchange,
                     price_type='MARKET',
-                    product=execution.product or self.strategy.product_order_type or 'MIS',
-                    quantity=execution.quantity
+                    product=exec_product or self.strategy.product_order_type or 'MIS',
+                    quantity=exec_quantity
                 )
 
                 if response and response.get('status') == 'success':
                     # Get the exit order ID
                     exit_order_id = response.get('orderid')
 
-                    # Update original execution status
+                    # Re-fetch execution with lock to update
+                    execution = StrategyExecution.query.with_for_update(nowait=False).get(exec_id)
+
+                    # Update with actual exit order ID
+                    execution.exit_order_id = exit_order_id
                     execution.status = 'exited'
-                    execution.exit_time = datetime.utcnow()
-                    execution.exit_reason = reason
 
                     # Fetch exit order details to get executed price
                     order_status_response = client.orderstatus(
@@ -2596,7 +2714,7 @@ class StrategyExecutor:
 
                         # If exit price is missing/zero, wait and re-fetch
                         if not exit_avg_price or exit_avg_price == 0:
-                            logger.warning(f"[EXIT] Exit price missing for {execution.symbol}, waiting 3s to re-fetch...")
+                            logger.warning(f"[EXIT] Exit price missing for {exec_symbol}, waiting 3s to re-fetch...")
                             sleep(3)
 
                             retry_response = client.orderstatus(
@@ -2612,26 +2730,38 @@ class StrategyExecutor:
                     # Calculate realized P&L
                     if exit_avg_price and exit_avg_price > 0:
                         execution.exit_price = exit_avg_price
-                        if execution.leg.action == 'BUY':
-                            execution.realized_pnl = (exit_avg_price - execution.entry_price) * execution.quantity
+                        if leg_action == 'BUY':
+                            execution.realized_pnl = (exit_avg_price - exec_entry_price) * exec_quantity
                         else:
-                            execution.realized_pnl = (execution.entry_price - exit_avg_price) * execution.quantity
+                            execution.realized_pnl = (exec_entry_price - exit_avg_price) * exec_quantity
                     else:
                         execution.realized_pnl = execution.unrealized_pnl if execution.unrealized_pnl else 0
 
                     db.session.commit()
-                    logger.debug(f"[EXIT SUCCESS] {execution.symbol} exited, Order ID: {exit_order_id}")
+                    logger.debug(f"[EXIT SUCCESS] {exec_symbol} exited, Order ID: {exit_order_id}")
                     return True
                 else:
                     error_msg = response.get('message', 'Unknown') if response else 'No response'
-                    logger.warning(f"[EXIT] Attempt {attempt + 1}/{max_retries} failed for {execution.symbol}: {error_msg}")
+                    logger.warning(f"[EXIT] Attempt {attempt + 1}/{max_retries} failed for {exec_symbol}: {error_msg}")
 
             except Exception as e:
-                logger.warning(f"[EXIT] Attempt {attempt + 1}/{max_retries} exception for {execution.symbol}: {e}")
+                logger.warning(f"[EXIT] Attempt {attempt + 1}/{max_retries} exception for {exec_symbol}: {e}")
 
             if attempt < max_retries - 1:
                 sleep(retry_delay)
                 retry_delay *= 2
 
-        logger.error(f"[EXIT FAILED] {execution.symbol} failed after {max_retries} attempts")
+        # RELIABILITY FIX: Revert status to 'entered' so retry can pick it up
+        try:
+            execution = StrategyExecution.query.with_for_update(nowait=False).get(exec_id)
+            if execution and execution.status == 'exit_pending' and not execution.exit_order_id:
+                execution.status = 'entered'
+                execution.exit_reason = f"failed: after {max_retries} attempts"
+                execution.exit_time = None
+                db.session.commit()
+        except Exception as e:
+            logger.error(f"[EXIT] Failed to revert status for {exec_id}: {e}")
+            db.session.rollback()
+
+        logger.error(f"[EXIT FAILED] {exec_symbol} failed after {max_retries} attempts")
         return False

@@ -21,13 +21,25 @@ def print_startup_banner():
     MAGENTA = "\033[35m"
     WHITE = "\033[37m"
 
-    # Box drawing characters
-    TL = "\u256d"  # Top left
-    TR = "\u256e"  # Top right
-    BL = "\u2570"  # Bottom left
-    BR = "\u256f"  # Bottom right
-    H = "\u2500"   # Horizontal
-    V = "\u2502"   # Vertical
+    # Box drawing characters - use ASCII fallback for Windows compatibility
+    try:
+        # Try Unicode box drawing characters
+        test_str = "\u256d\u256e\u2570\u256f\u2500\u2502"
+        test_str.encode(sys.stdout.encoding or 'utf-8')
+        TL = "\u256d"  # Top left
+        TR = "\u256e"  # Top right
+        BL = "\u2570"  # Bottom left
+        BR = "\u256f"  # Bottom right
+        H = "\u2500"   # Horizontal
+        V = "\u2502"   # Vertical
+    except (UnicodeEncodeError, LookupError):
+        # ASCII fallback for Windows console
+        TL = "+"
+        TR = "+"
+        BL = "+"
+        BR = "+"
+        H = "-"
+        V = "|"
 
     # Get version from pyproject.toml
     version = "1.0.0"
