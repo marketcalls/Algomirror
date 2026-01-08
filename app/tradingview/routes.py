@@ -185,10 +185,9 @@ def get_chart_data(strategy_id):
         IST_OFFSET = 19800
         chart_data = []
         for i, timestamp in enumerate(spread_data.index):
-            # Skip initial NaN values
-            if i < period:
-                continue
-
+            # Include all bars - supertrend will be None during warmup period
+            # This matches TradingView behavior: candles show from start,
+            # supertrend line only appears after warmup (period-1 bars)
             chart_data.append({
                 'time': int(timestamp.timestamp()) + IST_OFFSET,  # Convert to IST for display
                 'open': float(spread_data['open'].iloc[i]),
@@ -196,7 +195,7 @@ def get_chart_data(strategy_id):
                 'low': float(spread_data['low'].iloc[i]),
                 'close': float(spread_data['close'].iloc[i]),
                 'supertrend': float(trend[i]) if not np.isnan(trend[i]) else None,
-                'direction': int(direction[i]) if not np.isnan(direction[i]) else 0
+                'direction': int(direction[i])  # 0 = no signal, -1 = bullish, 1 = bearish
             })
 
         # Get current signal
