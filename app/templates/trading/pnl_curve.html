@@ -1,0 +1,572 @@
+{% extends "layout.html" %}
+
+{% block title %}P&L Plot - AlgoMirror{% endblock %}
+
+{% block content %}
+<div id="pnlCurvePageWrap" class="space-y-4">
+    <!-- Header -->
+    <div class="flex justify-between items-center flex-wrap gap-3">
+        <div>
+            <h1 id="pnlCurveTitle" class="text-3xl font-bold">{{ "Combined Intraday P&L Plot" if accounts|length > 1 else "Intraday P&L Plot" }}</h1>
+            <p id="pnlCurveSubtitle" class="text-base-content/70 mt-1">
+                {{ "Mark-to-market curve summed across all active accounts, today only." if accounts|length > 1 else "Mark-to-market curve for today." }}
+            </p>
+        </div>
+        <div class="flex items-center gap-3">
+            {% if accounts|length > 1 %}
+            <select id="pnlAccountSelect" class="select select-bordered select-sm h-9 min-w-[180px]" onchange="onPnlAccountChange(this.value)">
+                <option value="all" selected>All Accounts</option>
+                {% for account in accounts %}
+                <option value="{{ account.id }}">{{ account.account_name }}</option>
+                {% endfor %}
+            </select>
+            {% endif %}
+            <span id="pnlCurveUpdatedAt" class="text-xs text-base-content/50"></span>
+            {% if accounts %}
+            <button type="button" id="pnlCurveScreenshotBtn" onclick="takePnlScreenshot()" class="btn btn-outline btn-sm">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
+                </svg>
+                Screenshot
+            </button>
+            <button type="button" id="pnlCurveRefreshBtn" onclick="loadPnlCurve()" class="btn btn-primary btn-sm">
+                <svg id="pnlCurveRefreshIcon" xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+                <span id="pnlCurveRefreshLabel">Refresh</span>
+            </button>
+            {% endif %}
+        </div>
+    </div>
+
+    {% if not accounts %}
+    <div class="card bg-base-100 shadow-xl">
+        <div class="card-body text-center py-16">
+            <h2 class="text-2xl font-bold mb-2">No Active Accounts</h2>
+            <p class="text-base-content/70">Add a trading account to see its intraday P&amp;L here.</p>
+            <div class="mt-6">
+                <a href="{{ url_for('accounts.add') }}" class="btn btn-primary">Add Account</a>
+            </div>
+        </div>
+    </div>
+    {% else %}
+
+    <div id="pnlCurveLoading" class="flex items-center justify-center py-16">
+        <span class="loading loading-spinner loading-lg"></span>
+    </div>
+
+    <div id="pnlCurveError" class="hidden alert alert-error"></div>
+    <div id="pnlCurveFailedAccountsWarning" class="hidden alert alert-warning"></div>
+
+    <div id="pnlCurveContent" class="hidden">
+        <div class="card bg-base-100 shadow-xl">
+            <div class="card-body">
+                <!-- Stat row: bordered cards + icons, matching OpenAlgo's
+                     own PnL Tracker card layout (frontend/src/pages/
+                     PnLTracker.tsx) rather than AlgoTest's plain-text
+                     convention. Branding lives in the chart itself as a
+                     centered watermark (see drawPnlChart). -->
+                <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
+                    <div class="border border-base-300 rounded-lg px-4 py-2.5 bg-base-100 shadow-sm">
+                        <div class="text-xs text-base-content/60">Current MTM</div>
+                        <div id="pnlCurveCurrent" class="text-4xl font-bold font-mono"></div>
+                    </div>
+                    <div class="border border-base-300 rounded-lg px-4 py-2.5 bg-base-100 shadow-sm">
+                        <div class="text-xs text-base-content/60 flex items-center gap-1">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-3.5 w-3.5" style="color:#22c55e" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.25 18L9 11.25l4.306 4.306a11.95 11.95 0 015.814-5.518l2.74-1.22m0 0l-5.94-2.281m5.94 2.28l-2.28 5.941" />
+                            </svg>
+                            Max MTM
+                        </div>
+                        <div class="flex items-center gap-1.5">
+                            <span id="pnlCurveMax" class="text-4xl font-bold font-mono" style="color:#22c55e"></span>
+                            <span id="pnlCurveMaxTime" class="text-xs text-base-content/50"></span>
+                        </div>
+                    </div>
+                    <div class="border border-base-300 rounded-lg px-4 py-2.5 bg-base-100 shadow-sm">
+                        <div class="text-xs text-base-content/60 flex items-center gap-1">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-3.5 w-3.5" style="color:#ef4444" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.25 6L9 12.75l4.306-4.306a11.95 11.95 0 015.814 5.518l2.74 1.22m0 0l-5.94 2.28m5.94-2.28l-2.28-5.941" />
+                            </svg>
+                            Min MTM
+                        </div>
+                        <div class="flex items-center gap-1.5">
+                            <span id="pnlCurveMin" class="text-4xl font-bold font-mono" style="color:#ef4444"></span>
+                            <span id="pnlCurveMinTime" class="text-xs text-base-content/50"></span>
+                        </div>
+                    </div>
+                    <div class="border border-base-300 rounded-lg px-4 py-2.5 bg-base-100 shadow-sm">
+                        <div class="text-xs text-base-content/60 flex items-center gap-1">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-3.5 w-3.5" style="color:#f59e0b" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
+                            </svg>
+                            Max Drawdown
+                        </div>
+                        <div id="pnlCurveDrawdown" class="text-4xl font-bold font-mono" style="color:#f59e0b"></div>
+                        <div class="text-xs text-base-content/50">Peak to trough</div>
+                    </div>
+                </div>
+
+                <div id="pnlCurveLegend" class="flex items-center justify-center gap-4 text-sm text-base-content/60 mb-2"></div>
+                <div id="pnlCurveChartWrap" class="w-full relative">
+                    <div id="pnlCurveChart" class="w-full" style="height: calc(100vh - 380px); min-height: 420px;"></div>
+                    <div id="pnlCurveTooltip" class="hidden absolute z-10 pointer-events-none rounded-lg shadow-lg border border-base-300 bg-base-100 text-xs p-2 space-y-0.5"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+</div>
+
+<script src="{{ url_for('static', filename='js/vendor/lightweight-charts.standalone.production.js') }}"></script>
+<script src="{{ url_for('static', filename='js/vendor/html2canvas-pro.min.js') }}"></script>
+<script>
+let pnlChartInstance = null;
+let pnlBaselineSeries = null;
+let lastPnlData = null;
+let selectedPnlAccount = 'all';
+// Single source of truth for P&L/drawdown colors - used for both the chart
+// series AND the stat numbers, so they're never allowed to drift apart the
+// way DaisyUI's themed text-success/text-error classes did (that theme's
+// "success" token isn't the same green as the chart's hardcoded line color).
+const PNL_GREEN = '#22c55e';
+const PNL_RED = '#ef4444';
+const PNL_DRAWDOWN_COLOR = '#f000b8';
+// Captured from the DOM (already correctly HTML-entity-decoded by the
+// browser) instead of re-embedding the Jinja value into a JS string, which
+// would double-escape "&" into the literal text "&amp;".
+const defaultPnlTitle = document.getElementById('pnlCurveTitle').textContent;
+const defaultPnlSubtitle = document.getElementById('pnlCurveSubtitle').textContent;
+
+function formatRupee(value) {
+    const sign = value >= 0 ? '+' : '';
+    return `${sign}₹${Number(value).toFixed(2)}`;
+}
+
+// Force IST regardless of browser/server timezone, matching OpenAlgo's own
+// PnL Tracker (frontend/src/pages/PnLTracker.tsx) - Lightweight Charts'
+// default tick formatting otherwise follows the browser's local timezone
+// (or UTC), not IST.
+function formatIstTime(unixSeconds) {
+    const date = new Date(unixSeconds * 1000);
+    const istOffsetMs = 5.5 * 60 * 60 * 1000;
+    const istDate = new Date(date.getTime() + istOffsetMs);
+    const hours = istDate.getUTCHours().toString().padStart(2, '0');
+    const minutes = istDate.getUTCMinutes().toString().padStart(2, '0');
+    const seconds = istDate.getUTCSeconds().toString().padStart(2, '0');
+    return { hours, minutes, seconds };
+}
+
+function formatIstHHMM(unixSeconds) {
+    const t = formatIstTime(unixSeconds);
+    return `${t.hours}:${t.minutes}`;
+}
+
+// Derive current/max/min/max-drawdown from a single account's own series -
+// the backend only computes these for the combined curve, so a per-account
+// selection recomputes them client-side from the series we already have.
+function computeSeriesStats(series) {
+    if (!series || series.length === 0) {
+        return { current: 0, max: 0, maxTime: null, min: 0, minTime: null, maxDrawdown: 0 };
+    }
+    let peak = -Infinity, maxDrawdown = 0;
+    let max = -Infinity, maxTimeMs = null, min = Infinity, minTimeMs = null;
+    series.forEach(p => {
+        if (p.value > max) { max = p.value; maxTimeMs = p.time; }
+        if (p.value < min) { min = p.value; minTimeMs = p.time; }
+        if (p.value > peak) peak = p.value;
+        const dd = p.value - peak;
+        if (dd < maxDrawdown) maxDrawdown = dd;
+    });
+    return {
+        current: series[series.length - 1].value,
+        max, maxTime: maxTimeMs !== null ? formatIstHHMM(Math.floor(maxTimeMs / 1000)) : null,
+        min, minTime: minTimeMs !== null ? formatIstHHMM(Math.floor(minTimeMs / 1000)) : null,
+        maxDrawdown,
+    };
+}
+
+function onPnlAccountChange(value) {
+    selectedPnlAccount = value;
+    if (lastPnlData) {
+        renderForSelection();
+    }
+}
+
+async function loadPnlCurve() {
+    const loadingEl = document.getElementById('pnlCurveLoading');
+    const errorEl = document.getElementById('pnlCurveError');
+    const failedAccountsEl = document.getElementById('pnlCurveFailedAccountsWarning');
+    const contentEl = document.getElementById('pnlCurveContent');
+    const refreshBtn = document.getElementById('pnlCurveRefreshBtn');
+    const refreshIcon = document.getElementById('pnlCurveRefreshIcon');
+    const refreshLabel = document.getElementById('pnlCurveRefreshLabel');
+    const screenshotBtn = document.getElementById('pnlCurveScreenshotBtn');
+
+    loadingEl.classList.remove('hidden');
+    errorEl.classList.add('hidden');
+    failedAccountsEl.classList.add('hidden');
+    contentEl.classList.add('hidden');
+    refreshBtn.disabled = true;
+    refreshIcon.classList.add('hidden');
+    refreshLabel.textContent = 'Loading...';
+    // Also block Screenshot while loading - html2canvas can't render the
+    // CSS-mask-based spinner (shows as a solid box, not a ring) and the
+    // stats/chart are hidden at this point anyway, so a screenshot taken
+    // mid-load just captures an empty-looking page.
+    screenshotBtn.disabled = true;
+
+    try {
+        const response = await fetch('{{ url_for("trading.pnl_combined") }}');
+        const result = await response.json();
+        if (result.status !== 'success') {
+            throw new Error(result.message || 'Failed to load P&L data');
+        }
+        lastPnlData = result.data;
+        contentEl.classList.remove('hidden');
+        renderForSelection();
+        const t = formatIstTime(Math.floor(Date.now() / 1000));
+        document.getElementById('pnlCurveUpdatedAt').textContent = `Updated ${t.hours}:${t.minutes}:${t.seconds} IST`;
+
+        // A per-account fetch failure (broker/tradebook/positionbook error)
+        // makes that account contribute zero to the combined total below,
+        // which otherwise looks like a complete, correct number - flag it
+        // instead of leaving the shortfall invisible.
+        const failedAccounts = lastPnlData.failed_accounts || [];
+        if (failedAccounts.length > 0) {
+            failedAccountsEl.textContent = `Could not fetch data for: ${failedAccounts.join(', ')} - the totals below don't include ${failedAccounts.length > 1 ? 'these accounts' : 'this account'} and may understate your actual P&L.`;
+            failedAccountsEl.classList.remove('hidden');
+        }
+    } catch (e) {
+        errorEl.textContent = e.message || 'Failed to load P&L data';
+        errorEl.classList.remove('hidden');
+    } finally {
+        loadingEl.classList.add('hidden');
+        refreshBtn.disabled = false;
+        refreshIcon.classList.remove('hidden');
+        refreshLabel.textContent = 'Refresh';
+        screenshotBtn.disabled = false;
+    }
+}
+
+function resetPnlCurveZoom() {
+    if (pnlChartInstance) {
+        pnlChartInstance.timeScale().fitContent();
+    }
+}
+
+// Alt+R resets zoom, matching TradingView's own shortcut - no on-chart
+// button needed, which was crowding the corner next to the price scale.
+document.addEventListener('keydown', (e) => {
+    if (e.altKey && e.key.toLowerCase() === 'r') {
+        e.preventDefault();
+        resetPnlCurveZoom();
+    }
+});
+
+// Screenshot the stats + chart area as a PNG, same feature as OpenAlgo's own
+// PnL Tracker (frontend/src/pages/PnLTracker.tsx takeScreenshot). Needs the
+// "-pro" html2canvas fork because DaisyUI's theme colors are oklch(), which
+// the classic html2canvas can't parse.
+async function takePnlScreenshot() {
+    // Capture the whole page wrap (title + subtitle + "Updated" timestamp +
+    // stats + chart), not just the stats/chart card - a screenshot with no
+    // heading or timestamp isn't self-explanatory once shared on its own.
+    // The account dropdown and the two action buttons are excluded via
+    // ignoreElements since they're interactive controls, not part of the
+    // report.
+    const target = document.getElementById('pnlCurvePageWrap');
+    const btn = document.getElementById('pnlCurveScreenshotBtn');
+    if (!target || !btn) return;
+
+    // Safety net beyond the disabled-while-loading state above, in case this
+    // ever gets called while the content is still hidden (e.g. a future
+    // caller that isn't the button click).
+    const contentEl = document.getElementById('pnlCurveContent');
+    if (!contentEl || contentEl.classList.contains('hidden')) {
+        return;
+    }
+
+    const excludedIds = ['pnlAccountSelect', 'pnlCurveScreenshotBtn', 'pnlCurveRefreshBtn'];
+
+    btn.disabled = true;
+    // html2canvas captures exactly target's own box, not the padding its
+    // ancestor (layout.html's <div class="p-6">) normally provides on the
+    // live page - add it back temporarily so the exported image has margin
+    // on all sides instead of text touching the edges, then remove it right
+    // after so the live page itself never shows the extra padding.
+    target.classList.add('p-6');
+    try {
+        const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+        const canvas = await html2canvas(target, {
+            backgroundColor: isDark ? '#1f2937' : '#ffffff',
+            scale: 2,
+            logging: false,
+            useCORS: true,
+            ignoreElements: (el) => excludedIds.includes(el.id),
+        });
+        canvas.toBlob((blob) => {
+            if (!blob) return;
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+            link.download = `PnL_Curve_${timestamp}.png`;
+            link.href = url;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            URL.revokeObjectURL(url);
+        }, 'image/png', 1.0);
+    } catch (e) {
+        console.error('Screenshot failed:', e);
+    } finally {
+        target.classList.remove('p-6');
+        btn.disabled = false;
+    }
+}
+
+// Running peak-vs-current drawdown, same formula the backend uses for the
+// combined curve (Peak = cummax, Drawdown = value - Peak) - needed here
+// because the backend only precomputes a drawdown series for the combined
+// curve, not per-account.
+function computeDrawdownSeries(series) {
+    let peak = -Infinity;
+    return series.map(p => {
+        if (p.value > peak) peak = p.value;
+        return { time: p.time, value: p.value - peak };
+    });
+}
+
+// Re-renders stats + chart for whatever is currently selected in the account
+// dropdown, entirely from the already-fetched data - no re-fetch, since the
+// P&L endpoint is rate-limited and hits both brokers' history APIs.
+function renderForSelection() {
+    if (!lastPnlData) return;
+
+    let series, drawdownSeries, stats, label;
+    if (selectedPnlAccount === 'all') {
+        series = lastPnlData.pnl_series || [];
+        drawdownSeries = lastPnlData.drawdown_series || [];
+        stats = {
+            current: lastPnlData.current_mtm, max: lastPnlData.max_mtm, maxTime: lastPnlData.max_mtm_time,
+            min: lastPnlData.min_mtm, minTime: lastPnlData.min_mtm_time, maxDrawdown: lastPnlData.max_drawdown,
+        };
+        label = 'Combined';
+    } else {
+        const account = (lastPnlData.per_account || []).find(a => String(a.account_id) === String(selectedPnlAccount));
+        series = (account && account.series) || [];
+        drawdownSeries = computeDrawdownSeries(series);
+        stats = computeSeriesStats(series);
+        label = account ? account.account_name : 'Account';
+    }
+
+    const titleEl = document.getElementById('pnlCurveTitle');
+    if (titleEl) {
+        titleEl.textContent = selectedPnlAccount === 'all'
+            ? defaultPnlTitle
+            : `${label} - Intraday P&L Plot`;
+    }
+    const subtitleEl = document.getElementById('pnlCurveSubtitle');
+    if (subtitleEl) {
+        subtitleEl.textContent = selectedPnlAccount === 'all'
+            ? defaultPnlSubtitle
+            : `Mark-to-market curve for ${label}, today only.`;
+    }
+
+    const currentEl = document.getElementById('pnlCurveCurrent');
+    currentEl.textContent = formatRupee(stats.current);
+    currentEl.style.color = stats.current >= 0 ? PNL_GREEN : PNL_RED;
+    document.getElementById('pnlCurveMax').textContent = formatRupee(stats.max);
+    document.getElementById('pnlCurveMaxTime').textContent = stats.maxTime ? `at ${stats.maxTime} IST` : '';
+    document.getElementById('pnlCurveMin').textContent = formatRupee(stats.min);
+    document.getElementById('pnlCurveMinTime').textContent = stats.minTime ? `at ${stats.minTime} IST` : '';
+    // Absolute value, no +/- sign - matches OpenAlgo's own PnL Tracker,
+    // which shows drawdown magnitude with a static "Peak to trough" label
+    // rather than a signed number needing a timestamp to make sense of.
+    document.getElementById('pnlCurveDrawdown').textContent = `₹${Math.abs(stats.maxDrawdown).toFixed(2)}`;
+
+    drawPnlChart(series, drawdownSeries);
+}
+
+function drawPnlChart(series, drawdownSeries) {
+    const chartContainer = document.getElementById('pnlCurveChart');
+    const tooltipEl = document.getElementById('pnlCurveTooltip');
+    const legendEl = document.getElementById('pnlCurveLegend');
+    chartContainer.innerHTML = '';
+    tooltipEl.classList.add('hidden');
+    legendEl.innerHTML = '';
+
+    if (pnlChartInstance) {
+        pnlChartInstance.remove();
+        pnlChartInstance = null;
+        pnlBaselineSeries = null;
+    }
+
+    if (!series || series.length === 0) {
+        chartContainer.innerHTML = '<div class="flex items-center justify-center h-full text-base-content/50">No trades or open positions today</div>';
+        return;
+    }
+
+    const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+    const chart = LightweightCharts.createChart(chartContainer, {
+        width: chartContainer.clientWidth,
+        height: chartContainer.clientHeight,
+        layout: {
+            background: { color: 'transparent' },
+            textColor: isDark ? '#a6adbb' : '#4b5563',
+            attributionLogo: false,
+        },
+        grid: {
+            // Semi-transparent rather than an opaque hex, matching OpenAlgo's
+            // own PnL Tracker (frontend/src/pages/PnLTracker.tsx) - blends
+            // with whatever the card background actually is instead of
+            // needing an exact-matching gray picked per theme.
+            // Same base color as layout.textColor above (#a6adbb, confirmed
+            // legible against our dark theme via the axis labels) at higher
+            // opacity than OpenAlgo's own 0.1 - their dark theme's
+            // background must be lighter than ours, since the identical
+            // rgba was nearly invisible here.
+            vertLines: { color: isDark ? 'rgba(166, 173, 187, 0.25)' : 'rgba(0, 0, 0, 0.1)' },
+            horzLines: { color: isDark ? 'rgba(166, 173, 187, 0.25)' : 'rgba(0, 0, 0, 0.1)' },
+        },
+        timeScale: {
+            timeVisible: true,
+            secondsVisible: false,
+            tickMarkFormatter: (time) => formatIstHHMM(time),
+        },
+        rightPriceScale: { borderVisible: false, scaleMargins: { top: 0.15, bottom: 0.08 } },
+        crosshair: {
+            vertLine: { labelVisible: false },  // we show our own IST-correct tooltip instead
+        },
+    });
+
+    // Centered, greyed-out branding watermark - same technique OpenAlgo's own
+    // PnL Tracker uses for its "OpenAlgo" watermark (frontend/src/pages/
+    // PnLTracker.tsx), except centered via CSS transform instead of a
+    // manual offsetWidth calc + resize listener, since that self-adjusts
+    // without extra JS. Cleared along with everything else in
+    // chartContainer.innerHTML = '' at the top of this function on redraw.
+    const watermark = document.createElement('div');
+    watermark.style.position = 'absolute';
+    watermark.style.top = '50%';
+    watermark.style.left = '50%';
+    watermark.style.transform = 'translate(-50%, -50%)';
+    watermark.style.textAlign = 'center';
+    watermark.style.pointerEvents = 'none';
+    watermark.style.userSelect = 'none';
+    watermark.style.zIndex = '1';
+    // text-base-content at low opacity instead of hardcoded rgba: that token
+    // is already calibrated by DaisyUI for correct contrast against each
+    // theme's own background, so one class reads right in both themes -
+    // hand-picked rgba(166,173,187,0.2) (copied from OpenAlgo's exact
+    // values) turned out too low-contrast against AlgoMirror's specific
+    // dark background shade, even though it read fine in light mode.
+    watermark.className = 'text-base-content/15';
+    watermark.innerHTML = `
+        <div style="font-family: Arial, sans-serif; font-weight: bold; font-size: 42px;">AlgoMirror</div>
+        <div style="font-family: Arial, sans-serif; font-size: 16px;">Powered by OpenAlgo</div>
+    `;
+    chartContainer.appendChild(watermark);
+
+    // Baseline series: green fill/line above zero, red below - profit/loss
+    // visible from the shape alone, not just the number (AlgoTest-style).
+    const baselineSeries = chart.addSeries(LightweightCharts.BaselineSeries, {
+        baseValue: { type: 'price', price: 0 },
+        topLineColor: PNL_GREEN,
+        topFillColor1: 'rgba(34, 197, 94, 0.28)',
+        topFillColor2: 'rgba(34, 197, 94, 0.05)',
+        bottomLineColor: PNL_RED,
+        bottomFillColor1: 'rgba(239, 68, 68, 0.05)',
+        bottomFillColor2: 'rgba(239, 68, 68, 0.28)',
+        lineWidth: 2,
+        priceScaleId: 'right',
+    });
+    baselineSeries.setData(series.map(p => ({ time: Math.floor(p.time / 1000), value: p.value })));
+
+    let drawdownLineSeries = null;
+    if (drawdownSeries && drawdownSeries.length > 0) {
+        drawdownLineSeries = chart.addSeries(LightweightCharts.LineSeries, {
+            color: PNL_DRAWDOWN_COLOR, lineWidth: 1, priceScaleId: 'right',
+            lastValueVisible: false, priceLineVisible: false,
+        });
+        drawdownLineSeries.setData(drawdownSeries.map(p => ({ time: Math.floor(p.time / 1000), value: p.value })));
+    }
+
+    legendEl.innerHTML = `
+        <span class="flex items-center gap-1"><span class="inline-block w-3 h-3 rounded-full" style="background:${PNL_GREEN}"></span> P&L</span>
+        ${drawdownLineSeries ? `<span class="flex items-center gap-1"><span class="inline-block w-3 h-3 rounded-full" style="background:${PNL_DRAWDOWN_COLOR}"></span> Drawdown</span>` : ''}
+    `;
+
+    chart.timeScale().fitContent();
+    pnlChartInstance = chart;
+    pnlBaselineSeries = baselineSeries;
+
+    chart.subscribeCrosshairMove(param => {
+        if (!param.point || !param.time) {
+            tooltipEl.classList.add('hidden');
+            return;
+        }
+        const point = param.seriesData.get(baselineSeries);
+        if (!point) {
+            tooltipEl.classList.add('hidden');
+            return;
+        }
+        const t = formatIstTime(param.time);
+        let html = `
+            <div class="font-semibold">${t.hours}:${t.minutes}:${t.seconds} IST</div>
+            <div class="font-medium" style="color:${point.value >= 0 ? PNL_GREEN : PNL_RED}">P&L: ${formatRupee(point.value)}</div>
+        `;
+        if (drawdownLineSeries) {
+            const ddPoint = param.seriesData.get(drawdownLineSeries);
+            if (ddPoint) {
+                html += `<div style="color:${PNL_DRAWDOWN_COLOR}">Drawdown: ${formatRupee(ddPoint.value)}</div>`;
+            }
+        }
+        tooltipEl.innerHTML = html;
+        tooltipEl.classList.remove('hidden');
+
+        const wrapWidth = chartContainer.clientWidth;
+        let left = param.point.x + 16;
+        if (left + 160 > wrapWidth) left = Math.max(0, param.point.x - 160);
+        tooltipEl.style.left = left + 'px';
+        tooltipEl.style.top = '8px';
+    });
+}
+
+window.addEventListener('resize', () => {
+    const chartContainer = document.getElementById('pnlCurveChart');
+    if (pnlChartInstance && chartContainer && chartContainer.isConnected) {
+        // Height is viewport-relative (not fixed) now, so both dimensions
+        // can change on resize, not just width.
+        pnlChartInstance.applyOptions({
+            width: chartContainer.clientWidth,
+            height: chartContainer.clientHeight,
+        });
+    }
+});
+
+// drawPnlChart() only picks its grid/text/watermark colors for the theme
+// that's active when the chart is built - toggling light/dark afterward left
+// those colors stuck on whatever theme was active at draw time. This app
+// has two parallel theme-toggle code paths - the sun/moon button actually
+// wired into the header calls navbar.js's toggleTheme(), which sets
+// data-theme directly and does NOT dispatch any event; a separate,
+// currently-unused theme.js module dispatches a 'themechange' event nothing
+// here can rely on since it isn't the one wired to the visible control. So
+// this watches the data-theme attribute itself instead of trusting either
+// toggle implementation to notify listeners - works regardless of which one
+// is actually in use, now or if that changes later.
+new MutationObserver(() => {
+    if (lastPnlData) {
+        renderForSelection();
+    }
+}).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+
+document.addEventListener('DOMContentLoaded', () => {
+    {% if accounts %}
+    loadPnlCurve();
+    {% endif %}
+});
+</script>
+{% endblock %}

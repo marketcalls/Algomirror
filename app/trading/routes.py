@@ -8,6 +8,8 @@ from app.utils.option_chain import OptionChainManager
 from app.utils.websocket_manager import ProfessionalWebSocketManager
 from app.utils.background_service import option_chain_service
 from app.utils.session_manager import session_manager
+from app.utils.rate_limiter import limiter
+from app.utils.pnl_curve import compute_combined_pnl
 from datetime import datetime
 import json
 import time
@@ -304,6 +306,42 @@ def positions():
                          total_current=total_current,
                          single_account=len(accounts) == 1,
                          accounts=current_user.get_active_accounts())
+
+
+@trading_bp.route('/pnl-curve')
+@login_required
+def pnl_curve_page():
+    """Intraday combined P&L curve page - see app/utils/pnl_curve.py for
+    the computation and /api/pnl-combined for the data this page fetches."""
+    accounts = current_user.get_active_accounts()
+    return render_template('trading/pnl_curve.html', accounts=accounts)
+
+
+@trading_bp.route('/api/pnl-combined')
+@login_required
+# Own explicit, more conservative limit rather than the shared
+# heavy_rate_limit() (100/min default) - each hit here fans out into a full
+# tradebook + positionbook + per-symbol 1-minute-candle fetch across every
+# active account, so its real cost per call is much higher than the other
+# "heavy" endpoints that decorator is meant for.
+@limiter.limit("20 per minute")
+def pnl_combined():
+    """Combined intraday mark-to-market P&L curve across every active
+    account, computed live from each account's tradebook/positionbook/1m
+    candles (see app/utils/pnl_curve.py). Nothing here is persisted -
+    intraday only, rebuilt fresh on every call."""
+    accounts = current_user.get_active_accounts()
+    if not accounts:
+        return jsonify({'status': 'error', 'message': 'No active trading accounts configured'}), 400
+
+    try:
+        data = compute_combined_pnl(accounts)
+    except Exception as e:
+        current_app.logger.exception(f'Error computing combined intraday P&L: {e}')
+        return jsonify({'status': 'error', 'message': 'Failed to compute combined P&L'}), 500
+
+    return jsonify({'status': 'success', 'data': data})
+
 
 @trading_bp.route('/holdings')
 @login_required
