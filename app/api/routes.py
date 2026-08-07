@@ -1,5 +1,6 @@
 from flask import jsonify, request, make_response
 from flask_login import login_required, current_user
+from datetime import datetime, timezone
 from app.api import api_bp
 from app.models import TradingAccount
 from app.utils.rate_limiter import api_rate_limit
@@ -13,6 +14,11 @@ def no_cache_response(data, status=200):
     response.headers['Pragma'] = 'no-cache'
     response.headers['Expires'] = '0'
     return response
+
+
+def utcnow():
+    # naive UTC (not datetime.utcnow(), deprecated on 3.12+) - stays naive since SQLite drops tzinfo on read
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 @api_bp.route('/accounts')
 @login_required
@@ -89,7 +95,6 @@ def get_account_funds(account_id):
     Returns cached data if fresh (< 30s) to avoid slow broker API calls."""
     try:
         from app.utils.openalgo_client import ExtendedOpenAlgoAPI
-        from datetime import datetime
         from app import db
 
         # Verify account belongs to current user
@@ -105,10 +110,40 @@ def get_account_funds(account_id):
                 'message': 'Account not found'
             }), 404
 
+        client_holder = {}
+
+        def get_client():
+            if 'client' not in client_holder:
+                client_holder['client'] = ExtendedOpenAlgoAPI(
+                    api_key=account.get_api_key(),
+                    host=account.host_url,
+                    timeout=8
+                )
+            return client_holder['client']
+
+        # Analyzer (live vs simulated) mode rarely changes, so it's refreshed
+        # on a much longer cadence (5 min) than funds to avoid an extra broker
+        # round-trip on every 15s funds poll.
+        analyzer_mode = account.last_analyzer_mode
+        analyzer_stale = (
+            account.last_analyzer_check is None or
+            (utcnow() - account.last_analyzer_check).total_seconds() >= 300
+        )
+        if analyzer_stale:
+            try:
+                analyzer_response = get_client().analyzerstatus()
+                if analyzer_response and analyzer_response.get('status') == 'success':
+                    analyzer_mode = bool(analyzer_response.get('data', {}).get('analyze_mode', False))
+                    account.last_analyzer_mode = analyzer_mode
+                    account.last_analyzer_check = utcnow()
+                    db.session.commit()
+            except Exception:
+                db.session.rollback()
+
         # Return cached data if fresh (< 30 seconds old)
         # Avoids broker API call (~500ms-2s network latency) on every page load
         if account.last_funds_data and account.last_data_update:
-            cache_age = (datetime.utcnow() - account.last_data_update).total_seconds()
+            cache_age = (utcnow() - account.last_data_update).total_seconds()
             if cache_age < 30:
                 cached_data = account.last_funds_data
                 return no_cache_response({
@@ -124,26 +159,19 @@ def get_account_funds(account_id):
                         'net': cached_data.get('net', 0),
                         'm2mrealized': cached_data.get('m2mrealized', 0),
                         'm2munrealized': cached_data.get('m2munrealized', 0),
+                        'analyze_mode': analyzer_mode,
                         'cached': True
                     }
                 })
 
-        # Create API client with a SHORT timeout for this interactive read.
-        # The dashboard aborts the request at ~10s, so a 30s broker timeout plus
-        # the old 2-attempt retry made funds spin past the abort and never
-        # populate. Fail fast within the dashboard's window and fall back to
-        # cached data below if the broker is slow.
-        client = ExtendedOpenAlgoAPI(
-            api_key=account.get_api_key(),
-            host=account.host_url,
-            timeout=8
-        )
-
         # Single attempt - on failure we serve cached data (and the dashboard
-        # polls again in ~15s).
+        # polls again in ~15s). The client has a SHORT timeout for this
+        # interactive read: the dashboard aborts the request at ~10s, so a
+        # 30s broker timeout plus the old 2-attempt retry made funds spin
+        # past the abort and never populate.
         response = None
         try:
-            response = client.funds()
+            response = get_client().funds()
         except Exception:
             response = None
 
@@ -153,7 +181,7 @@ def get_account_funds(account_id):
             # Cache the data (non-blocking - don't hold up reads if DB is busy)
             try:
                 account.last_funds_data = funds_data
-                account.last_data_update = datetime.utcnow()
+                account.last_data_update = utcnow()
                 db.session.commit()
             except Exception:
                 db.session.rollback()
@@ -170,7 +198,8 @@ def get_account_funds(account_id):
                     'used_margin': funds_data.get('utiliseddebits', 0),  # Alias for compatibility
                     'net': funds_data.get('net', 0),
                     'm2mrealized': funds_data.get('m2mrealized', 0),
-                    'm2munrealized': funds_data.get('m2munrealized', 0)
+                    'm2munrealized': funds_data.get('m2munrealized', 0),
+                    'analyze_mode': analyzer_mode
                 }
             })
         elif account.last_funds_data:
@@ -189,6 +218,7 @@ def get_account_funds(account_id):
                     'net': cached_data.get('net', 0),
                     'm2mrealized': cached_data.get('m2mrealized', 0),
                     'm2munrealized': cached_data.get('m2munrealized', 0),
+                    'analyze_mode': analyzer_mode,
                     'cached': True
                 }
             })
@@ -267,7 +297,6 @@ def get_account_pnl(account_id):
     try:
         from app.models import Strategy, StrategyExecution
         from app.utils.openalgo_client import ExtendedOpenAlgoAPI
-        from datetime import datetime, timezone
         from app import db
 
         # Verify account belongs to current user
@@ -284,7 +313,7 @@ def get_account_pnl(account_id):
             }), 404
 
         # Calculate today's P&L for this specific account
-        today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+        today_start = utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
 
         # Get all executions for this account today
         today_executions = StrategyExecution.query.join(Strategy).filter(

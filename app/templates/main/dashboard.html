@@ -72,11 +72,11 @@
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
                 </svg>
             </div>
-            <div class="stat-title">Total Cash</div>
-            <div class="stat-value text-secondary text-2xl lg:text-4xl" id="total-available-cash">
+            <div class="stat-title">Available Margin</div>
+            <div class="stat-value text-secondary text-2xl lg:text-4xl" id="total-available-margin">
                 <span class="loading loading-spinner loading-md"></span>
             </div>
-            <div class="stat-desc">Available Cash</div>
+            <div class="stat-desc">Cash + Collateral</div>
         </div>
 
         <div class="stat">
@@ -127,23 +127,24 @@
                         <h3 class="font-semibold text-lg">{{ account.account_name }}</h3>
                         <p class="text-sm text-base-content/60">{{ account.broker_name }}</p>
                     </div>
+                    {% set status = (account.connection_status or 'unknown').lower() %}
+                    {% set badge_class = 'badge-success' if status == 'connected'
+                        else 'badge-error' if status == 'failed'
+                        else 'badge-warning' %}
                     <div class="flex flex-col items-end gap-1">
-                        {% set status = (account.connection_status or 'unknown').lower() %}
-                        {% set badge_class = 'badge-success' if status == 'connected'
-                            else 'badge-error' if status == 'failed'
-                            else 'badge-warning' %}
+                        <span class="badge badge-sm" id="mode-{{ account.id }}" style="display: none;"></span>
                         <span class="badge {{ badge_class }} badge-sm">
                             {{ status.title() }}
-                        </span>
-                        <span class="badge badge-sm badge-ghost" id="mode-{{ account.id }}">
-                            <span class="loading loading-spinner loading-xs"></span>
                         </span>
                     </div>
                 </div>
 
                 <div class="space-y-2">
-                    <div class="flex justify-between">
-                        <span class="text-sm">Available:</span>
+                    <div class="flex justify-between items-start">
+                        <span class="text-sm leading-tight">
+                            Available Margin
+                            <span class="block text-[10px] text-base-content/50">(Cash + Collateral)</span>
+                        </span>
                         <span class="font-semibold" id="available-{{ account.id }}">
                             <span class="loading loading-spinner loading-xs"></span>
                         </span>
@@ -155,7 +156,7 @@
                         </span>
                     </div>
                     <div class="flex justify-between">
-                        <span class="text-sm">Cash:</span>
+                        <span class="text-sm">Available Cash:</span>
                         <span class="font-semibold" id="cash-{{ account.id }}">
                             <span class="loading loading-spinner loading-xs"></span>
                         </span>
@@ -401,7 +402,6 @@ let pollingIntervals = {
     metrics: null,
     funds: null,
     pnl: null,
-    mode: null,
     tradingHoursCheck: null
 };
 
@@ -578,7 +578,7 @@ async function confirmClosePositions() {
 // Load account funds AND P&L data in a SINGLE parallel fetch (eliminates duplicate API calls)
 async function loadAccountFunds() {
     const accounts = {{ accounts_json|tojson }};
-    let totalCash = 0;
+    let totalAvailableMargin = 0;
     let totalM2MPnL = 0;
 
     // Add cache-busting timestamp to prevent stale data
@@ -603,11 +603,13 @@ async function loadAccountFunds() {
                 const funds = data.data;
 
                 // --- Funds section ---
-                const cash = parseFloat(funds.availablecash) || 0;
+                // funds.availablecash is already the total available margin
+                // (cash + collateral) - verified against live Zerodha account
+                // data (Kite app cash + collateral == this field, to the paisa).
+                const available = parseFloat(funds.availablecash) || 0;
                 const collateral = parseFloat(funds.collateral) || 0;
                 const margin = parseFloat(funds.utiliseddebits || funds.used_margin) || 0;
-                // Available balance = cash + collateral
-                const available = cash + collateral;
+                const cash = available - collateral;
 
                 const availableEl = document.getElementById(`available-${account.id}`);
                 if (availableEl) {
@@ -624,7 +626,16 @@ async function loadAccountFunds() {
                     cashEl.textContent = `₹${formatInLakhs(cash)}`;
                 }
 
-                totalCash += available;
+                totalAvailableMargin += available;
+
+                // --- Mode badge (Live vs Analyzer/simulated) ---
+                const modeEl = document.getElementById(`mode-${account.id}`);
+                if (modeEl && typeof funds.analyze_mode === 'boolean') {
+                    const isAnalyzer = funds.analyze_mode;
+                    modeEl.textContent = isAnalyzer ? 'Analyzer' : 'Live';
+                    modeEl.className = `badge badge-sm ${isAnalyzer ? 'badge-warning' : 'badge-neutral'}`;
+                    modeEl.style.display = 'inline-flex';
+                }
 
                 // --- M2M P&L section (from same response, no extra API call) ---
                 const m2mRealized = parseFloat(funds.m2mrealized) || 0;
@@ -661,10 +672,10 @@ async function loadAccountFunds() {
         }
     }
 
-    // Update total cash
-    const totalCashEl = document.getElementById('total-available-cash');
-    if (totalCashEl) {
-        totalCashEl.textContent = `₹ ${formatInLakhs(totalCash)}`;
+    // Update total available margin
+    const totalAvailableMarginEl = document.getElementById('total-available-margin');
+    if (totalAvailableMarginEl) {
+        totalAvailableMarginEl.textContent = `₹ ${formatInLakhs(totalAvailableMargin)}`;
     }
 
     // Update total M2M P&L
@@ -673,38 +684,6 @@ async function loadAccountFunds() {
         const colorClass = totalM2MPnL >= 0 ? 'text-success' : 'text-error';
         totalPnlEl.textContent = `₹ ${totalM2MPnL.toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
         totalPnlEl.className = `stat-value ${colorClass}`;
-    }
-}
-
-// Load Live/Analyze mode for each account (from OpenAlgo's analyzer status)
-async function loadAccountModes() {
-    const accounts = {{ accounts_json|tojson }};
-    const timestamp = Date.now();
-
-    const fetchPromises = accounts.map(account =>
-        fetch(`/api/accounts/${account.id}/mode?_t=${timestamp}`, { signal: AbortSignal.timeout(10000) })
-            .then(response => response.json())
-            .then(data => ({ account, data, success: true }))
-            .catch(error => ({ account, error, success: false }))
-    );
-
-    const results = await Promise.allSettled(fetchPromises);
-
-    for (const result of results) {
-        if (result.status !== 'fulfilled') continue;
-
-        const { account, data, success } = result.value;
-        const modeEl = document.getElementById(`mode-${account.id}`);
-        if (!modeEl) continue;
-
-        if (success && data.status === 'success' && data.data) {
-            const isAnalyze = !!data.data.analyze_mode;
-            modeEl.textContent = isAnalyze ? 'Analyze' : 'Live';
-            modeEl.className = `badge badge-sm ${isAnalyze ? 'badge-warning' : 'badge-success'}`;
-        } else {
-            modeEl.textContent = '--';
-            modeEl.className = 'badge badge-sm badge-ghost';
-        }
     }
 }
 
@@ -799,12 +778,10 @@ function startPolling() {
     loadStrategyMetrics();
     loadAccountFunds();
     loadStrategyPnL();
-    loadAccountModes();
 
     pollingIntervals.metrics = setInterval(loadStrategyMetrics, 10000);  // 10 seconds
     pollingIntervals.funds = setInterval(loadAccountFunds, 15000);       // 15 seconds (funds + M2M P&L combined)
     pollingIntervals.pnl = setInterval(loadStrategyPnL, 10000);          // 10 seconds
-    pollingIntervals.mode = setInterval(loadAccountModes, 30000);        // 30 seconds (rarely changes)
 }
 
 // Stop polling intervals
@@ -820,10 +797,6 @@ function stopPolling() {
     if (pollingIntervals.pnl) {
         clearInterval(pollingIntervals.pnl);
         pollingIntervals.pnl = null;
-    }
-    if (pollingIntervals.mode) {
-        clearInterval(pollingIntervals.mode);
-        pollingIntervals.mode = null;
     }
 }
 
@@ -1185,7 +1158,6 @@ document.addEventListener('DOMContentLoaded', function() {
     loadStrategyMetrics();
     loadAccountFunds();
     loadStrategyPnL();
-    loadAccountModes();
 
     checkTradingHours();
     pollingIntervals.tradingHoursCheck = setInterval(checkTradingHours, 60000);

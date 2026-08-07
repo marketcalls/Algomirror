@@ -91,6 +91,11 @@ class TradingAccount(db.Model):
     last_positions_data = db.Column(db.JSON)
     last_holdings_data = db.Column(db.JSON)
     last_data_update = db.Column(db.DateTime)
+
+    # Cached analyzer (paper-trading) mode - refreshed on a longer interval
+    # than funds since it rarely changes (see ExtendedOpenAlgoAPI.analyzerstatus)
+    last_analyzer_mode = db.Column(db.Boolean)
+    last_analyzer_check = db.Column(db.DateTime)
     
     # Unique constraint for user and account name
     __table_args__ = (
