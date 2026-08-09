@@ -8,10 +8,21 @@ from app.models import (
 )
 from app.utils.margin_calculator import MarginCalculator
 from app.utils.rate_limiter import api_rate_limit, heavy_rate_limit
+from sqlalchemy.exc import IntegrityError
 from datetime import datetime
+import pytz
 import logging
 
 logger = logging.getLogger(__name__)
+
+IST_TZ = pytz.timezone('Asia/Kolkata')
+
+
+def _format_ist(naive_utc_dt):
+    """Format a naive-UTC datetime as IST, matching refresh_tracker's on-refresh format."""
+    if not naive_utc_dt:
+        return 'Not yet refreshed'
+    return pytz.utc.localize(naive_utc_dt).astimezone(IST_TZ).strftime('%d-%b %I:%M %p IST')
 
 @margin_bp.route('/')
 @login_required
@@ -187,19 +198,10 @@ def qualities():
                 'message': str(e)
             }), 400
 
-    # GET request
-    qualities = TradeQuality.query.filter_by(
-        user_id=current_user.id
-    ).all()
-
-    if not qualities:
-        TradeQuality.get_or_create_defaults(current_user.id)
-        qualities = TradeQuality.query.filter_by(
-            user_id=current_user.id
-        ).all()
-
-    return render_template('margin/qualities.html',
-                         qualities=qualities)
+    # GET request - the standalone qualities page was folded into the
+    # Requirements page's "Trade Quality Settings" editor (same POST endpoint
+    # above), so there's nothing left for a dedicated qualities.html to show.
+    return redirect(url_for('margin.requirements'))
 
 @margin_bp.route('/calculator')
 @login_required
@@ -380,19 +382,34 @@ def tracker():
         tracker = MarginTracker.query.filter_by(account_id=account.id).first()
 
         if not tracker:
-            # Fetch initial margin data
+            # Fetch initial margin data - get_available_margin() itself
+            # creates+commits a MarginTracker row on a successful fetch (via
+            # update_margins()), so re-query rather than assume one still
+            # needs creating here; account_id is unique, so blindly creating
+            # a second row would fail with an IntegrityError.
             available_margin = calculator.get_available_margin(account)
-            tracker = MarginTracker(
-                account_id=account.id,
-                total_available_margin=available_margin,
-                free_margin=available_margin
-            )
-            db.session.add(tracker)
-            db.session.commit()
+            tracker = MarginTracker.query.filter_by(account_id=account.id).first()
+            if not tracker:
+                # Fetch failed outright (e.g. broker unreachable) - nothing
+                # was created above, so create the row ourselves.
+                tracker = MarginTracker(
+                    account_id=account.id,
+                    total_available_margin=available_margin,
+                    free_margin=available_margin
+                )
+                db.session.add(tracker)
+                try:
+                    db.session.commit()
+                except IntegrityError:
+                    # A concurrent request (e.g. two tabs loading this page
+                    # at once) created the row between our check and commit.
+                    db.session.rollback()
+                    tracker = MarginTracker.query.filter_by(account_id=account.id).first()
 
         trackers.append({
             'account': account,
-            'tracker': tracker
+            'tracker': tracker,
+            'last_updated_str': _format_ist(tracker.last_updated)
         })
 
     return render_template('margin/tracker.html',
@@ -404,7 +421,6 @@ def tracker():
 def refresh_tracker(account_id):
     """Refresh margin data for specific account"""
     from app.utils.openalgo_client import ExtendedOpenAlgoAPI
-    import pytz
 
     try:
         account = TradingAccount.query.filter_by(
@@ -431,25 +447,50 @@ def refresh_tracker(account_id):
             # Update cached data
             account.last_funds_data = funds_data
             account.last_data_update = datetime.utcnow()
-            db.session.commit()
 
-            # Convert to IST
-            ist_tz = pytz.timezone('Asia/Kolkata')
-            utc_time = pytz.utc.localize(account.last_data_update)
-            last_updated_ist = utc_time.astimezone(ist_tz)
+            # Persist to the tracker row too, via the same update_margins()
+            # used everywhere else a MarginTracker gets written (e.g.
+            # MarginCalculator.get_available_margin()) - refresh_tracker
+            # previously recomputed its own total_margin definition
+            # (availablecash + utiliseddebits) that disagreed with
+            # update_margins()'s (availablecash alone), so a refresh would
+            # silently change what the number meant. It also only updated an
+            # existing row, so refreshing an account before its first
+            # /margin/tracker visit created the row dropped the fetch.
+            tracker = MarginTracker.query.filter_by(account_id=account.id).first()
+            if not tracker:
+                tracker = MarginTracker(account_id=account.id)
+                try:
+                    # account_id is unique - surface a concurrent create here
+                    # (e.g. two near-simultaneous first refreshes) rather than
+                    # let it fail lower down after update_margins() has
+                    # already mutated this now-orphaned object. Scoped to a
+                    # SAVEPOINT so only this insert rolls back on conflict -
+                    # a plain session-wide rollback would also discard the
+                    # account.last_funds_data/last_data_update assignments
+                    # above, leaving the response's last_updated stale even
+                    # though the margins did refresh.
+                    with db.session.begin_nested():
+                        db.session.add(tracker)
+                        db.session.flush()
+                except IntegrityError:
+                    tracker = MarginTracker.query.filter_by(account_id=account.id).first()
+            tracker.update_margins(funds_data)
+
+            db.session.commit()
 
             return jsonify({
                 'status': 'success',
                 'data': {
-                    'total_margin': float(funds_data.get('availablecash', 0)) + float(funds_data.get('utiliseddebits', 0)),
-                    'used_margin': float(funds_data.get('utiliseddebits', 0)),
-                    'free_margin': float(funds_data.get('availablecash', 0)),
+                    'total_margin': tracker.total_available_margin,
+                    'used_margin': tracker.used_margin,
+                    'free_margin': tracker.free_margin,
                     'available_cash': float(funds_data.get('availablecash', 0)),
                     'collateral': float(funds_data.get('collateral', 0)),
                     'utilized_debits': float(funds_data.get('utiliseddebits', 0)),
                     'm2m_realized': float(funds_data.get('m2mrealized', 0)),
                     'm2m_unrealized': float(funds_data.get('m2munrealized', 0)),
-                    'last_updated': last_updated_ist.strftime('%d-%b %I:%M %p IST')
+                    'last_updated': _format_ist(account.last_data_update)
                 }
             })
         else:

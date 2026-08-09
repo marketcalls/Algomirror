@@ -6,6 +6,7 @@ Handles lot size calculations based on available margin and trade quality
 import logging
 from datetime import datetime, date
 from typing import Dict, Tuple, Optional
+from sqlalchemy.exc import IntegrityError
 from app.models import (
     MarginRequirement, TradeQuality, TradingSettings,
     MarginTracker, TradingAccount, MarketHoliday
@@ -428,14 +429,25 @@ class MarginCalculator:
                 logger.debug(f"[MARGIN DEBUG] Funds data received: {funds_data}")
 
                 # Create or update margin tracker
+                from app import db
                 if not tracker:
                     tracker = MarginTracker(account_id=account.id)
-                    from app import db
-                    db.session.add(tracker)
-                    logger.debug(f"[MARGIN DEBUG] Created new MarginTracker for account {account.id}")
+                    try:
+                        # account_id is unique - a concurrent caller (e.g. the
+                        # margin tracker page loading at the same moment) may
+                        # have already created this account's row. Scoped to
+                        # a SAVEPOINT so only this insert rolls back on
+                        # conflict - a plain session-wide rollback would also
+                        # discard whatever unrelated pending changes the
+                        # caller's transaction already had.
+                        with db.session.begin_nested():
+                            db.session.add(tracker)
+                            db.session.flush()
+                        logger.debug(f"[MARGIN DEBUG] Created new MarginTracker for account {account.id}")
+                    except IntegrityError:
+                        tracker = MarginTracker.query.filter_by(account_id=account.id).first()
 
                 tracker.update_margins(funds_data)
-                from app import db
                 db.session.commit()
 
                 logger.debug(f"[MARGIN DEBUG] Updated tracker - Free margin: ₹{tracker.free_margin:,.2f}, Used margin: ₹{tracker.used_margin:,.2f}")

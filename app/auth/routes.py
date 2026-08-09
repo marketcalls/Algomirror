@@ -181,11 +181,18 @@ def change_password():
             return render_template('auth/change_password.html', form=form)
         
         try:
-            current_user.set_password(form.new_password.data)
-            current_user.updated_at = datetime.utcnow()
+            user = current_user._get_current_object()
+            user.set_password(form.new_password.data)
+            user.updated_at = datetime.utcnow()
             db.session.commit()
-            
-            log_activity('password_change', details={'username': current_user.username})
+
+            # set_password() rotated session_token to invalidate other
+            # sessions/remember-me cookies - re-login so *this* request's
+            # own session picks up the new get_id() instead of getting
+            # logged out by it on the very next request.
+            login_user(user)
+
+            log_activity('password_change', details={'username': user.username})
             flash('Your password has been changed successfully.', 'success')
             return redirect(url_for('main.dashboard'))
             

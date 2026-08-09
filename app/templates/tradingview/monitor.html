@@ -1,0 +1,37 @@
+{% extends "layout.html" %}
+
+{% block title %}Spread Monitor - AlgoMirror{% endblock %}
+
+{% block content %}
+<div class="container mx-auto px-4 py-8">
+    <div class="flex justify-between items-center mb-6">
+        <div>
+            <h1 class="text-3xl font-bold text-base-content">Spread Monitor</h1>
+            <p class="text-base-content/70 mt-1">Supertrend-based spread monitoring for your active strategies</p>
+        </div>
+    </div>
+
+    <div class="card bg-base-100 shadow-xl">
+        <div class="card-body">
+            {% if strategies|length == 0 %}
+            <div class="text-center py-8">
+                <p class="text-base-content/60 mb-4">No active strategies to monitor</p>
+                <a href="{{ url_for('strategy.create_new_strategy') }}" class="link link-primary">Create a strategy</a>
+            </div>
+            {% else %}
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {% for strategy in strategies %}
+                {% set leg_count = strategy.legs.count() %}
+                <a href="{{ url_for('tradingview.strategy_monitor', strategy_id=strategy.id) }}" class="card bg-base-200 shadow-sm hover:shadow-md transition-shadow">
+                    <div class="card-body">
+                        <h3 class="card-title text-base">{{ strategy.name }}</h3>
+                        <p class="text-sm text-base-content/60">{{ leg_count }} leg{% if leg_count != 1 %}s{% endif %}</p>
+                    </div>
+                </a>
+                {% endfor %}
+            </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -1,8 +1,9 @@
 from datetime import datetime
-from flask_login import UserMixin
+from flask_login import UserMixin, login_user
 from werkzeug.security import generate_password_hash, check_password_hash
 from cryptography.fernet import Fernet
 import os
+import secrets
 import pytz
 from dotenv import load_dotenv
 from app import db, login_manager
@@ -43,23 +44,41 @@ class User(UserMixin, db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     last_login = db.Column(db.DateTime)
-    
+
+    # Rotated on every password change so existing sessions/remember-me
+    # cookies (which embed this via get_id()) stop authenticating - without
+    # it a password reset doesn't actually revoke access already granted to
+    # a stolen/forgotten session.
+    session_token = db.Column(db.String(32), default=lambda: secrets.token_hex(16))
+
     # Relationships
     accounts = db.relationship('TradingAccount', backref='user', lazy='dynamic', cascade='all, delete-orphan')
     logs = db.relationship('ActivityLog', backref='user', lazy='dynamic', cascade='all, delete-orphan')
-    
+
     def set_password(self, password):
         self.password_hash = generate_password_hash(password)
-    
+        self.session_token = secrets.token_hex(16)
+
     def check_password(self, password):
         return check_password_hash(self.password_hash, password)
-    
+
     def get_active_accounts(self):
         return self.accounts.filter_by(is_active=True).all()
-    
+
     def get_primary_account(self):
         return self.accounts.filter_by(is_active=True, is_primary=True).first()
-    
+
+    def get_id(self):
+        # Self-heal a missing token (row inserted outside the ORM default,
+        # or this code deployed before the 007/013 migration backfilled it)
+        # rather than embed "None" in the session id - load_user() would
+        # then reject every request for this user, including a fresh login,
+        # since a freshly-issued session carries the same broken id.
+        if not self.session_token:
+            self.session_token = secrets.token_hex(16)
+            db.session.commit()
+        return f'{self.id}:{self.session_token}'
+
     def __repr__(self):
         return f'<User {self.username}>'
 
@@ -785,7 +804,7 @@ class MarginTracker(db.Model):
     __tablename__ = 'margin_trackers'
 
     id = db.Column(db.Integer, primary_key=True)
-    account_id = db.Column(db.Integer, db.ForeignKey('trading_accounts.id'), nullable=False)
+    account_id = db.Column(db.Integer, db.ForeignKey('trading_accounts.id'), nullable=False, unique=True)
 
     # Available margins
     total_available_margin = db.Column(db.Float, default=0)
@@ -809,15 +828,17 @@ class MarginTracker(db.Model):
 
     def update_margins(self, funds_data):
         """Update margins from funds API response"""
+        # OpenAlgo's funds fields are strings (e.g. "availablecash": "320.66") -
+        # cast explicitly so these Float columns don't end up holding text.
         # OpenAlgo returns 'availablecash' which is already net of used margin
-        self.total_available_margin = funds_data.get('availablecash', 0)
+        self.total_available_margin = float(funds_data.get('availablecash', 0) or 0)
         # OpenAlgo returns 'utiliseddebits' for margin currently in use
-        self.used_margin = funds_data.get('utiliseddebits', 0)
+        self.used_margin = float(funds_data.get('utiliseddebits', 0) or 0)
         # availablecash is already the free margin (broker has deducted utiliseddebits)
         self.free_margin = self.total_available_margin
-        self.span_margin = funds_data.get('spanmargin', 0)
-        self.exposure_margin = funds_data.get('exposuremargin', 0)
-        self.option_premium = funds_data.get('optionpremium', 0)
+        self.span_margin = float(funds_data.get('spanmargin', 0) or 0)
+        self.exposure_margin = float(funds_data.get('exposuremargin', 0) or 0)
+        self.option_premium = float(funds_data.get('optionpremium', 0) or 0)
         self.last_updated = datetime.utcnow()
         # Handle None case for update_count
         if self.update_count is None:
@@ -917,4 +938,28 @@ class RiskEvent(db.Model):
 
 @login_manager.user_loader
 def load_user(user_id):
-    return User.query.get(int(user_id))
+    # user_id is "{id}:{session_token}" (see User.get_id()) - a mismatched
+    # token means the password was reset since this session/remember-me
+    # cookie was issued, so treat it as logged out.
+    try:
+        raw_id, token = user_id.split(':', 1)
+        user = User.query.get(int(raw_id))
+    except (ValueError, TypeError):
+        return None
+    if not user:
+        return None
+    if not user.session_token:
+        # Row predates the session_token migration/backfill, or was
+        # inserted outside the ORM default - self-heal via get_id() rather
+        # than reject, or this user could never authenticate again (a
+        # fresh login embeds this same "None" token and hits the same
+        # rejection). get_id() alone only fixes the DB row - the session
+        # cookie still carries the old "id:None" id, so without re-running
+        # login_user() here the next request re-reads that stale cookie and
+        # gets logged out again a moment later.
+        user.get_id()
+        login_user(user)
+        return user
+    if user.session_token != token:
+        return None
+    return user

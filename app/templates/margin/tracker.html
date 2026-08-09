@@ -1,0 +1,109 @@
+{% extends "layout.html" %}
+
+{% block title %}Margin Tracker - AlgoMirror{% endblock %}
+
+{% block content %}
+<div class="container mx-auto px-4 py-8">
+    <div class="flex justify-between items-center mb-6">
+        <h1 class="text-3xl font-bold text-base-content">Margin Tracker</h1>
+        <a href="{{ url_for('margin.dashboard') }}" class="btn btn-outline">Back to Margin Dashboard</a>
+    </div>
+
+    {% if trackers|length == 0 %}
+    <div class="card bg-base-100 shadow-xl">
+        <div class="card-body text-center py-8">
+            <p class="text-base-content/60">No active accounts to track</p>
+        </div>
+    </div>
+    {% else %}
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        {% for entry in trackers %}
+        {% set account = entry.account %}
+        {% set tracker = entry.tracker %}
+        <div class="card bg-base-100 shadow-xl" id="tracker-card-{{ account.id }}">
+            <div class="card-body">
+                <div class="flex justify-between items-start mb-2">
+                    <div>
+                        <h3 class="font-semibold text-lg">{{ account.account_name }}</h3>
+                        <p class="text-sm text-base-content/60">{{ account.broker_name }}</p>
+                    </div>
+                    <button onclick="refreshTracker({{ account.id }}, this)" class="btn btn-ghost btn-sm btn-circle" title="Refresh">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+                        </svg>
+                    </button>
+                </div>
+
+                <div class="space-y-2">
+                    <div class="flex justify-between">
+                        <span class="text-sm">Total Margin:</span>
+                        <span class="font-semibold" id="total-margin-{{ account.id }}">₹{{ "{:,.0f}".format(tracker.total_available_margin or 0) }}</span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span class="text-sm">Used Margin:</span>
+                        <span class="font-semibold" id="used-margin-{{ account.id }}">₹{{ "{:,.0f}".format(tracker.used_margin or 0) }}</span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span class="text-sm">Free Margin:</span>
+                        <span class="font-semibold" id="free-margin-{{ account.id }}">₹{{ "{:,.0f}".format(tracker.free_margin or 0) }}</span>
+                    </div>
+                </div>
+
+                <div class="pt-3 border-t mt-3">
+                    <p class="text-xs text-base-content/50" id="last-updated-{{ account.id }}">
+                        {% if tracker.last_updated %}Last updated: {{ entry.last_updated_str }}{% else %}Not yet refreshed{% endif %}
+                    </p>
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+</div>
+
+<script>
+function showNotification(message, type = 'info') {
+    const alertClass = type === 'error' ? 'alert-error' : type === 'success' ? 'alert-success' : 'alert-info';
+    const alertDiv = document.createElement('div');
+    alertDiv.className = `alert ${alertClass} fixed bottom-4 right-4 z-50 max-w-md`;
+    const span = document.createElement('span');
+    span.textContent = message;
+    alertDiv.appendChild(span);
+    document.body.appendChild(alertDiv);
+    setTimeout(() => alertDiv.remove(), 3000);
+}
+
+async function refreshTracker(accountId, btn) {
+    btn.disabled = true;
+    btn.classList.add('loading');
+
+    try {
+        const response = await fetch(`/margin/refresh-tracker/${accountId}`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': document.querySelector('meta[name="csrf-token"]').content
+            }
+        });
+        const data = await response.json();
+
+        if (data.status === 'success') {
+            const d = data.data;
+            document.getElementById(`total-margin-${accountId}`).textContent = `₹${d.total_margin.toLocaleString('en-IN', {maximumFractionDigits: 0})}`;
+            document.getElementById(`used-margin-${accountId}`).textContent = `₹${d.used_margin.toLocaleString('en-IN', {maximumFractionDigits: 0})}`;
+            document.getElementById(`free-margin-${accountId}`).textContent = `₹${d.free_margin.toLocaleString('en-IN', {maximumFractionDigits: 0})}`;
+            document.getElementById(`last-updated-${accountId}`).textContent = `Last updated: ${d.last_updated}`;
+            showNotification('Margin data refreshed', 'success');
+        } else {
+            showNotification(data.message || 'Failed to refresh margin data', 'error');
+        }
+    } catch (error) {
+        showNotification('Error refreshing margin data', 'error');
+        console.error('Error:', error);
+    } finally {
+        btn.disabled = false;
+        btn.classList.remove('loading');
+    }
+}
+</script>
+{% endblock %}

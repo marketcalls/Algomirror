@@ -144,9 +144,9 @@ def setup_logging(app):
     except Exception as e:
         app.logger.warning(f'Failed to attach JSON error handler: {e}')
 
-def create_app(config_name=None):
+def create_app(config_name=None, start_background_services=True):
     global limiter
-    
+
     if config_name is None:
         config_name = os.environ.get('FLASK_ENV', 'development')
     
@@ -306,101 +306,108 @@ def create_app(config_name=None):
         db.create_all()
         app.logger.debug('Database tables created', extra={'event': 'db_init'})
 
-    # Initialize ping monitor
-    from app.utils.ping_monitor import ping_monitor
-    ping_monitor.init_app(app)
+    # Background services + the live primary-account ping below are skipped
+    # for one-off scripts (e.g. reset_password.py) via start_background_services=False -
+    # they have no business starting pollers/threads or flipping connection_status
+    # in the DB, and running a second copy of these threads alongside the real
+    # gunicorn process risks duplicate polling/races against the same DB and
+    # broker session.
+    if start_background_services:
+        # Initialize ping monitor
+        from app.utils.ping_monitor import ping_monitor
+        ping_monitor.init_app(app)
 
-    # Initialize option chain background service
-    from app.utils.background_service import option_chain_service
-    option_chain_service.start_service()
+        # Initialize option chain background service
+        from app.utils.background_service import option_chain_service
+        option_chain_service.start_service()
 
-    # Initialize order status poller (Phase 2)
-    from app.utils.order_status_poller import order_status_poller
-    order_status_poller.set_flask_app(app)  # Set app reference to avoid creating new app in thread
-    order_status_poller.start()
-    app.logger.debug('Order status poller started', extra={'event': 'poller_init'})
+        # Initialize order status poller (Phase 2)
+        from app.utils.order_status_poller import order_status_poller
+        order_status_poller.set_flask_app(app)  # Set app reference to avoid creating new app in thread
+        order_status_poller.start()
+        app.logger.debug('Order status poller started', extra={'event': 'poller_init'})
 
-    # Recover any pending orders from database (handles app restarts)
-    with app.app_context():
-        recovered = order_status_poller.recover_pending_orders()
-        if recovered > 0:
-            app.logger.debug(f'Recovered {recovered} pending orders to polling queue', extra={'event': 'poller_recovery'})
+        # Recover any pending orders from database (handles app restarts)
+        with app.app_context():
+            recovered = order_status_poller.recover_pending_orders()
+            if recovered > 0:
+                app.logger.debug(f'Recovered {recovered} pending orders to polling queue', extra={'event': 'poller_recovery'})
 
-    # Initialize Supertrend exit monitoring service
-    from app.utils.supertrend_exit_service import supertrend_exit_service
-    supertrend_exit_service.set_flask_app(app)
-    supertrend_exit_service.start_service()
-    app.logger.debug('Supertrend exit monitoring service started', extra={'event': 'supertrend_exit_init'})
+        # Initialize Supertrend exit monitoring service
+        from app.utils.supertrend_exit_service import supertrend_exit_service
+        supertrend_exit_service.set_flask_app(app)
+        supertrend_exit_service.start_service()
+        app.logger.debug('Supertrend exit monitoring service started', extra={'event': 'supertrend_exit_init'})
 
-    # Load existing primary and backup accounts within app context
-    with app.app_context():
-        from app.models import TradingAccount
-        primary = TradingAccount.query.filter_by(
-            is_primary=True,
-            is_active=True
-        ).first()
-        
-        backup_accounts = TradingAccount.query.filter_by(
-            is_active=True,
-            is_primary=False
-        ).order_by(TradingAccount.created_at).all()
-        
-        if primary:
-            app.logger.debug(f'Found primary account: {primary.account_name}')
-            if backup_accounts:
-                app.logger.debug(f'Found {len(backup_accounts)} backup accounts')
+        # Load existing primary and backup accounts within app context
+        with app.app_context():
+            from app.models import TradingAccount
+            primary = TradingAccount.query.filter_by(
+                is_primary=True,
+                is_active=True
+            ).first()
 
-            # Register Flask app with background service
-            option_chain_service.set_flask_app(app)
+            backup_accounts = TradingAccount.query.filter_by(
+                is_active=True,
+                is_primary=False
+            ).order_by(TradingAccount.created_at).all()
 
-            # Set primary and backup accounts
-            option_chain_service.primary_account = primary
-            option_chain_service.backup_accounts = backup_accounts.copy()
+            if primary:
+                app.logger.debug(f'Found primary account: {primary.account_name}')
+                if backup_accounts:
+                    app.logger.debug(f'Found {len(backup_accounts)} backup accounts')
 
-            # Check if within trading hours and trigger option chains
-            if primary.connection_status == 'connected':
-                app.logger.debug(f"Testing authentication for primary account: {primary.account_name}")
-                try:
-                    # Test API connection before starting option chains
-                    from app.utils.openalgo_client import ExtendedOpenAlgoAPI
-                    test_client = ExtendedOpenAlgoAPI(
-                        api_key=primary.get_api_key(),
-                        host=primary.host_url
-                    )
-                    # Quick ping test
-                    app.logger.debug(f"Sending ping to {primary.host_url}")
-                    ping_response = test_client.ping()
-                    app.logger.debug(f"Ping response: {ping_response}")
+                # Register Flask app with background service
+                option_chain_service.set_flask_app(app)
 
-                    if ping_response.get('status') == 'success':
-                        app.logger.debug(f"Authentication successful, starting essential services in background")
-                        # Start position monitor and risk manager (NOT option chains)
-                        # Option chains load on-demand only when user visits the page
-                        import threading
-                        def delayed_start(flask_app, primary_acct):
-                            import time
-                            time.sleep(2)  # Wait for app to fully initialize
-                            try:
-                                with flask_app.app_context():
-                                    option_chain_service.on_primary_account_connected(primary_acct)
-                            except Exception as e:
-                                flask_app.logger.error(f"Error starting services: {e}")
-                        threading.Thread(target=delayed_start, args=(app, primary), daemon=True).start()
-                    else:
-                        # Authentication failed - update connection status
-                        app.logger.warning(f"Primary account {primary.account_name} authentication failed: {ping_response.get('message', 'Unknown error')}")
-                        app.logger.warning(f"Marking {primary.account_name} as disconnected")
+                # Set primary and backup accounts
+                option_chain_service.primary_account = primary
+                option_chain_service.backup_accounts = backup_accounts.copy()
+
+                # Check if within trading hours and trigger option chains
+                if primary.connection_status == 'connected':
+                    app.logger.debug(f"Testing authentication for primary account: {primary.account_name}")
+                    try:
+                        # Test API connection before starting option chains
+                        from app.utils.openalgo_client import ExtendedOpenAlgoAPI
+                        test_client = ExtendedOpenAlgoAPI(
+                            api_key=primary.get_api_key(),
+                            host=primary.host_url
+                        )
+                        # Quick ping test
+                        app.logger.debug(f"Sending ping to {primary.host_url}")
+                        ping_response = test_client.ping()
+                        app.logger.debug(f"Ping response: {ping_response}")
+
+                        if ping_response.get('status') == 'success':
+                            app.logger.debug(f"Authentication successful, starting essential services in background")
+                            # Start position monitor and risk manager (NOT option chains)
+                            # Option chains load on-demand only when user visits the page
+                            import threading
+                            def delayed_start(flask_app, primary_acct):
+                                import time
+                                time.sleep(2)  # Wait for app to fully initialize
+                                try:
+                                    with flask_app.app_context():
+                                        option_chain_service.on_primary_account_connected(primary_acct)
+                                except Exception as e:
+                                    flask_app.logger.error(f"Error starting services: {e}")
+                            threading.Thread(target=delayed_start, args=(app, primary), daemon=True).start()
+                        else:
+                            # Authentication failed - update connection status
+                            app.logger.warning(f"Primary account {primary.account_name} authentication failed: {ping_response.get('message', 'Unknown error')}")
+                            app.logger.warning(f"Marking {primary.account_name} as disconnected")
+                            primary.connection_status = 'disconnected'
+                            db.session.commit()
+                            app.logger.debug(f"Account {primary.account_name} marked as disconnected")
+                    except Exception as e:
+                        app.logger.error(f"Error testing primary account connection: {e}", exc_info=True)
+                        app.logger.warning(f"Marking {primary.account_name} as disconnected due to error")
                         primary.connection_status = 'disconnected'
                         db.session.commit()
-                        app.logger.debug(f"Account {primary.account_name} marked as disconnected")
-                except Exception as e:
-                    app.logger.error(f"Error testing primary account connection: {e}", exc_info=True)
-                    app.logger.warning(f"Marking {primary.account_name} as disconnected due to error")
-                    primary.connection_status = 'disconnected'
-                    db.session.commit()
-            else:
-                app.logger.debug(f"Primary account {primary.account_name} status is '{primary.connection_status}', not starting services")
+                else:
+                    app.logger.debug(f"Primary account {primary.account_name} status is '{primary.connection_status}', not starting services")
 
-    app.logger.debug('Background service initialized (option chains load on-demand)', extra={'event': 'service_init'})
-    
+        app.logger.debug('Background service initialized (option chains load on-demand)', extra={'event': 'service_init'})
+
     return app
