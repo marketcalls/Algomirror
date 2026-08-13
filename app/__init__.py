@@ -229,6 +229,7 @@ def create_app(config_name=None):
     from app.margin import margin_bp
     from app.api import api_bp
     from app.tradingview import tradingview_bp
+    from app.admin import admin_bp
 
     app.register_blueprint(auth_bp, url_prefix='/auth')
     app.register_blueprint(main_bp)
@@ -239,6 +240,7 @@ def create_app(config_name=None):
     app.register_blueprint(margin_bp)  # url_prefix defined in blueprint
     app.register_blueprint(api_bp, url_prefix='/api')
     app.register_blueprint(tradingview_bp)  # url_prefix defined in blueprint (/tradingview)
+    app.register_blueprint(admin_bp)  # url_prefix defined in blueprint (/admin)
 
     # Diagnose blueprint — admin-only debugging UI + APIs at /diagnose
     from app.diagnose import diagnose_bp
@@ -253,6 +255,16 @@ def create_app(config_name=None):
             from app.models import User
             _registration_cache['available'] = (User.query.count() == 0)
         return dict(registration_available=_registration_cache['available'])
+
+    # Context processor for the strategy-engine feature flag (not cached -
+    # admin can toggle this at any time via Admin > Platform Settings)
+    @app.context_processor
+    def inject_strategy_engine_flag():
+        from flask_login import current_user
+        if not current_user.is_authenticated:
+            return dict(strategy_engine_enabled=True)
+        from app.models import AppSettings
+        return dict(strategy_engine_enabled=AppSettings.get().strategy_engine_enabled)
 
     # CSRF error handler - redirects to login with message when session expires
     @app.errorhandler(CSRFError)
@@ -305,32 +317,39 @@ def create_app(config_name=None):
     with app.app_context():
         db.create_all()
         app.logger.debug('Database tables created', extra={'event': 'db_init'})
+        from app.models import AppSettings
+        strategy_engine_enabled = AppSettings.get().strategy_engine_enabled
 
     # Initialize ping monitor
     from app.utils.ping_monitor import ping_monitor
     ping_monitor.init_app(app)
 
-    # Initialize option chain background service
+    # Initialize option chain background service (market hours check, session
+    # cleanup, websocket reconnect - runs regardless of the strategy engine
+    # flag; only the risk manager / position monitor it starts later are gated)
     from app.utils.background_service import option_chain_service
     option_chain_service.start_service()
 
-    # Initialize order status poller (Phase 2)
-    from app.utils.order_status_poller import order_status_poller
-    order_status_poller.set_flask_app(app)  # Set app reference to avoid creating new app in thread
-    order_status_poller.start()
-    app.logger.debug('Order status poller started', extra={'event': 'poller_init'})
+    if strategy_engine_enabled:
+        # Initialize order status poller (Phase 2)
+        from app.utils.order_status_poller import order_status_poller
+        order_status_poller.set_flask_app(app)  # Set app reference to avoid creating new app in thread
+        order_status_poller.start()
+        app.logger.debug('Order status poller started', extra={'event': 'poller_init'})
 
-    # Recover any pending orders from database (handles app restarts)
-    with app.app_context():
-        recovered = order_status_poller.recover_pending_orders()
-        if recovered > 0:
-            app.logger.debug(f'Recovered {recovered} pending orders to polling queue', extra={'event': 'poller_recovery'})
+        # Recover any pending orders from database (handles app restarts)
+        with app.app_context():
+            recovered = order_status_poller.recover_pending_orders()
+            if recovered > 0:
+                app.logger.debug(f'Recovered {recovered} pending orders to polling queue', extra={'event': 'poller_recovery'})
 
-    # Initialize Supertrend exit monitoring service
-    from app.utils.supertrend_exit_service import supertrend_exit_service
-    supertrend_exit_service.set_flask_app(app)
-    supertrend_exit_service.start_service()
-    app.logger.debug('Supertrend exit monitoring service started', extra={'event': 'supertrend_exit_init'})
+        # Initialize Supertrend exit monitoring service
+        from app.utils.supertrend_exit_service import supertrend_exit_service
+        supertrend_exit_service.set_flask_app(app)
+        supertrend_exit_service.start_service()
+        app.logger.debug('Supertrend exit monitoring service started', extra={'event': 'supertrend_exit_init'})
+    else:
+        app.logger.debug('Strategy engine disabled - order poller and supertrend exit service not started', extra={'event': 'strategy_engine_disabled'})
 
     # Load existing primary and backup accounts within app context
     with app.app_context():

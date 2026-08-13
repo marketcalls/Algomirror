@@ -219,6 +219,31 @@ class Holding(db.Model):
     def __repr__(self):
         return f'<Holding {self.symbol} - Qty: {self.quantity}>'
 
+class PositionTag(db.Model):
+    """User-assigned strategy label for a holding, keyed by account + symbol
+    only (no exchange/product, no quantity) - a manual annotation, not
+    derived from order history. See holdings() in app/trading/routes.py for
+    how a stale row (symbol no longer in the account's live holdings) gets
+    deleted automatically rather than lingering forever."""
+    __tablename__ = 'position_tags'
+
+    id = db.Column(db.Integer, primary_key=True)
+    account_id = db.Column(db.Integer, db.ForeignKey('trading_accounts.id'), nullable=False, index=True)
+    symbol = db.Column(db.String(50), nullable=False)
+    strategy = db.Column(db.String(100), nullable=False)
+
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    account = db.relationship('TradingAccount', backref=db.backref('position_tags', cascade='all, delete-orphan'))
+
+    __table_args__ = (
+        db.UniqueConstraint('account_id', 'symbol', name='_account_symbol_tag_uc'),
+    )
+
+    def __repr__(self):
+        return f'<PositionTag {self.symbol} - {self.strategy}>'
+
 class TradingHoursTemplate(db.Model):
     __tablename__ = 'trading_hours_templates'
     
@@ -607,6 +632,33 @@ class TradingSettings(db.Model):
                 db.session.add(setting)
 
         db.session.commit()
+
+class AppSettings(db.Model):
+    """Singleton table for platform-wide feature toggles (admin-controlled).
+
+    AlgoMirror ships as a multi-strategy execution platform, but some
+    deployments only use it to view accounts/positions from strategies run
+    elsewhere (e.g. an external SDK/bot). strategy_engine_enabled lets an
+    admin turn off the strategy execution surface (Strategy Builder, Risk
+    Manager, Supertrend Exit, Order Poller, and the broker-position
+    reconciliation banner) without touching code.
+    """
+    __tablename__ = 'app_settings'
+
+    id = db.Column(db.Integer, primary_key=True)
+    strategy_engine_enabled = db.Column(db.Boolean, default=True, nullable=False)
+    updated_at = db.Column(db.DateTime, default=get_ist_now, onupdate=get_ist_now)
+
+    @staticmethod
+    def get():
+        """Fetch the singleton settings row, creating it with defaults if missing."""
+        settings = AppSettings.query.first()
+        if not settings:
+            settings = AppSettings(strategy_engine_enabled=True)
+            db.session.add(settings)
+            db.session.commit()
+        return settings
+
 
 class MarginRequirement(db.Model):
     __tablename__ = 'margin_requirements'

@@ -6,17 +6,22 @@
 {% block page_title %}Holdings{% endblock %}
 
 {% block content %}
+<datalist id="strategyNamesList">
+    {% for name in strategy_names %}
+    <option value="{{ name }}"></option>
+    {% endfor %}
+</datalist>
 <div class="space-y-6">
     <!-- Header -->
-    <div class="flex justify-between items-center">
+    <div class="flex justify-between items-center flex-wrap gap-3">
         <div>
             <h1 class="text-3xl font-bold">Holdings</h1>
             <p class="text-base-content/70 mt-1">
                 {{ "Showing holdings for selected account" if single_account else "Showing holdings across all accounts" }}
             </p>
         </div>
-        
-        <div class="flex gap-2 items-center">
+
+        <div class="flex gap-2 items-center flex-wrap">
             <!-- Account Filter Dropdown -->
             {% if accounts|length > 1 %}
             <select class="select select-bordered select-sm h-9 min-w-[180px]" onchange="window.location.href = this.value">
@@ -27,6 +32,23 @@
                 </option>
                 {% endfor %}
             </select>
+            {% endif %}
+
+            <button id="holdingsFiltersBtn" onclick="holdingsFiltersModal.showModal()" class="btn btn-outline btn-sm h-9 relative">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" />
+                </svg>
+                Filters
+                <span id="holdingsFiltersDot" class="hidden absolute -top-1 -right-1 w-2.5 h-2.5 bg-error rounded-full"></span>
+            </button>
+
+            {% if not single_account and accounts|length > 1 %}
+            <button id="mergeAccountsBtn" onclick="toggleMergeView()" class="btn btn-outline btn-sm h-9">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a4 4 0 00-3-3.87M9 20H4v-2a4 4 0 013-3.87m6-1.13a4 4 0 10-4-4 4 4 0 004 4z" />
+                </svg>
+                Merge Accounts
+            </button>
             {% endif %}
 
             <button onclick="location.reload()" class="btn btn-primary btn-sm h-9">
@@ -45,30 +67,43 @@
         </div>
     </div>
 
+    <!-- Active Filters Bar -->
+    <div id="holdingsActiveFilters" class="hidden flex-wrap items-center gap-2">
+        <span class="text-sm text-base-content/70">Active Filters:</span>
+        <span id="filterChipT1" class="hidden badge bg-pink-500/10 text-pink-600 border border-pink-500/30">Has T1 Quantity</span>
+        <span id="filterChipPledged" class="hidden badge bg-pink-500/10 text-pink-600 border border-pink-500/30">Has Pledged Quantity</span>
+        <span id="filterChipsStrategy"></span>
+        <span id="filterChipSearch" class="hidden badge bg-pink-500/10 text-pink-600 border border-pink-500/30"></span>
+        <button onclick="clearHoldingsFilters()" class="btn btn-outline btn-error btn-xs">Clear All</button>
+    </div>
+
     {% if holdings_data or statistics %}
     <!-- Portfolio Summary -->
     <div class="stats shadow w-full">
         <div class="stat">
-            <div class="stat-title">Total Holdings</div>
-            <div class="stat-value">{{ holdings_data|length }}</div>
+            <div class="stat-title">Invested</div>
+            <div id="statInvested" class="stat-value text-primary">₹{{ "%.2f"|format(statistics.totalinvvalue) }}</div>
         </div>
-        
+
         <div class="stat">
-            <div class="stat-title">Total Investment</div>
-            <div class="stat-value text-primary">₹{{ "%.2f"|format(statistics.totalinvvalue) }}</div>
+            <div class="stat-title">Current</div>
+            <div id="statCurrent" class="stat-value text-info">₹{{ "%.2f"|format(statistics.totalholdingvalue) }}</div>
         </div>
-        
-        <div class="stat">
-            <div class="stat-title">Current Value</div>
-            <div class="stat-value text-info">₹{{ "%.2f"|format(statistics.totalholdingvalue) }}</div>
+
+        <div class="stat {{ 'hidden' if statistics.totaldaypnl is not defined }}" id="statDayPnlWrap">
+            <div class="stat-title">Day's P&L</div>
+            <div id="statDayPnl" class="stat-value {{ 'text-success' if statistics.totaldaypnl is defined and statistics.totaldaypnl >= 0 else 'text-error' }}">
+                ₹{{ "%.2f"|format(statistics.totaldaypnl) if statistics.totaldaypnl is defined else "0.00" }}
+            </div>
+            <div id="statDayPnlPct" class="stat-desc">{{ "+" if statistics.totaldaypnlpercentage is defined and statistics.totaldaypnlpercentage >= 0 else "" }}{{ "%.2f"|format(statistics.totaldaypnlpercentage) if statistics.totaldaypnlpercentage is defined else "0.00" }}%</div>
         </div>
-        
+
         <div class="stat">
             <div class="stat-title">Total P&L</div>
-            <div class="stat-value {{ 'text-success' if statistics.totalprofitandloss >= 0 else 'text-error' }}">
+            <div id="statTotalPnl" class="stat-value {{ 'text-success' if statistics.totalprofitandloss >= 0 else 'text-error' }}">
                 ₹{{ "%.2f"|format(statistics.totalprofitandloss) }}
             </div>
-            <div class="stat-desc">{{ "%.2f"|format(statistics.totalpnlpercentage) }}%</div>
+            <div id="statTotalPnlPct" class="stat-desc">{{ "+" if statistics.totalpnlpercentage >= 0 else "" }}{{ "%.2f"|format(statistics.totalpnlpercentage) }}%</div>
         </div>
     </div>
 
@@ -76,68 +111,146 @@
     <!-- Holdings Table -->
     <div class="card bg-base-100 shadow-xl">
         <div class="card-body">
-            <h2 class="card-title">Your Holdings</h2>
-            
-            <div class="overflow-x-auto">
+            <div class="flex items-center justify-between flex-wrap gap-3">
+                <h2 class="card-title">
+                    <span id="holdingsCount">{{ holdings_data|length }} stock{{ '' if holdings_data|length == 1 else 's' }}</span>
+                </h2>
+                <div class="relative w-full max-w-xs">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 absolute left-3 top-1/2 -translate-y-1/2 text-base-content/50" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                    </svg>
+                    <input type="text" id="holdingsSearch" placeholder="Search symbol..." class="input input-bordered input-sm w-full pl-9 pr-8" oninput="applyHoldingsFilters()">
+                    <button type="button" id="holdingsSearchClear" onclick="clearHoldingsSearch()" class="hidden absolute right-2.5 top-1/2 -translate-y-1/2 text-base-content/50 hover:text-base-content">
+                        &times;
+                    </button>
+                </div>
+            </div>
+
+            <div class="overflow-x-auto mt-2">
                 <table class="table table-sm">
                     <thead>
                         <tr>
                             {% if not single_account %}
                             <th>Account</th>
                             {% endif %}
-                            <th>Symbol</th>
-                            <th>Exchange</th>
-                            <th>Qty</th>
-                            <th>Avg Price</th>
-                            <th>LTP</th>
-                            <th>Current Value</th>
-                            <th>P&L</th>
-                            <th>P&L %</th>
-                            <th>Day Change</th>
+                            <th class="cursor-pointer select-none" onclick="sortHoldings('symbol')">Symbol <span class="sort-arrow" data-col="symbol"></span></th>
+                            <th class="text-right cursor-pointer select-none" onclick="sortHoldings('qty')">Quantity <span class="sort-arrow" data-col="qty"></span></th>
+                            <th class="text-right cursor-pointer select-none" onclick="sortHoldings('avgprice')">Avg. Price <span class="sort-arrow" data-col="avgprice"></span></th>
+                            <th class="text-right cursor-pointer select-none" onclick="sortHoldings('ltp')">LTP <span class="sort-arrow" data-col="ltp"></span></th>
+                            <th class="text-right cursor-pointer select-none" onclick="sortHoldings('invested')">Invested <span class="sort-arrow" data-col="invested"></span></th>
+                            <th class="text-right cursor-pointer select-none" onclick="sortHoldings('current')">Current <span class="sort-arrow" data-col="current"></span></th>
+                            <th class="text-right cursor-pointer select-none" onclick="sortHoldings('pnl')">P&L <span class="sort-arrow" data-col="pnl"></span></th>
+                            <th class="text-right cursor-pointer select-none" onclick="sortHoldings('pnlpercent')">P&L % <span class="sort-arrow" data-col="pnlpercent"></span></th>
+                            <th class="text-right cursor-pointer select-none" onclick="sortHoldings('daychangepercent')">Day Chg % <span class="sort-arrow" data-col="daychangepercent"></span></th>
+                            <th class="text-right cursor-pointer select-none" onclick="sortHoldings('allocation')">Allocation <span class="sort-arrow" data-col="allocation"></span></th>
                         </tr>
                     </thead>
-                    <tbody>
+                    <tbody id="holdingsTbody">
                         {% for holding in holdings_data %}
-                        <tr class="hover">
+                        {% set t1 = holding.t1_quantity|float if holding.t1_quantity else 0 %}
+                        {% set pledged = holding.pledged_quantity|float if holding.pledged_quantity else 0 %}
+                        <tr class="hover"
+                            data-symbol="{{ holding.symbol|lower }}"
+                            data-has-t1="{{ '1' if t1 > 0 else '0' }}"
+                            data-has-pledged="{{ '1' if pledged > 0 else '0' }}"
+                            data-t1qty="{{ t1 }}"
+                            data-pledgedqty="{{ pledged }}"
+                            data-freeqty="{{ holding.quantity or 0 }}"
+                            data-qty="{{ holding.total_qty }}"
+                            data-avgprice="{{ holding.average_price or 0 }}"
+                            data-ltp="{{ holding.ltp or 0 }}"
+                            data-invested="{{ holding.invested }}"
+                            data-current="{{ holding.current }}"
+                            data-pnl="{{ holding.pnl or 0 }}"
+                            data-pnlpercent="{{ holding.pnlpercent or 0 }}"
+                            data-daychangepercent="{{ holding.day_change_percent if holding.day_change_percent is defined else 0 }}"
+                            data-daypnl="{{ holding.day_pnl_value if holding.day_pnl_value is defined else '' }}"
+                            data-dayprevcloseval="{{ holding.day_prevclose_value if holding.day_prevclose_value is defined else '' }}"
+                            data-allocation="{{ holding.allocation }}"
+                            data-strategy="{{ holding.strategy or '' }}"
+                            data-account-name="{{ holding.account_name }}">
                             {% if not single_account %}
-                            <td>
+                            <td class="account-cell">
                                 <div class="flex items-center gap-2">
                                     {{ account_dot(holding.account_id, holding.account_name + ' · ' + holding.broker) }}
                                     <div>
-                                        <div class="text-xs font-medium">{{ holding.account_name }}</div>
+                                        <div class="text-xs font-medium account-name-text">{{ holding.account_name }}</div>
                                         <div class="text-xs opacity-50">{{ holding.broker }}</div>
                                     </div>
                                 </div>
                             </td>
                             {% endif %}
-                            <td class="font-semibold">{{ holding.symbol }}</td>
-                            <td>{{ holding.exchange }}</td>
-                            <td class="font-mono">{{ holding.quantity }}</td>
-                            <td class="font-mono">₹{{ "%.2f"|format(holding.avgprice|float) if holding.avgprice else "0.00" }}</td>
-                            <td class="font-mono">₹{{ "%.2f"|format(holding.ltp|float) if holding.ltp else "0.00" }}</td>
-                            <td class="font-mono">₹{{ "%.2f"|format((holding.quantity|float * holding.ltp|float)) if holding.ltp else "0.00" }}</td>
-                            <td class="font-mono {{ 'text-success' if holding.pnl|float >= 0 else 'text-error' }}">
+                            <td class="font-semibold symbol-cell">
+                                <div class="flex items-center gap-2">
+                                    <span>{{ holding.symbol }}</span>
+                                    <button type="button"
+                                            class="tag-trigger"
+                                            data-account-id="{{ holding.account_id }}"
+                                            data-symbol="{{ holding.symbol }}"
+                                            data-strategy="{{ holding.strategy or '' }}"
+                                            onclick="openTagModal(this)"
+                                            title="{{ 'Tagged: ' + holding.strategy if holding.strategy else 'Tag this holding with a strategy' }}">
+                                        {% if holding.strategy %}
+                                        <span class="badge badge-sm bg-pink-500/10 text-pink-600 border border-pink-500/30 font-normal">{{ holding.strategy }}</span>
+                                        {% else %}
+                                        <span class="text-xs text-base-content/40 border border-dashed border-base-content/30 rounded-full px-1.5 hover:text-base-content/70 hover:border-base-content/50">+ Tag</span>
+                                        {% endif %}
+                                    </button>
+                                </div>
+                            </td>
+                            <td class="qty-cell font-mono text-right">
+                                <span class="qty-badges">
+                                    {% if t1 > 0 %}<span class="badge badge-sm bg-pink-500/10 text-pink-600 border border-pink-500/30 font-normal mr-1">T1: {{ t1|int }}</span>{% endif %}
+                                    {% if pledged > 0 %}<span class="badge badge-sm bg-pink-500/10 text-pink-600 border border-pink-500/30 font-normal mr-1">P: {{ pledged|int }}</span>{% endif %}
+                                </span>
+                                <span class="qty-value">{{ holding.quantity }}</span>
+                            </td>
+                            <td class="avgprice-cell font-mono text-right">₹{{ "%.2f"|format(holding.average_price|float) if holding.average_price else "0.00" }}</td>
+                            <td class="ltp-cell font-mono text-right">₹{{ "%.2f"|format(holding.ltp|float) if holding.ltp else "0.00" }}</td>
+                            <td class="invested-cell font-mono text-right">₹{{ "%.2f"|format(holding.invested) }}</td>
+                            <td class="current-cell font-mono text-right">₹{{ "%.2f"|format(holding.current) }}</td>
+                            <td class="pnl-cell font-mono text-right {{ 'text-success' if holding.pnl|float >= 0 else 'text-error' }}">
                                 ₹{{ "%.2f"|format(holding.pnl|float) if holding.pnl else "0.00" }}
                             </td>
-                            <td class="{{ 'text-success' if holding.pnlpercent|float >= 0 else 'text-error' }}">
+                            <td class="pnlpercent-cell text-right {{ 'text-success' if holding.pnlpercent|float >= 0 else 'text-error' }}">
                                 {{ "%.2f"|format(holding.pnlpercent|float) if holding.pnlpercent else "0.00" }}%
                             </td>
-                            <td class="{{ 'text-success' if holding.get('close') and holding.get('close')|float > 0 and holding.ltp|float > holding.get('close')|float else 'text-error' if holding.get('close') and holding.get('close')|float > 0 and holding.ltp|float < holding.get('close')|float else '' }}">
-                                {% if holding.get('close') and holding.get('close')|float > 0 %}
-                                    {{ "%.2f"|format(((holding.ltp|float - holding.get('close')|float) / holding.get('close')|float) * 100) }}%
-                                {% else %}
-                                    -
-                                {% endif %}
+                            <td class="daychg-cell text-right {{ 'text-success' if holding.day_change_percent is defined and holding.day_change_percent >= 0 else 'text-error' if holding.day_change_percent is defined else 'text-base-content/50' }}">
+                                {{ "%.2f"|format(holding.day_change_percent) ~ "%" if holding.day_change_percent is defined else "-" }}
                             </td>
+                            <td class="allocation-cell font-mono text-right text-base-content/70">{{ "%.2f"|format(holding.allocation) }}%</td>
                         </tr>
                         {% endfor %}
                     </tbody>
+                    <tfoot>
+                        <tr class="font-bold bg-base-200">
+                            <td colspan="{{ 3 if not single_account else 2 }}" class="text-right">Total:</td>
+                            <td></td>
+                            <td></td>
+                            <td id="footInvested" class="font-mono text-right">₹{{ "%.2f"|format(statistics.totalinvvalue) }}</td>
+                            <td id="footCurrent" class="font-mono text-right">₹{{ "%.2f"|format(statistics.totalholdingvalue) }}</td>
+                            <td id="footPnl" class="font-mono text-right {{ 'text-success' if statistics.totalprofitandloss >= 0 else 'text-error' }}">
+                                ₹{{ "%.2f"|format(statistics.totalprofitandloss) }}
+                            </td>
+                            <td id="footPnlPct" class="text-right {{ 'text-success' if statistics.totalpnlpercentage >= 0 else 'text-error' }}">
+                                {{ "%.2f"|format(statistics.totalpnlpercentage) }}%
+                            </td>
+                            <td id="footDayPnlPct" class="text-right {{ 'text-success' if statistics.totaldaypnlpercentage is defined and statistics.totaldaypnlpercentage >= 0 else 'text-error' if statistics.totaldaypnlpercentage is defined else 'text-base-content/50' }}">
+                                {{ "%.2f"|format(statistics.totaldaypnlpercentage) ~ "%" if statistics.totaldaypnlpercentage is defined else "-" }}
+                            </td>
+                            <td class="font-mono text-right">100.00%</td>
+                        </tr>
+                    </tfoot>
                 </table>
+            </div>
+
+            <div id="holdingsNoMatch" class="hidden text-center py-12 text-base-content/60">
+                No holdings match your filters. Try a different search or clear the filters.
             </div>
         </div>
     </div>
     {% endif %}
-    
+
     {% else %}
     <!-- No Holdings -->
     <div class="card bg-base-100 shadow-xl">
@@ -168,7 +281,314 @@
     {% endif %}
 </div>
 
+<!-- Filters Dialog -->
+<dialog id="holdingsFiltersModal" class="modal">
+    <div class="modal-box max-w-md">
+        <h3 class="font-bold text-lg mb-1">Holdings Filters</h3>
+        <p class="text-sm text-base-content/60 mb-4">Configure filters and how portfolio metrics are calculated</p>
+
+        <div class="space-y-2 mb-5">
+            <label class="text-xs font-semibold uppercase tracking-wider text-base-content/60">Filters</label>
+            <div class="flex flex-wrap gap-2">
+                <button type="button" id="filterBtnT1" onclick="toggleHoldingsFilter('hasT1')" class="btn btn-sm btn-outline rounded-full">Has T1 Quantity</button>
+                <button type="button" id="filterBtnPledged" onclick="toggleHoldingsFilter('hasPledged')" class="btn btn-sm btn-outline rounded-full">Has Pledged Quantity</button>
+            </div>
+            <p class="text-xs text-base-content/50">Selecting both shows holdings matching either.</p>
+        </div>
+
+        {% if strategy_names %}
+        <div class="divider my-1"></div>
+
+        <div class="space-y-2 mb-5">
+            <label class="text-xs font-semibold uppercase tracking-wider text-base-content/60">Strategy</label>
+            <div id="strategyFilterBtns" class="flex flex-wrap gap-2">
+                {% for name in strategy_names %}
+                <button type="button" class="btn btn-sm btn-outline rounded-full" onclick="toggleStrategyFilter('{{ name }}', this)">{{ name }}</button>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+
+        <div class="divider my-1"></div>
+
+        <div class="space-y-2">
+            <label class="text-xs font-semibold uppercase tracking-wider text-base-content/60">Allocation Basis</label>
+            <div class="flex flex-wrap gap-2">
+                <button type="button" id="allocBtnCurrent" onclick="setAllocationBasis('current')" class="btn btn-sm rounded-full">Current Value</button>
+                <button type="button" id="allocBtnInvested" onclick="setAllocationBasis('invested')" class="btn btn-sm btn-outline rounded-full">Invested Value</button>
+            </div>
+            <p id="allocationBasisHint" class="text-xs text-base-content/50">Weight by market value today (qty × LTP).</p>
+        </div>
+
+        <div class="modal-action">
+            <button type="button" class="btn btn-ghost btn-sm" onclick="clearHoldingsFilters()">Clear All</button>
+            <button type="button" class="btn btn-primary btn-sm" onclick="holdingsFiltersModal.close()">Done</button>
+        </div>
+    </div>
+    <form method="dialog" class="modal-backdrop">
+        <button>close</button>
+    </form>
+</dialog>
+
+<!-- Tag Dialog - reused for every row; also the future home for other
+     per-holding info the popup grows to show. -->
+<dialog id="tagModal" class="modal">
+    <div class="modal-box max-w-sm">
+        <h3 class="font-bold text-lg mb-1">Tag <span id="tagModalSymbol" class="font-mono"></span></h3>
+        <p class="text-sm text-base-content/60 mb-4">Assign a strategy to this holding.</p>
+        <input type="text" id="tagModalInput" list="strategyNamesList" class="input input-bordered w-full" placeholder="Strategy name...">
+        <div class="modal-action">
+            <button type="button" id="tagModalRemoveBtn" class="btn btn-ghost btn-sm text-error mr-auto hidden" onclick="removeTagFromModal()">Remove Tag</button>
+            <button type="button" class="btn btn-ghost btn-sm" onclick="tagModal.close()">Cancel</button>
+            <button type="button" class="btn btn-primary btn-sm" onclick="saveTagFromModal()">Save</button>
+        </div>
+    </div>
+    <form method="dialog" class="modal-backdrop">
+        <button>close</button>
+    </form>
+</dialog>
+
 <script>
+const HOLDINGS_STORAGE_KEY = 'algomirror_holdings_prefs';
+
+let holdingsFilters = { hasT1: false, hasPledged: false, strategy: [] };
+let mergeViewOn = false;
+let allocationBasis = 'current';
+let holdingsSort = { col: null, dir: 'asc' };
+
+function loadHoldingsPrefs() {
+    try {
+        const saved = JSON.parse(localStorage.getItem(HOLDINGS_STORAGE_KEY) || '{}');
+        if (saved.filters) {
+            holdingsFilters.hasT1 = !!saved.filters.hasT1;
+            holdingsFilters.hasPledged = !!saved.filters.hasPledged;
+            holdingsFilters.strategy = saved.filters.strategy || [];
+        }
+        if (saved.allocationBasis === 'current' || saved.allocationBasis === 'invested') {
+            allocationBasis = saved.allocationBasis;
+        }
+    } catch (e) { /* ignore malformed prefs */ }
+}
+
+function saveHoldingsPrefs() {
+    localStorage.setItem(HOLDINGS_STORAGE_KEY, JSON.stringify({ filters: holdingsFilters, allocationBasis }));
+}
+
+function toggleHoldingsFilter(key) {
+    holdingsFilters[key] = !holdingsFilters[key];
+    saveHoldingsPrefs();
+    syncFilterButtons();
+    applyHoldingsFilters();
+}
+
+function toggleStrategyFilter(name, btn) {
+    const idx = holdingsFilters.strategy.indexOf(name);
+    if (idx > -1) holdingsFilters.strategy.splice(idx, 1); else holdingsFilters.strategy.push(name);
+    saveHoldingsPrefs();
+    syncFilterButtons();
+    applyHoldingsFilters();
+}
+
+function setAllocationBasis(basis) {
+    allocationBasis = basis;
+    saveHoldingsPrefs();
+    syncFilterButtons();
+    recomputeAllocationColumn();
+}
+
+function syncFilterButtons() {
+    const t1Btn = document.getElementById('filterBtnT1');
+    const pledgedBtn = document.getElementById('filterBtnPledged');
+    t1Btn.classList.toggle('btn-primary', holdingsFilters.hasT1);
+    t1Btn.classList.toggle('btn-outline', !holdingsFilters.hasT1);
+    pledgedBtn.classList.toggle('btn-primary', holdingsFilters.hasPledged);
+    pledgedBtn.classList.toggle('btn-outline', !holdingsFilters.hasPledged);
+
+    const curBtn = document.getElementById('allocBtnCurrent');
+    const invBtn = document.getElementById('allocBtnInvested');
+    curBtn.classList.toggle('btn-primary', allocationBasis === 'current');
+    curBtn.classList.toggle('btn-outline', allocationBasis !== 'current');
+    invBtn.classList.toggle('btn-primary', allocationBasis === 'invested');
+    invBtn.classList.toggle('btn-outline', allocationBasis !== 'invested');
+    document.getElementById('allocationBasisHint').textContent = allocationBasis === 'current'
+        ? 'Weight by market value today (qty × LTP).'
+        : 'Weight by cost basis (qty × avg. price).';
+
+    document.querySelectorAll('#strategyFilterBtns button').forEach(btn => {
+        const active = holdingsFilters.strategy.includes(btn.textContent.trim());
+        btn.classList.toggle('btn-primary', active);
+        btn.classList.toggle('btn-outline', !active);
+    });
+
+    const hasActive = holdingsFilters.hasT1 || holdingsFilters.hasPledged || holdingsFilters.strategy.length > 0;
+    document.getElementById('holdingsFiltersDot').classList.toggle('hidden', !hasActive && !currentSearchQuery());
+
+    document.getElementById('filterChipT1').classList.toggle('hidden', !holdingsFilters.hasT1);
+    document.getElementById('filterChipPledged').classList.toggle('hidden', !holdingsFilters.hasPledged);
+    document.getElementById('filterChipsStrategy').innerHTML = holdingsFilters.strategy.map(v =>
+        `<span class="badge bg-pink-500/10 text-pink-600 border border-pink-500/30 mr-1">${v}</span>`
+    ).join('');
+}
+
+// Allocation is always weighted against whatever's currently visible (post
+// filter/merge), not the whole portfolio - a filtered/merged view should
+// read as "100% of what I'm looking at", not "a sliver of everything".
+function recomputeAllocationColumn() {
+    const key = allocationBasis === 'invested' ? 'invested' : 'current';
+    const rows = Array.from(document.querySelectorAll('#holdingsTbody tr:not(.hidden)'));
+    const total = rows.reduce((sum, row) => sum + (parseFloat(row.dataset[key]) || 0), 0);
+    rows.forEach(row => {
+        const value = parseFloat(row.dataset[key]) || 0;
+        const pct = total > 0 ? (value / total) * 100 : 0;
+        row.dataset.allocation = pct;
+        const cell = row.querySelector('.allocation-cell');
+        if (cell) cell.textContent = pct.toFixed(2) + '%';
+    });
+    if (holdingsSort.col === 'allocation') sortHoldings('allocation', true);
+}
+
+// Recomputes the summary stat cards and table footer totals against
+// whatever's currently visible (post filter/merge) rather than leaving them
+// stuck at the unfiltered, all-holdings totals rendered at page load.
+function recomputeSummaryStats() {
+    const rows = Array.from(document.querySelectorAll('#holdingsTbody tr:not(.hidden)'));
+    let invested = 0, current = 0, pnl = 0, dayPnl = 0, dayPrevCloseValue = 0;
+    let hasDayData = false;
+    rows.forEach(row => {
+        invested += parseFloat(row.dataset.invested) || 0;
+        current += parseFloat(row.dataset.current) || 0;
+        pnl += parseFloat(row.dataset.pnl) || 0;
+        if (row.dataset.daypnl !== undefined && row.dataset.daypnl !== '') {
+            hasDayData = true;
+            dayPnl += parseFloat(row.dataset.daypnl) || 0;
+            dayPrevCloseValue += parseFloat(row.dataset.dayprevcloseval) || 0;
+        }
+    });
+    const pnlPct = invested !== 0 ? (pnl / invested * 100) : 0;
+
+    const setText = (id, text) => { const el = document.getElementById(id); if (el) el.textContent = text; };
+    const setSign = (id, value) => {
+        const el = document.getElementById(id);
+        if (el) { el.classList.toggle('text-success', value >= 0); el.classList.toggle('text-error', value < 0); }
+    };
+
+    setText('statInvested', '₹' + invested.toFixed(2));
+    setText('footInvested', '₹' + invested.toFixed(2));
+    setText('statCurrent', '₹' + current.toFixed(2));
+    setText('footCurrent', '₹' + current.toFixed(2));
+    setText('statTotalPnl', '₹' + pnl.toFixed(2));
+    setText('footPnl', '₹' + pnl.toFixed(2));
+    setSign('statTotalPnl', pnl);
+    setSign('footPnl', pnl);
+    setText('statTotalPnlPct', (pnlPct >= 0 ? '+' : '') + pnlPct.toFixed(2) + '%');
+    setText('footPnlPct', pnlPct.toFixed(2) + '%');
+    setSign('statTotalPnlPct', pnlPct);
+    setSign('footPnlPct', pnlPct);
+
+    const dayWrap = document.getElementById('statDayPnlWrap');
+    if (dayWrap && hasDayData) {
+        dayWrap.classList.remove('hidden');
+        const dayPct = dayPrevCloseValue !== 0 ? (dayPnl / dayPrevCloseValue * 100) : 0;
+        setText('statDayPnl', '₹' + dayPnl.toFixed(2));
+        setSign('statDayPnl', dayPnl);
+        setText('statDayPnlPct', (dayPct >= 0 ? '+' : '') + dayPct.toFixed(2) + '%');
+        setText('footDayPnlPct', dayPct.toFixed(2) + '%');
+        setSign('footDayPnlPct', dayPct);
+    } else if (dayWrap) {
+        dayWrap.classList.add('hidden');
+    }
+}
+
+function currentSearchQuery() {
+    return document.getElementById('holdingsSearch').value.trim().toLowerCase();
+}
+
+function clearHoldingsSearch() {
+    document.getElementById('holdingsSearch').value = '';
+    applyHoldingsFilters();
+}
+
+function clearHoldingsFilters() {
+    holdingsFilters = { hasT1: false, hasPledged: false, strategy: [] };
+    document.getElementById('holdingsSearch').value = '';
+    saveHoldingsPrefs();
+    syncFilterButtons();
+    applyHoldingsFilters();
+}
+
+function applyHoldingsFilters() {
+    // Strip any merged-view rows left over from before this filter change -
+    // otherwise they'd be counted alongside real rows in the pass below,
+    // then only get cleaned up after renderMergedView() runs at the end.
+    if (mergeViewOn) clearMergedView();
+
+    const query = currentSearchQuery();
+    document.getElementById('holdingsSearchClear').classList.toggle('hidden', query === '');
+    document.getElementById('filterChipSearch').classList.toggle('hidden', query === '');
+    document.getElementById('filterChipSearch').textContent = 'Search: ' + query;
+
+    const rows = document.querySelectorAll('#holdingsTbody tr');
+    let visible = 0;
+    rows.forEach(row => {
+        let show = true;
+        if (query && !row.dataset.symbol.includes(query)) show = false;
+        if (holdingsFilters.hasT1 || holdingsFilters.hasPledged) {
+            const matchesT1 = holdingsFilters.hasT1 && row.dataset.hasT1 === '1';
+            const matchesPledged = holdingsFilters.hasPledged && row.dataset.hasPledged === '1';
+            if (!matchesT1 && !matchesPledged) show = false;
+        }
+        if (holdingsFilters.strategy.length && !holdingsFilters.strategy.includes(row.dataset.strategy)) show = false;
+        row.classList.toggle('hidden', !show);
+        if (show) visible++;
+    });
+
+    const total = rows.length;
+    const countEl = document.getElementById('holdingsCount');
+    const hasActive = holdingsFilters.hasT1 || holdingsFilters.hasPledged || holdingsFilters.strategy.length > 0 || query !== '';
+    countEl.textContent = hasActive
+        ? `${visible} of ${total} stock${total === 1 ? '' : 's'}`
+        : `${total} stock${total === 1 ? '' : 's'}`;
+
+    document.getElementById('holdingsActiveFilters').classList.toggle('hidden', !hasActive);
+    document.getElementById('holdingsActiveFilters').classList.toggle('flex', hasActive);
+    document.getElementById('holdingsNoMatch').classList.toggle('hidden', visible !== 0 || total === 0);
+    document.getElementById('holdingsFiltersDot').classList.toggle('hidden', !(holdingsFilters.hasT1 || holdingsFilters.hasPledged || holdingsFilters.strategy.length > 0));
+
+    if (mergeViewOn) renderMergedView();
+    recomputeSummaryStats();
+    recomputeAllocationColumn();
+}
+
+function sortHoldings(col, silent) {
+    if (!silent) {
+        holdingsSort.dir = (holdingsSort.col === col && holdingsSort.dir === 'asc') ? 'desc' : 'asc';
+        holdingsSort.col = col;
+    }
+    const tbody = document.getElementById('holdingsTbody');
+    const rows = Array.from(tbody.querySelectorAll('tr'));
+    const dir = holdingsSort.dir === 'asc' ? 1 : -1;
+
+    rows.sort((a, b) => {
+        if (col === 'symbol') {
+            return dir * a.dataset.symbol.localeCompare(b.dataset.symbol);
+        }
+        const aVal = parseFloat(a.dataset[col]) || 0;
+        const bVal = parseFloat(b.dataset[col]) || 0;
+        return dir * (aVal - bVal);
+    });
+    rows.forEach(row => tbody.appendChild(row));
+
+    document.querySelectorAll('.sort-arrow').forEach(el => el.textContent = '');
+    const arrow = document.querySelector(`.sort-arrow[data-col="${col}"]`);
+    if (arrow) arrow.textContent = holdingsSort.dir === 'asc' ? '▲' : '▼';
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    loadHoldingsPrefs();
+    syncFilterButtons();
+    applyHoldingsFilters();
+});
+
 function exportToCSV(type) {
     // Get the table
     const table = document.querySelector('table');
@@ -177,9 +597,9 @@ function exportToCSV(type) {
         return;
     }
 
-    // Convert table to CSV
+    // Convert table to CSV (skip rows hidden by filters)
     let csv = [];
-    const rows = table.querySelectorAll('tr');
+    const rows = table.querySelectorAll('tr:not(.hidden)');
 
     for (let i = 0; i < rows.length; i++) {
         const row = [];
@@ -187,7 +607,7 @@ function exportToCSV(type) {
 
         for (let j = 0; j < cols.length; j++) {
             // Get text content and clean it
-            let data = cols[j].innerText.replace(/(\r\n|\n|\r)/gm, '').trim();
+            let data = cols[j].innerText.replace(/(\r\n|\n|\r)/gm, ' ').trim();
             // Remove rupee symbol
             data = data.replace(/₹/g, '');
             // Escape quotes
@@ -216,6 +636,209 @@ function exportToCSV(type) {
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+}
+
+let tagModalAccountId = null;
+let tagModalSymbol = null;
+
+// Opens the shared tag dialog for one row's button (data attributes carry
+// which account/symbol it's for - see the .tag-trigger button in the
+// Symbol cell). Not wired up for merged rows (see renderMergedView) since a
+// merged row spans more than one account and has no single target to tag.
+function openTagModal(btn) {
+    tagModalAccountId = btn.dataset.accountId;
+    tagModalSymbol = btn.dataset.symbol;
+    document.getElementById('tagModalSymbol').textContent = tagModalSymbol;
+    document.getElementById('tagModalInput').value = btn.dataset.strategy || '';
+    document.getElementById('tagModalRemoveBtn').classList.toggle('hidden', !btn.dataset.strategy);
+    tagModal.showModal();
+}
+
+function saveTagFromModal() {
+    const value = document.getElementById('tagModalInput').value.trim();
+    if (!value) { removeTagFromModal(); return; }
+    sendTagRequest("{{ url_for('trading.tag_holding') }}", { account_id: tagModalAccountId, symbol: tagModalSymbol, strategy: value });
+}
+
+function removeTagFromModal() {
+    sendTagRequest("{{ url_for('trading.untag_holding') }}", { account_id: tagModalAccountId, symbol: tagModalSymbol });
+}
+
+async function sendTagRequest(url, body) {
+    try {
+        const resp = await fetchWithCSRF(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+        });
+        const data = await resp.json();
+        if (data.status !== 'success') {
+            alert(data.message || 'Failed to update tag');
+            return;
+        }
+        // Full reload rather than a partial DOM patch - the filter chip list
+        // and datalist suggestions are server-rendered from strategy_names,
+        // so a new/removed tag needs a fresh render to stay consistent.
+        location.reload();
+    } catch (e) {
+        alert('Failed to update tag');
+    }
+}
+
+function toggleMergeView() {
+    mergeViewOn = !mergeViewOn;
+    const btn = document.getElementById('mergeAccountsBtn');
+    if (btn) {
+        btn.classList.toggle('btn-primary', mergeViewOn);
+        btn.classList.toggle('btn-outline', !mergeViewOn);
+    }
+    // Route through applyHoldingsFilters() either way (not renderMergedView()
+    // directly) so the summary stats/allocation/footer recompute runs
+    // consistently regardless of whether merge was just turned on or off.
+    if (!mergeViewOn) clearMergedView();
+    applyHoldingsFilters();
+}
+
+function clearMergedView() {
+    document.querySelectorAll('#holdingsTbody tr.merged-row').forEach(row => row.remove());
+    document.querySelectorAll('#holdingsTbody tr.merge-hidden').forEach(row => {
+        row.classList.remove('merge-hidden', 'hidden');
+    });
+}
+
+// Client-side only - combines rows for the same symbol across accounts into
+// one synthetic row (summed qty, quantity-weighted avg price, summed P&L),
+// listing the combined accounts in the Account cell instead of hiding the
+// column. Nothing is persisted; toggling off just restores the original rows.
+function renderMergedView() {
+    clearMergedView();
+    const tbody = document.getElementById('holdingsTbody');
+    const visibleRows = Array.from(tbody.querySelectorAll('tr:not(.hidden):not(.merged-row)'));
+
+    const groups = {};
+    visibleRows.forEach(row => {
+        (groups[row.dataset.symbol] = groups[row.dataset.symbol] || []).push(row);
+    });
+
+    Object.values(groups).forEach(group => {
+        if (group.length < 2) return;
+
+        let qty = 0, weightedAvgNum = 0, invested = 0, current = 0, pnl = 0;
+        let freeQty = 0, t1Qty = 0, pledgedQty = 0;
+        let dayPnl = 0, dayPrevCloseVal = 0, hasDayData = false, dayChangePercent = null;
+        const accountNames = [];
+        const strategies = new Set();
+        group.forEach(row => {
+            const q = parseFloat(row.dataset.qty) || 0;
+            qty += q;
+            weightedAvgNum += q * (parseFloat(row.dataset.avgprice) || 0);
+            invested += parseFloat(row.dataset.invested) || 0;
+            current += parseFloat(row.dataset.current) || 0;
+            pnl += parseFloat(row.dataset.pnl) || 0;
+            freeQty += parseFloat(row.dataset.freeqty) || 0;
+            t1Qty += parseFloat(row.dataset.t1qty) || 0;
+            pledgedQty += parseFloat(row.dataset.pledgedqty) || 0;
+            if (row.dataset.daypnl !== undefined && row.dataset.daypnl !== '') {
+                hasDayData = true;
+                dayPnl += parseFloat(row.dataset.daypnl) || 0;
+                dayPrevCloseVal += parseFloat(row.dataset.dayprevcloseval) || 0;
+                // Day Chg% (ltp vs. prev close) is a market-level figure, not
+                // account-specific - every account holding this symbol should
+                // report (almost) the same value, so any one of them is a
+                // valid representative rather than something to blank out.
+                if (dayChangePercent === null) dayChangePercent = parseFloat(row.dataset.daychangepercent) || 0;
+            }
+            if (row.dataset.accountName) accountNames.push(row.dataset.accountName);
+            if (row.dataset.strategy) strategies.add(row.dataset.strategy);
+            row.classList.add('hidden', 'merge-hidden');
+        });
+        const avgPrice = qty !== 0 ? weightedAvgNum / qty : 0;
+        const pnlPercent = invested !== 0 ? (pnl / invested * 100) : 0;
+
+        const merged = group[0].cloneNode(true);
+        merged.classList.remove('hidden', 'merge-hidden');
+        merged.classList.add('merged-row');
+        merged.dataset.qty = qty;
+        merged.dataset.avgprice = avgPrice;
+        merged.dataset.invested = invested;
+        merged.dataset.current = current;
+        merged.dataset.pnl = pnl;
+        merged.dataset.pnlpercent = pnlPercent;
+        if (hasDayData) {
+            merged.dataset.daypnl = dayPnl;
+            merged.dataset.dayprevcloseval = dayPrevCloseVal;
+            merged.dataset.daychangepercent = dayChangePercent;
+        } else {
+            delete merged.dataset.daypnl;
+            delete merged.dataset.dayprevcloseval;
+            merged.dataset.daychangepercent = 0;
+        }
+
+        const acctCell = merged.querySelector('.account-cell');
+        if (acctCell) acctCell.innerHTML = `<div class="text-xs font-medium">${accountNames.join(', ')}</div>`;
+
+        // A merged row spans more than one account, so there's no single
+        // (account, symbol) left to tag - replace the clickable trigger with
+        // plain badges for whichever strategies are present across the group.
+        const tagTrigger = merged.querySelector('.tag-trigger');
+        if (tagTrigger) {
+            const replacement = document.createElement('span');
+            replacement.className = 'flex items-center gap-1 flex-wrap';
+            replacement.innerHTML = strategies.size
+                ? Array.from(strategies).map(s => `<span class="badge badge-sm bg-pink-500/10 text-pink-600 border border-pink-500/30 font-normal">${s}</span>`).join('')
+                : '<span class="text-xs text-base-content/30">-</span>';
+            tagTrigger.replaceWith(replacement);
+        }
+
+        // Free/T1/pledged quantities each sum independently rather than
+        // collapsing into one blended number - a stock pledged 100 on one
+        // account and 62 on another should show "P: 162", not silently fold
+        // into the plain settled-quantity figure.
+        const qtyBadges = merged.querySelector('.qty-badges');
+        if (qtyBadges) {
+            let html = '';
+            if (t1Qty > 0) html += `<span class="badge badge-sm bg-pink-500/10 text-pink-600 border border-pink-500/30 font-normal mr-1">T1: ${t1Qty}</span>`;
+            if (pledgedQty > 0) html += `<span class="badge badge-sm bg-pink-500/10 text-pink-600 border border-pink-500/30 font-normal mr-1">P: ${pledgedQty}</span>`;
+            qtyBadges.innerHTML = html;
+        }
+        const qtyValue = merged.querySelector('.qty-value');
+        if (qtyValue) qtyValue.textContent = freeQty;
+
+        const avgCell = merged.querySelector('.avgprice-cell');
+        if (avgCell) avgCell.textContent = '₹' + avgPrice.toFixed(2);
+        const investedCell = merged.querySelector('.invested-cell');
+        if (investedCell) investedCell.textContent = '₹' + invested.toFixed(2);
+        const currentCell = merged.querySelector('.current-cell');
+        if (currentCell) currentCell.textContent = '₹' + current.toFixed(2);
+        const pnlCell = merged.querySelector('.pnl-cell');
+        if (pnlCell) {
+            pnlCell.textContent = '₹' + pnl.toFixed(2);
+            pnlCell.classList.toggle('text-success', pnl >= 0);
+            pnlCell.classList.toggle('text-error', pnl < 0);
+        }
+        const pnlPercentCell = merged.querySelector('.pnlpercent-cell');
+        if (pnlPercentCell) {
+            pnlPercentCell.textContent = pnlPercent.toFixed(2) + '%';
+            pnlPercentCell.classList.toggle('text-success', pnlPercent >= 0);
+            pnlPercentCell.classList.toggle('text-error', pnlPercent < 0);
+        }
+        // LTP is left as-is (group[0]'s value) - same symbol quotes the same live price on every account.
+        const daychgCell = merged.querySelector('.daychg-cell');
+        if (daychgCell) {
+            if (hasDayData) {
+                daychgCell.textContent = dayChangePercent.toFixed(2) + '%';
+                daychgCell.classList.toggle('text-success', dayChangePercent >= 0);
+                daychgCell.classList.toggle('text-error', dayChangePercent < 0);
+                daychgCell.classList.remove('text-base-content/50');
+            } else {
+                daychgCell.textContent = '-';
+                daychgCell.classList.remove('text-success', 'text-error');
+                daychgCell.classList.add('text-base-content/50');
+            }
+        }
+
+        group[group.length - 1].after(merged);
+    });
 }
 </script>
 {% endblock %}

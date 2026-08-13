@@ -6,7 +6,7 @@ from flask import render_template, redirect, url_for, flash, request, current_ap
 from flask_login import login_required, current_user
 from app.accounts import accounts_bp
 from app.accounts.forms import AddAccountForm, EditAccountForm
-from app.models import TradingAccount, ActivityLog, StrategyExecution
+from app.models import TradingAccount, ActivityLog, StrategyExecution, AppSettings
 from app import db
 from app.utils.openalgo_client import ExtendedOpenAlgoAPI
 from app.utils.freeze_quantity_handler import place_order_with_freeze_check
@@ -737,6 +737,9 @@ def reconcile_positions():
     strategies, so equity/commodity/currency positions held elsewhere are
     intentionally ignored to avoid false warnings.
     """
+    if not AppSettings.get().strategy_engine_enabled:
+        return jsonify({'status': 'success', 'orphan_count': 0, 'accounts': []})
+
     RECONCILE_EXCHANGES = {'NFO', 'BFO'}
 
     accounts = TradingAccount.query.filter_by(
@@ -827,6 +830,9 @@ def close_orphan_position():
     otherwise. After placing, the positionbook is re-read to verify the symbol
     is flat.
     """
+    if not AppSettings.get().strategy_engine_enabled:
+        return jsonify({'status': 'error', 'message': 'Strategy engine is disabled - orphan position reconciliation is not available'})
+
     CLOSE_EXCHANGES = {'NFO', 'BFO'}
 
     data = request.get_json(silent=True) or {}
@@ -975,6 +981,9 @@ def close_all_orphan_positions():
     regular placeorder otherwise. Accounts are processed in parallel and every
     account is re-verified afterwards to report what is actually flat.
     """
+    if not AppSettings.get().strategy_engine_enabled:
+        return jsonify({'status': 'error', 'message': 'Strategy engine is disabled - orphan position reconciliation is not available'})
+
     CLOSE_EXCHANGES = {'NFO', 'BFO'}
 
     accounts = TradingAccount.query.filter_by(

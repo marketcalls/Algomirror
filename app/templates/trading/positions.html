@@ -8,15 +8,15 @@
 {% block content %}
 <div class="space-y-6">
     <!-- Header -->
-    <div class="flex justify-between items-center">
+    <div class="flex justify-between items-center flex-wrap gap-3">
         <div>
             <h1 class="text-3xl font-bold">Open Positions</h1>
             <p class="text-base-content/70 mt-1">
                 {{ "Showing positions for selected account" if single_account else "Showing positions across all accounts" }}
             </p>
         </div>
-        
-        <div class="flex gap-2 items-center">
+
+        <div class="flex gap-2 items-center flex-wrap">
             <!-- Account Filter Dropdown -->
             {% if accounts|length > 1 %}
             <select class="select select-bordered select-sm h-9 min-w-[180px]" onchange="window.location.href = this.value">
@@ -28,6 +28,14 @@
                 {% endfor %}
             </select>
             {% endif %}
+
+            <button id="positionsFiltersBtn" onclick="positionsFiltersModal.showModal()" class="btn btn-outline btn-sm h-9 relative">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" />
+                </svg>
+                Filters
+                <span id="positionsFiltersDot" class="hidden absolute -top-1 -right-1 w-2.5 h-2.5 bg-error rounded-full"></span>
+            </button>
 
             <button onclick="location.reload()" class="btn btn-primary btn-sm h-9">
                 <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -42,64 +50,105 @@
                 </svg>
                 Export CSV
             </button>
+
+            {% if positions_data %}
+            <button onclick="closeAllPositions()" class="btn btn-error btn-sm h-9">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+                Close All
+            </button>
+            {% endif %}
         </div>
+    </div>
+
+    <!-- Active Filters Bar -->
+    <div id="positionsActiveFilters" class="hidden flex-wrap items-center gap-2">
+        <span class="text-sm text-base-content/70">Active Filters:</span>
+        <span id="filterChipGrouping" class="hidden badge bg-pink-500/10 text-pink-600 border border-pink-500/30"></span>
+        <span id="filterChipsProduct"></span>
+        <span id="filterChipsDirection"></span>
+        <span id="filterChipsExchange"></span>
+        <span id="filterChipPositionsSearch" class="hidden badge bg-pink-500/10 text-pink-600 border border-pink-500/30"></span>
+        <button onclick="clearPositionsFilters()" class="btn btn-outline btn-error btn-xs">Clear All</button>
     </div>
 
     {% if positions_data %}
     <!-- Portfolio Summary -->
     <div class="stats shadow w-full">
         <div class="stat">
-            <div class="stat-title">Total Positions</div>
-            <div class="stat-value">{{ positions_data|length }}</div>
+            <div class="stat-title">Open Positions</div>
+            <div class="stat-value" id="statTotalPositions">{{ positions_data|length }}</div>
         </div>
-        
+
         <div class="stat">
-            <div class="stat-title">Total Invested</div>
-            <div class="stat-value text-primary">₹{{ "%.2f"|format(total_invested) }}</div>
+            <div class="stat-title">Long</div>
+            <div class="stat-value text-success">{{ long_count }}</div>
         </div>
-        
+
         <div class="stat">
-            <div class="stat-title">Current Value</div>
-            <div class="stat-value text-info">₹{{ "%.2f"|format(total_current) }}</div>
+            <div class="stat-title">Short</div>
+            <div class="stat-value text-error">{{ short_count }}</div>
         </div>
-        
+
         <div class="stat">
             <div class="stat-title">Total P&L</div>
             <div class="stat-value {{ 'text-success' if total_pnl >= 0 else 'text-error' }}">
                 ₹{{ "%.2f"|format(total_pnl) }}
             </div>
-            {% if total_invested > 0 %}
-            <div class="stat-desc">{{ "%.2f"|format((total_pnl / total_invested) * 100) }}%</div>
-            {% endif %}
         </div>
     </div>
 
     <!-- Positions Table -->
     <div class="card bg-base-100 shadow-xl">
         <div class="card-body">
-            <h2 class="card-title">Open Positions</h2>
-            
-            <div class="overflow-x-auto">
+            <div class="flex items-center justify-between flex-wrap gap-3">
+                <h2 class="card-title">
+                    <span id="positionsCount">{{ positions_data|length }} position{{ '' if positions_data|length == 1 else 's' }}</span>
+                </h2>
+                <div class="relative w-full max-w-xs">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 absolute left-3 top-1/2 -translate-y-1/2 text-base-content/50" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                    </svg>
+                    <input type="text" id="positionsSearch" placeholder="Search symbol..." class="input input-bordered input-sm w-full pl-9 pr-8" oninput="applyPositionsFilters()">
+                    <button type="button" id="positionsSearchClear" onclick="clearPositionsSearch()" class="hidden absolute right-2.5 top-1/2 -translate-y-1/2 text-base-content/50 hover:text-base-content">
+                        &times;
+                    </button>
+                </div>
+            </div>
+
+            <div class="overflow-x-auto mt-2">
                 <table class="table table-sm">
                     <thead>
                         <tr>
                             {% if not single_account %}
                             <th>Account</th>
                             {% endif %}
-                            <th>Symbol</th>
+                            <th class="cursor-pointer select-none" onclick="sortPositions('symbol')">Symbol <span class="sort-arrow" data-col="symbol"></span></th>
                             <th>Exchange</th>
                             <th>Product</th>
-                            <th>Qty</th>
-                            <th>Avg Price</th>
-                            <th>LTP</th>
-                            <th>P&L</th>
-                            <th>P&L %</th>
-                            <th>Value</th>
+                            <th class="text-right cursor-pointer select-none" onclick="sortPositions('qty')">Qty <span class="sort-arrow" data-col="qty"></span></th>
+                            <th class="text-right cursor-pointer select-none" onclick="sortPositions('avgprice')">Avg Price <span class="sort-arrow" data-col="avgprice"></span></th>
+                            <th class="text-right">LTP</th>
+                            <th class="text-right cursor-pointer select-none" onclick="sortPositions('pnl')">P&L <span class="sort-arrow" data-col="pnl"></span></th>
+                            <th class="text-right cursor-pointer select-none" onclick="sortPositions('pnlpercent')">P&L % <span class="sort-arrow" data-col="pnlpercent"></span></th>
+                            <th class="text-right">Value</th>
+                            <th class="text-right">Action</th>
                         </tr>
                     </thead>
-                    <tbody>
+                    <tbody id="positionsTbody">
                         {% for position in positions_data %}
-                        <tr class="hover">
+                        {% set qty = position.get('quantity', 0)|float %}
+                        <tr class="hover"
+                            data-symbol="{{ position.get('symbol', '')|lower }}"
+                            data-exchange="{{ position.get('exchange', '') }}"
+                            data-product="{{ position.get('product', '') }}"
+                            data-direction="{{ 'LONG' if qty > 0 else 'SHORT' }}"
+                            data-qty="{{ qty }}"
+                            data-avgprice="{{ position.get('average_price', 0) or 0 }}"
+                            data-pnl="{{ position.get('pnl', 0) or 0 }}"
+                            data-pnlpercent="{{ position.get('pnl_percentage', 0) or 0 }}"
+                            data-account-id="{{ position.get('account_id', '') }}">
                             {% if not single_account %}
                             <td>
                                 <div class="flex items-center gap-2">
@@ -112,28 +161,42 @@
                             </td>
                             {% endif %}
                             <td class="font-semibold">{{ position.get('symbol', '') }}</td>
-                            <td>{{ position.get('exchange', '') }}</td>
-                            <td>{{ position.get('product', '') }}</td>
-                            <td class="font-mono {{ 'text-success' if position.get('quantity', 0)|float > 0 else 'text-error' }}">
+                            <td><span class="badge badge-sm badge-ghost">{{ position.get('exchange', '') }}</span></td>
+                            <td><span class="badge badge-sm badge-ghost">{{ position.get('product', '') }}</span></td>
+                            <td class="font-mono text-right {{ 'text-success' if qty > 0 else 'text-error' }}">
                                 {{ position.get('quantity', 0) }}
                             </td>
-                            <td class="font-mono">₹{{ "%.2f"|format(position.get('average_price', 0)|float) }}</td>
-                            <td class="font-mono">₹{{ "%.2f"|format(position.get('ltp', 0)|float) }}</td>
-                            <td class="font-mono {{ 'text-success' if position.get('pnl', 0)|float >= 0 else 'text-error' }}">
+                            <td class="font-mono text-right">₹{{ "%.2f"|format(position.get('average_price', 0)|float) }}</td>
+                            <td class="font-mono text-right">₹{{ "%.2f"|format(position.get('ltp', 0)|float) }}</td>
+                            <td class="font-mono text-right {{ 'text-success' if position.get('pnl', 0)|float >= 0 else 'text-error' }}">
                                 ₹{{ "%.2f"|format(position.get('pnl', 0)|float) }}
                             </td>
-                            <td class="{{ 'text-success' if position.get('pnl_percentage', 0)|float >= 0 else 'text-error' }}">
+                            <td class="text-right {{ 'text-success' if position.get('pnl_percentage', 0)|float >= 0 else 'text-error' }}">
                                 {{ "%.2f"|format(position.get('pnl_percentage', 0)|float) }}%
                             </td>
-                            <td class="font-mono">₹{{ "%.2f"|format(position.get('current_value', 0)|float) }}</td>
+                            <td class="font-mono text-right">₹{{ "%.2f"|format(position.get('current_value', 0)|float) }}</td>
+                            <td class="text-right">
+                                <button type="button"
+                                        class="btn btn-ghost btn-xs text-error"
+                                        title="Close position"
+                                        onclick="closeSinglePosition(this, {{ position.get('account_id') }}, '{{ position.get('symbol', '')|e }}', '{{ position.get('exchange', '')|e }}', '{{ position.get('product', '')|e }}')">
+                                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                                    </svg>
+                                </button>
+                            </td>
                         </tr>
                         {% endfor %}
                     </tbody>
                 </table>
             </div>
+
+            <div id="positionsNoMatch" class="hidden text-center py-12 text-base-content/60">
+                No positions match your filters. Try adjusting or clearing the filters.
+            </div>
         </div>
     </div>
-    
+
     {% else %}
     <!-- No Positions -->
     <div class="card bg-base-100 shadow-xl">
@@ -164,8 +227,394 @@
     {% endif %}
 </div>
 
+<!-- Filters Dialog -->
+<dialog id="positionsFiltersModal" class="modal">
+    <div class="modal-box max-w-md">
+        <h3 class="font-bold text-lg mb-1">Position Filters</h3>
+        <p class="text-sm text-base-content/60 mb-4">Configure grouping and filters</p>
+
+        <div class="space-y-2 mb-4">
+            <label class="text-xs font-semibold uppercase tracking-wider text-base-content/60">Grouping</label>
+            <div class="flex flex-col gap-1">
+                <label class="flex items-center gap-2 cursor-pointer p-1.5 rounded hover:bg-base-200">
+                    <input type="radio" name="grouping" value="none" class="radio radio-sm radio-primary" checked onchange="setGrouping('none')">
+                    <span>None</span>
+                </label>
+                <label class="flex items-center gap-2 cursor-pointer p-1.5 rounded hover:bg-base-200">
+                    <input type="radio" name="grouping" value="underlying" class="radio radio-sm radio-primary" onchange="setGrouping('underlying')">
+                    <span>Underlying</span>
+                </label>
+                <label class="flex items-center gap-2 cursor-pointer p-1.5 rounded hover:bg-base-200">
+                    <input type="radio" name="grouping" value="underlying_expiry" class="radio radio-sm radio-primary" onchange="setGrouping('underlying_expiry')">
+                    <span>Underlying &amp; Expiry</span>
+                </label>
+            </div>
+        </div>
+
+        <div class="divider my-1"></div>
+
+        <div class="space-y-2 mb-4">
+            <label class="text-xs font-semibold uppercase tracking-wider text-base-content/60">Product Type</label>
+            <div class="flex flex-wrap gap-2" id="productFilterBtns">
+                <button type="button" class="btn btn-sm btn-outline rounded-full" onclick="toggleChipFilter('product', 'CNC', this)">CNC</button>
+                <button type="button" class="btn btn-sm btn-outline rounded-full" onclick="toggleChipFilter('product', 'MIS', this)">MIS</button>
+                <button type="button" class="btn btn-sm btn-outline rounded-full" onclick="toggleChipFilter('product', 'NRML', this)">NRML</button>
+            </div>
+        </div>
+
+        <div class="space-y-2 mb-4">
+            <label class="text-xs font-semibold uppercase tracking-wider text-base-content/60">Direction</label>
+            <div class="flex flex-wrap gap-2" id="directionFilterBtns">
+                <button type="button" class="btn btn-sm btn-outline rounded-full" onclick="toggleChipFilter('direction', 'LONG', this)">Long</button>
+                <button type="button" class="btn btn-sm btn-outline rounded-full" onclick="toggleChipFilter('direction', 'SHORT', this)">Short</button>
+            </div>
+        </div>
+
+        <div class="space-y-2">
+            <label class="text-xs font-semibold uppercase tracking-wider text-base-content/60">Exchange</label>
+            <div class="flex flex-wrap gap-2" id="exchangeFilterBtns">
+                <button type="button" class="btn btn-sm btn-outline rounded-full" onclick="toggleChipFilter('exchange', 'NSE', this)">NSE</button>
+                <button type="button" class="btn btn-sm btn-outline rounded-full" onclick="toggleChipFilter('exchange', 'BSE', this)">BSE</button>
+                <button type="button" class="btn btn-sm btn-outline rounded-full" onclick="toggleChipFilter('exchange', 'NFO', this)">NFO</button>
+                <button type="button" class="btn btn-sm btn-outline rounded-full" onclick="toggleChipFilter('exchange', 'BFO', this)">BFO</button>
+                <button type="button" class="btn btn-sm btn-outline rounded-full" onclick="toggleChipFilter('exchange', 'MCX', this)">MCX</button>
+                <button type="button" class="btn btn-sm btn-outline rounded-full" onclick="toggleChipFilter('exchange', 'CDS', this)">CDS</button>
+            </div>
+        </div>
+
+        <div class="modal-action">
+            <button type="button" class="btn btn-ghost btn-sm" onclick="clearPositionsFilters()">Clear All</button>
+            <button type="button" class="btn btn-primary btn-sm" onclick="positionsFiltersModal.close()">Done</button>
+        </div>
+    </div>
+    <form method="dialog" class="modal-backdrop">
+        <button>close</button>
+    </form>
+</dialog>
+
 <script>
-// Auto-refresh disabled - use manual refresh button instead
+const POSITIONS_STORAGE_KEY = 'algomirror_positions_prefs';
+
+let positionsFilters = { product: [], direction: [], exchange: [] };
+let positionsGrouping = 'none';
+let collapsedGroups = new Set();
+let positionsSort = { col: null, dir: 'asc' };
+
+function loadPositionsPrefs() {
+    try {
+        const saved = JSON.parse(localStorage.getItem(POSITIONS_STORAGE_KEY) || '{}');
+        if (saved.filters) {
+            positionsFilters.product = saved.filters.product || [];
+            positionsFilters.direction = saved.filters.direction || [];
+            positionsFilters.exchange = saved.filters.exchange || [];
+        }
+        if (saved.grouping) positionsGrouping = saved.grouping;
+    } catch (e) { /* ignore malformed prefs */ }
+}
+
+function savePositionsPrefs() {
+    localStorage.setItem(POSITIONS_STORAGE_KEY, JSON.stringify({ filters: positionsFilters, grouping: positionsGrouping }));
+}
+
+function toggleChipFilter(type, value, btn) {
+    const arr = positionsFilters[type];
+    const idx = arr.indexOf(value);
+    if (idx > -1) arr.splice(idx, 1); else arr.push(value);
+    savePositionsPrefs();
+    syncPositionsFilterButtons();
+    applyPositionsFilters();
+}
+
+function setGrouping(mode) {
+    positionsGrouping = mode;
+    collapsedGroups = new Set();
+    savePositionsPrefs();
+    applyPositionsFilters();
+}
+
+function syncPositionsFilterButtons() {
+    document.querySelectorAll('#productFilterBtns button').forEach(btn => {
+        const active = positionsFilters.product.includes(btn.textContent.trim());
+        btn.classList.toggle('btn-primary', active);
+        btn.classList.toggle('btn-outline', !active);
+    });
+    document.querySelectorAll('#directionFilterBtns button').forEach(btn => {
+        const value = btn.textContent.trim().toUpperCase();
+        const active = positionsFilters.direction.includes(value);
+        btn.classList.toggle('btn-primary', active);
+        btn.classList.toggle('btn-outline', !active);
+    });
+    document.querySelectorAll('#exchangeFilterBtns button').forEach(btn => {
+        const active = positionsFilters.exchange.includes(btn.textContent.trim());
+        btn.classList.toggle('btn-primary', active);
+        btn.classList.toggle('btn-outline', !active);
+    });
+    document.querySelectorAll('input[name="grouping"]').forEach(radio => {
+        radio.checked = radio.value === positionsGrouping;
+    });
+
+    const hasActive = positionsFilters.product.length || positionsFilters.direction.length ||
+        positionsFilters.exchange.length || positionsGrouping !== 'none';
+    document.getElementById('positionsFiltersDot').classList.toggle('hidden', !hasActive);
+}
+
+function currentPositionsSearchQuery() {
+    const el = document.getElementById('positionsSearch');
+    return el ? el.value.trim().toLowerCase() : '';
+}
+
+function clearPositionsSearch() {
+    document.getElementById('positionsSearch').value = '';
+    applyPositionsFilters();
+}
+
+function clearPositionsFilters() {
+    positionsFilters = { product: [], direction: [], exchange: [] };
+    positionsGrouping = 'none';
+    collapsedGroups = new Set();
+    const searchEl = document.getElementById('positionsSearch');
+    if (searchEl) searchEl.value = '';
+    savePositionsPrefs();
+    syncPositionsFilterButtons();
+    applyPositionsFilters();
+}
+
+// --- Symbol parsing (mirrors OpenAlgo's Positions.tsx parseSymbol) ---
+function parsePositionSymbol(symbol, exchange) {
+    if (exchange === 'NSE' || exchange === 'BSE') {
+        return { underlying: symbol, expiry: null };
+    }
+    let m = symbol.match(/^(.+?)(\d{1,2}[A-Z]{3}\d{2})FUT$/i);
+    if (m) return { underlying: m[1], expiry: m[2] };
+    m = symbol.match(/^(.+?)(\d{1,2}[A-Z]{3}\d{2})(\d+\.?\d*)(CE|PE)$/i);
+    if (m) return { underlying: m[1], expiry: m[2] };
+    return { underlying: symbol, expiry: null };
+}
+
+function getGroupKey(row) {
+    const exchange = row.dataset.exchange;
+    const product = row.dataset.product;
+    if (exchange === 'NSE' || exchange === 'BSE') {
+        if (product === 'CNC') return 'Equity (Delivery)';
+        if (product === 'MIS') return 'Equity (Intraday)';
+    }
+    const parsed = parsePositionSymbol(row.dataset.symbol.toUpperCase(), exchange);
+    if (positionsGrouping === 'underlying_expiry' && parsed.expiry) {
+        return `${parsed.underlying} - ${parsed.expiry}`;
+    }
+    return parsed.underlying;
+}
+
+function applyPositionsFilters() {
+    const query = currentPositionsSearchQuery();
+    const searchClear = document.getElementById('positionsSearchClear');
+    if (searchClear) searchClear.classList.toggle('hidden', query === '');
+
+    const rows = Array.from(document.querySelectorAll('#positionsTbody tr:not(.group-header-row)'));
+    let visible = 0;
+    rows.forEach(row => {
+        let show = true;
+        if (query && !row.dataset.symbol.includes(query)) show = false;
+        if (positionsFilters.product.length && !positionsFilters.product.includes(row.dataset.product)) show = false;
+        if (positionsFilters.direction.length && !positionsFilters.direction.includes(row.dataset.direction)) show = false;
+        if (positionsFilters.exchange.length && !positionsFilters.exchange.includes(row.dataset.exchange)) show = false;
+        row.dataset.filteredVisible = show ? '1' : '0';
+        if (show) visible++;
+    });
+
+    const total = rows.length;
+    const hasActive = query !== '' || positionsFilters.product.length || positionsFilters.direction.length ||
+        positionsFilters.exchange.length || positionsGrouping !== 'none';
+
+    document.getElementById('positionsCount').textContent = hasActive
+        ? `${visible} of ${total} position${total === 1 ? '' : 's'}`
+        : `${total} position${total === 1 ? '' : 's'}`;
+
+    updateActiveFiltersBar(query, hasActive);
+    regroupPositions();
+    document.getElementById('positionsNoMatch').classList.toggle('hidden', visible !== 0 || total === 0);
+    document.getElementById('positionsFiltersDot').classList.toggle('hidden',
+        !(positionsFilters.product.length || positionsFilters.direction.length || positionsFilters.exchange.length || positionsGrouping !== 'none'));
+}
+
+function updateActiveFiltersBar(query, hasActive) {
+    const bar = document.getElementById('positionsActiveFilters');
+    bar.classList.toggle('hidden', !hasActive);
+    bar.classList.toggle('flex', hasActive);
+
+    const groupingChip = document.getElementById('filterChipGrouping');
+    groupingChip.classList.toggle('hidden', positionsGrouping === 'none');
+    groupingChip.textContent = 'Grouped: ' + (positionsGrouping === 'underlying' ? 'Underlying' : 'Underlying & Expiry');
+
+    const chipHtml = (values) => values.map(v =>
+        `<span class="badge bg-pink-500/10 text-pink-600 border border-pink-500/30 mr-1">${v}</span>`
+    ).join('');
+    document.getElementById('filterChipsProduct').innerHTML = chipHtml(positionsFilters.product);
+    document.getElementById('filterChipsDirection').innerHTML = chipHtml(positionsFilters.direction);
+    document.getElementById('filterChipsExchange').innerHTML = chipHtml(positionsFilters.exchange);
+
+    const searchChip = document.getElementById('filterChipPositionsSearch');
+    searchChip.classList.toggle('hidden', query === '');
+    searchChip.textContent = 'Search: ' + query;
+}
+
+function regroupPositions() {
+    const tbody = document.getElementById('positionsTbody');
+    // Remove any existing synthetic group header rows
+    tbody.querySelectorAll('.group-header-row').forEach(el => el.remove());
+
+    const rows = Array.from(tbody.querySelectorAll('tr'));
+    rows.forEach(row => row.classList.remove('hidden'));
+
+    if (positionsGrouping === 'none') {
+        rows.forEach(row => {
+            row.classList.toggle('hidden', row.dataset.filteredVisible === '0');
+        });
+        return;
+    }
+
+    // Bucket rows by group key
+    const groups = {};
+    rows.forEach(row => {
+        const key = getGroupKey(row);
+        row.dataset.groupkey = key;
+        (groups[key] = groups[key] || []).push(row);
+    });
+
+    const sortedKeys = Object.keys(groups).sort((a, b) => {
+        const aEq = a.startsWith('Equity'), bEq = b.startsWith('Equity');
+        if (aEq && !bEq) return -1;
+        if (!aEq && bEq) return 1;
+        return a.localeCompare(b);
+    });
+
+    sortedKeys.forEach(key => {
+        const groupRows = groups[key];
+        const visibleRows = groupRows.filter(r => r.dataset.filteredVisible !== '0');
+        // Detach and reinsert in group order
+        groupRows.forEach(r => tbody.appendChild(r));
+
+        if (visibleRows.length === 0) {
+            groupRows.forEach(r => r.classList.add('hidden'));
+            return;
+        }
+
+        let totalPnl = 0, totalInvestment = 0;
+        visibleRows.forEach(r => {
+            totalPnl += parseFloat(r.dataset.pnl) || 0;
+            totalInvestment += Math.abs(parseFloat(r.dataset.avgprice) || 0) * Math.abs(parseFloat(r.dataset.qty) || 0);
+        });
+        const pnlPercent = totalInvestment > 0 ? (totalPnl / totalInvestment) * 100 : 0;
+        const isCollapsed = collapsedGroups.has(key);
+        const colCount = document.querySelectorAll('thead th').length;
+
+        const headerRow = document.createElement('tr');
+        headerRow.className = 'group-header-row bg-base-200 cursor-pointer hover';
+        headerRow.onclick = () => toggleGroupCollapse(key);
+        const pnlClass = totalPnl >= 0 ? 'text-success' : 'text-error';
+        headerRow.innerHTML = `
+            <td colspan="${Math.max(colCount - 3, 1)}">
+                <div class="flex items-center gap-2 font-semibold">
+                    <span>${isCollapsed ? '▶' : '▼'}</span>
+                    <span>${key}</span>
+                    <span class="badge badge-sm badge-outline">${visibleRows.length}</span>
+                </div>
+            </td>
+            <td class="text-right font-bold ${pnlClass}">${totalPnl >= 0 ? '+' : ''}₹${totalPnl.toFixed(2)}</td>
+            <td class="text-right font-semibold ${pnlClass}">${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toFixed(2)}%</td>
+            <td></td>
+        `;
+        groupRows[0].before(headerRow);
+
+        groupRows.forEach(r => {
+            const hiddenByFilter = r.dataset.filteredVisible === '0';
+            r.classList.toggle('hidden', hiddenByFilter || isCollapsed);
+        });
+    });
+}
+
+function toggleGroupCollapse(key) {
+    if (collapsedGroups.has(key)) collapsedGroups.delete(key); else collapsedGroups.add(key);
+    regroupPositions();
+}
+
+function sortPositions(col) {
+    positionsSort.dir = (positionsSort.col === col && positionsSort.dir === 'asc') ? 'desc' : 'asc';
+    positionsSort.col = col;
+    const tbody = document.getElementById('positionsTbody');
+    const rows = Array.from(tbody.querySelectorAll('tr:not(.group-header-row)'));
+    const dir = positionsSort.dir === 'asc' ? 1 : -1;
+
+    rows.sort((a, b) => {
+        if (col === 'symbol') return dir * a.dataset.symbol.localeCompare(b.dataset.symbol);
+        const aVal = parseFloat(a.dataset[col]) || 0;
+        const bVal = parseFloat(b.dataset[col]) || 0;
+        return dir * (aVal - bVal);
+    });
+    rows.forEach(row => tbody.appendChild(row));
+
+    document.querySelectorAll('.sort-arrow').forEach(el => el.textContent = '');
+    const arrow = document.querySelector(`.sort-arrow[data-col="${col}"]`);
+    if (arrow) arrow.textContent = positionsSort.dir === 'asc' ? '▲' : '▼';
+
+    regroupPositions();
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    loadPositionsPrefs();
+    syncPositionsFilterButtons();
+    applyPositionsFilters();
+});
+
+function showPositionsToast(message, type) {
+    const notification = document.createElement('div');
+    notification.className = `alert ${type === 'success' ? 'alert-success' : type === 'info' ? 'alert-info' : 'alert-error'} fixed top-4 right-4 z-50 max-w-sm`;
+    const span = document.createElement('span');
+    span.textContent = message;
+    notification.appendChild(span);
+    document.body.appendChild(notification);
+    setTimeout(() => notification.remove(), 4000);
+}
+
+async function closeSinglePosition(btn, accountId, symbol, exchange, product) {
+    btn.disabled = true;
+    try {
+        const response = await fetchWithCSRF('{{ url_for("trading.close_position") }}', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ account_id: accountId, symbol, exchange, product })
+        });
+        const data = await response.json();
+        if (data.status === 'success') {
+            showPositionsToast(data.message || `Close order placed for ${symbol}`, 'success');
+            setTimeout(() => location.reload(), 1500);
+        } else if (data.status === 'info') {
+            showPositionsToast(data.message, 'info');
+            btn.disabled = false;
+        } else {
+            showPositionsToast(data.message || `Failed to close ${symbol}`, 'error');
+            btn.disabled = false;
+        }
+    } catch (e) {
+        showPositionsToast(`Error closing ${symbol}`, 'error');
+        btn.disabled = false;
+    }
+}
+
+async function closeAllPositions() {
+    if (!confirm('Close all open positions currently shown on this page at market price? This cannot be undone.')) return;
+    try {
+        showPositionsToast('Closing all positions...', 'info');
+        const response = await fetchWithCSRF('{{ url_for("trading.close_all_open_positions") }}' + window.location.search, {
+            method: 'POST'
+        });
+        const data = await response.json();
+        showPositionsToast(data.message || 'Close-all request sent', data.status === 'error' ? 'error' : 'success');
+        setTimeout(() => location.reload(), 1500);
+    } catch (e) {
+        showPositionsToast('Error closing all positions', 'error');
+    }
+}
 
 function exportToCSV(type) {
     // Get the table
@@ -175,9 +624,9 @@ function exportToCSV(type) {
         return;
     }
 
-    // Convert table to CSV
+    // Convert table to CSV (skip rows hidden by filters/grouping/collapse)
     let csv = [];
-    const rows = table.querySelectorAll('tr');
+    const rows = table.querySelectorAll('tr:not(.hidden)');
 
     for (let i = 0; i < rows.length; i++) {
         const row = [];
@@ -185,7 +634,7 @@ function exportToCSV(type) {
 
         for (let j = 0; j < cols.length; j++) {
             // Get text content and clean it
-            let data = cols[j].innerText.replace(/(\r\n|\n|\r)/gm, '').trim();
+            let data = cols[j].innerText.replace(/(\r\n|\n|\r)/gm, ' ').trim();
             // Remove rupee symbol
             data = data.replace(/₹/g, '');
             // Escape quotes
