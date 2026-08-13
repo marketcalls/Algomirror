@@ -1,0 +1,46 @@
+{% extends "layout.html" %}
+
+{% block title %}Platform Settings - AlgoMirror{% endblock %}
+
+{% block content %}
+<div class="container mx-auto px-4 py-8 max-w-3xl">
+    <div class="mb-6">
+        <h1 class="text-3xl font-bold">Platform Settings</h1>
+        <p class="text-base-content/70 mt-1">Feature toggles for this AlgoMirror deployment</p>
+    </div>
+
+    <div class="card bg-base-200 shadow-lg">
+        <div class="card-body">
+            <h2 class="card-title">Strategy Engine</h2>
+            <p class="text-base-content/70 text-sm">
+                Controls the strategy execution surface: Strategy Builder, Margin Calculator, Risk Monitor,
+                the Risk Manager / Supertrend Exit / Order Poller background services, and the broker-position
+                reconciliation warning on the dashboard. Turn this off if you use AlgoMirror only to view
+                accounts whose trades are placed by an external strategy engine (e.g. your own bot/SDK) -
+                otherwise every position not created by AlgoMirror's Strategy Builder gets flagged as
+                "untracked", and the dashboard's "Close All" action would attempt to close those positions.
+            </p>
+
+            <form method="POST" action="{{ url_for('admin.update_settings') }}" class="mt-4">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+
+                <label class="flex items-center gap-3 cursor-pointer w-fit">
+                    <input type="checkbox" name="strategy_engine_enabled" class="toggle toggle-primary"
+                           {{ 'checked' if app_settings.strategy_engine_enabled }} />
+                    <span class="font-medium">
+                        Strategy engine {{ 'enabled' if app_settings.strategy_engine_enabled else 'disabled' }}
+                    </span>
+                </label>
+
+                <p class="text-xs text-base-content/50 mt-2">
+                    Nav items and the dashboard warning update immediately. Restart the AlgoMirror service
+                    (<code>sudo systemctl restart algomirror</code>) for the background-service change
+                    (Risk Manager / Supertrend Exit / Order Poller) to take effect.
+                </p>
+
+                <button type="submit" class="btn btn-primary btn-sm mt-4">Save</button>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}

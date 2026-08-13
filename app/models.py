@@ -608,6 +608,33 @@ class TradingSettings(db.Model):
 
         db.session.commit()
 
+class AppSettings(db.Model):
+    """Singleton table for platform-wide feature toggles (admin-controlled).
+
+    AlgoMirror ships as a multi-strategy execution platform, but some
+    deployments only use it to view accounts/positions from strategies run
+    elsewhere (e.g. an external SDK/bot). strategy_engine_enabled lets an
+    admin turn off the strategy execution surface (Strategy Builder, Risk
+    Manager, Supertrend Exit, Order Poller, and the broker-position
+    reconciliation banner) without touching code.
+    """
+    __tablename__ = 'app_settings'
+
+    id = db.Column(db.Integer, primary_key=True)
+    strategy_engine_enabled = db.Column(db.Boolean, default=True, nullable=False)
+    updated_at = db.Column(db.DateTime, default=get_ist_now, onupdate=get_ist_now)
+
+    @staticmethod
+    def get():
+        """Fetch the singleton settings row, creating it with defaults if missing."""
+        settings = AppSettings.query.first()
+        if not settings:
+            settings = AppSettings(strategy_engine_enabled=True)
+            db.session.add(settings)
+            db.session.commit()
+        return settings
+
+
 class MarginRequirement(db.Model):
     __tablename__ = 'margin_requirements'
 

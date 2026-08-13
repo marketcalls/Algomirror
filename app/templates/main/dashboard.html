@@ -7,8 +7,13 @@
     <!-- Header -->
     <div class="flex justify-between items-center mb-6">
         <div>
+            {% if strategy_engine_enabled %}
             <h1 class="text-3xl font-bold">Multi-Strategy Trading Platform</h1>
             <p class="text-base-content/70 mt-1">Manage unlimited strategies across multiple accounts</p>
+            {% else %}
+            <h1 class="text-3xl font-bold">Portfolio Overview</h1>
+            <p class="text-base-content/70 mt-1">Unified view of your accounts, positions, and holdings</p>
+            {% endif %}
         </div>
         <div class="flex gap-3 items-center flex-wrap">
             <!-- Market Status Indicator -->
@@ -32,16 +37,22 @@
                 Account Positions
             </a>
 
+            {% if strategy_engine_enabled %}
             <a href="{{ url_for('strategy.create_new_strategy') }}" class="btn btn-primary btn-sm">
                 <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path>
                 </svg>
                 New Strategy
             </a>
+            {% endif %}
         </div>
     </div>
 
-    <!-- Reconciliation warning: positions open at broker but not tracked by AlgoMirror -->
+    {% if strategy_engine_enabled %}
+    <!-- Reconciliation warning: positions open at broker but not tracked by AlgoMirror.
+         Only meaningful when the strategy engine is on - otherwise every position is
+         "untracked" by definition (placed by an external strategy engine), and Close All
+         would attempt to square off positions AlgoMirror doesn't own. -->
     <div id="reconcileWarning" class="alert alert-warning shadow-lg mb-6" style="display: none;">
         <div class="flex-1">
             <h3 class="font-bold">Untracked open positions detected at broker</h3>
@@ -52,6 +63,7 @@
             <button onclick="document.getElementById('reconcileWarning').style.display='none'" class="btn btn-sm btn-ghost">Dismiss</button>
         </div>
     </div>
+    {% endif %}
 
     <!-- Overall Summary Stats -->
     <div class="stats stats-vertical lg:stats-horizontal shadow w-full mb-6 bg-base-100">
@@ -92,6 +104,7 @@
             <div class="stat-desc">Broker reported P&L</div>
         </div>
 
+        {% if strategy_engine_enabled %}
         <div class="stat">
             <div class="stat-figure text-accent">
                 <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -115,6 +128,7 @@
             <div class="stat-value text-accent">{{ overall_stats.total_strategies }}</div>
             <div class="stat-desc">Strategies with open positions</div>
         </div>
+        {% endif %}
     </div>
 
     <!-- Account Cards Grid -->
@@ -161,6 +175,7 @@
                         </span>
                     </div>
 
+                    {% if strategy_engine_enabled %}
                     <!-- Active Strategies -->
                     <div class="pt-2 border-t">
                         <p class="text-sm text-base-content/60 mb-2">Active Strategies</p>
@@ -186,6 +201,7 @@
                             {% endif %}
                         </div>
                     </div>
+                    {% endif %}
                 </div>
 
                 <!-- Today's P&L -->
@@ -200,6 +216,7 @@
         {% endfor %}
     </div>
 
+    {% if strategy_engine_enabled %}
     <!-- Strategy Positions Section -->
     <div class="card bg-base-100 shadow-lg mb-6">
         <div class="card-body">
@@ -285,6 +302,7 @@
             {% endif %}
         </div>
     </div>
+    {% endif %}
 </div>
 
 <!-- Expired Executions Modal -->
@@ -1182,15 +1200,21 @@ document.addEventListener('DOMContentLoaded', function() {
     // round-trip before startPolling() kicked them off, which delayed funds.
     // The backend caches funds for 30s, so the duplicate call from
     // startPolling() below is served from cache (no extra broker hit).
+    {% if strategy_engine_enabled %}
     loadStrategyMetrics();
+    {% endif %}
     loadAccountFunds();
+    {% if strategy_engine_enabled %}
     loadStrategyPnL();
+    {% endif %}
     loadAccountModes();
 
     checkTradingHours();
     pollingIntervals.tradingHoursCheck = setInterval(checkTradingHours, 60000);
+    {% if strategy_engine_enabled %}
     loadPositionReconciliation();
     pollingIntervals.reconcileCheck = setInterval(loadPositionReconciliation, 60000);
+    {% endif %}
 });
 </script>
 {% endblock %}
