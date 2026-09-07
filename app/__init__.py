@@ -376,6 +376,108 @@ def create_app(config_name=None):
     except Exception as e:
         app.logger.error(f'Failed to start equity exit monitor: {e}', exc_info=True)
 
+    # Initialize the intraday short square-off monitor.
+    #
+    # This is the only monitor here whose job is a DEADLINE rather than a
+    # condition: past the configured minute it buys back every open intraday
+    # short, because a short left open past the close is unlimited loss, a
+    # forced buy-back by the broker at whatever price it gets, and a penalty.
+    #
+    # Registered the same way as the exit monitor and guarded the same way, so
+    # a failure here can never stop the application booting. It is armed BEFORE
+    # the job is added, so a failed add_job leaves it idle rather than half
+    # wired - and the placement path refuses to open a short at all when this
+    # is not running, which is the other half of that guarantee.
+    try:
+        from app.utils.equity_intraday_monitor import (
+            equity_intraday_monitor,
+            run_equity_intraday_squareoff,
+            SCHEDULER_JOB_ID as EQUITY_SHORT_JOB_ID,
+            SCHEDULER_INTERVAL_SECONDS as EQUITY_SHORT_INTERVAL_SECONDS
+        )
+
+        def run_equity_intraday_job(flask_app):
+            """Scheduler entry point: one square-off tick in an app context."""
+            try:
+                with flask_app.app_context():
+                    run_equity_intraday_squareoff()
+            except Exception as job_error:
+                flask_app.logger.error(
+                    f'Error running equity intraday square-off: {job_error}'
+                )
+
+        equity_intraday_monitor.start()
+        option_chain_service.scheduler.add_job(
+            func=run_equity_intraday_job,
+            args=[app],
+            trigger='interval',
+            seconds=EQUITY_SHORT_INTERVAL_SECONDS,
+            id=EQUITY_SHORT_JOB_ID,
+            replace_existing=True,
+            max_instances=1,  # Skip a tick rather than overlap two
+            misfire_grace_time=30
+        )
+        app.logger.debug(
+            f'Equity intraday square-off started '
+            f'({EQUITY_SHORT_INTERVAL_SECONDS}-second interval)',
+            extra={'event': 'equity_intraday_monitor_init'}
+        )
+    except Exception as e:
+        app.logger.error(
+            f'Failed to start equity intraday square-off: {e}', exc_info=True
+        )
+
+    # Initialize the equity account cache warmer
+    #
+    # Same contract as the exit monitor above: the module schedules nothing
+    # itself, it exposes a callable that this factory drives from the existing
+    # background scheduler, and it is armed before the job is registered so a
+    # failed add_job leaves it idle rather than half wired.
+    #
+    # It keeps TradingAccount's funds and holdings cache current on a timer so
+    # the equity screens can read it instead of calling the broker on every
+    # poll - which is how the F&O dashboard has always been fast. It refreshes
+    # the same columns the equity request path already wrote; no F&O or
+    # OpenAlgo code is involved. Guarded so a failure here cannot stop boot.
+    try:
+        from app.utils.equity_account_cache import (
+            equity_account_cache_warmer,
+            run_equity_account_cache_warm,
+            SCHEDULER_JOB_ID as EQUITY_CACHE_JOB_ID,
+            SCHEDULER_INTERVAL_SECONDS as EQUITY_CACHE_INTERVAL_SECONDS
+        )
+
+        def run_equity_account_cache_job(flask_app):
+            """Scheduler entry point: one warm pass inside a Flask app context."""
+            try:
+                with flask_app.app_context():
+                    run_equity_account_cache_warm()
+            except Exception as job_error:
+                flask_app.logger.error(
+                    f'Error warming the equity account cache: {job_error}'
+                )
+
+        equity_account_cache_warmer.start()
+        option_chain_service.scheduler.add_job(
+            func=run_equity_account_cache_job,
+            args=[app],
+            trigger='interval',
+            seconds=EQUITY_CACHE_INTERVAL_SECONDS,
+            id=EQUITY_CACHE_JOB_ID,
+            replace_existing=True,
+            max_instances=1,  # Skip a tick rather than overlap two broker reads
+            misfire_grace_time=10
+        )
+        app.logger.info(
+            f'Equity account cache warmer started '
+            f'({EQUITY_CACHE_INTERVAL_SECONDS}-second interval)',
+            extra={'event': 'equity_account_cache_init'}
+        )
+    except Exception as e:
+        app.logger.error(
+            f'Failed to start the equity account cache warmer: {e}', exc_info=True
+        )
+
     # Load existing primary and backup accounts within app context
     with app.app_context():
         from app.models import TradingAccount

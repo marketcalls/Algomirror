@@ -1,0 +1,1400 @@
+{% extends "layout.html" %}
+
+{% block title %}Equity Positions - AlgoMirror{% endblock %}
+
+{% block page_title %}Positions{% endblock %}
+
+{% block content %}
+<style>
+    /* Tabular numerals for every column of aligned digits on this screen. The
+       compiled stylesheet only carries a dark-theme monospace helper, so the
+       rule is stated here so it applies in both themes. */
+    .equity-num { font-variant-numeric: tabular-nums; }
+</style>
+
+<div class="space-y-4">
+    <!--
+        Header.
+
+        No big heading here. The top bar already names the page and, unlike
+        anything in this content area, it does not scroll away - so a second
+        title below it was saying the same thing twice, and the copy that
+        survived scrolling was the one nobody had chosen.
+    -->
+    <div class="flex justify-end items-center flex-wrap gap-3">
+        <div class="flex gap-3 items-center flex-wrap">
+            <span class="text-xs text-base-content/50 equity-num" id="equity-feed-marker"></span>
+            <span class="text-xs text-base-content/50 equity-num" id="equity-last-updated">Not loaded yet</span>
+            <button onclick="equityLoadPositions()" class="btn btn-ghost btn-sm h-9" id="equity-refresh-btn">Refresh</button>
+        </div>
+    </div>
+
+    <!-- Stale marker. Shown instead of blanking the page when a read fails. -->
+    <div class="flex justify-center">
+        <div class="alert w-auto max-w-2xl shadow-lg alert-warning hidden" id="equity-stale-banner">
+            <span id="equity-stale-text"></span>
+        </div>
+
+        <!-- What a Cover Now actually did. Its own banner rather than the stale
+             one above, which the next refresh clears - and the reason a
+             buy-back did not happen is the last thing that should vanish two
+             seconds after it appears. -->
+        <div class="alert w-auto max-w-2xl shadow-lg hidden" id="equity-cover-banner">
+            <div>
+                <div class="font-bold" id="equity-cover-headline"></div>
+                <div class="text-xs" id="equity-cover-detail"></div>
+            </div>
+        </div>
+
+        <!-- What a level save actually did. Its own banner, for the same
+             reason the one above has one: the refresh that follows a save
+             would otherwise wipe the answer a second after it appeared. -->
+        <div class="alert w-auto max-w-2xl shadow-lg hidden" id="equity-level-banner">
+            <span id="equity-level-text"></span>
+        </div>
+    </div>
+
+    {% if accounts %}
+    <!-- Totals -->
+    <div class="stats stats-vertical lg:stats-horizontal shadow w-full bg-base-100 border-b border-base-300">
+        <div class="stat">
+            <div class="stat-title">Positions</div>
+            <div class="stat-value text-2xl lg:text-4xl equity-num" id="equity-total-positions">0</div>
+            <div class="stat-desc" id="equity-total-quantity">0 shares</div>
+        </div>
+        <div class="stat">
+            <div class="stat-title">Accounts</div>
+            <div class="stat-value text-2xl lg:text-4xl equity-num" id="equity-total-accounts">0</div>
+            <div class="stat-desc" id="equity-total-accounts-desc">holding something</div>
+        </div>
+        <div class="stat">
+            <div class="stat-title">Invested</div>
+            <div class="stat-value text-2xl lg:text-4xl equity-num equity-accent" id="equity-total-invested">₹0.00L</div>
+        </div>
+        <div class="stat">
+            <div class="stat-title">Market Value</div>
+            <div class="stat-value text-2xl lg:text-4xl equity-num equity-accent" id="equity-total-value">₹0.00L</div>
+        </div>
+        <div class="stat">
+            <div class="stat-title">Unrealised P&amp;L</div>
+            <div class="stat-value text-2xl lg:text-4xl equity-num" id="equity-total-pnl">₹0.00L</div>
+            <div class="stat-desc equity-num" id="equity-total-pnl-pct">0.0%</div>
+        </div>
+    </div>
+
+    <!-- Positions table -->
+    <div class="card bg-base-100 shadow-xl">
+        <div class="card-body">
+            <h2 class="card-title">Open Positions</h2>
+
+            <div class="overflow-x-auto">
+                <table class="table table-sm">
+                    <thead>
+                        <tr>
+                            <!-- Not sortable, and deliberately. This is where a
+                                 row sits in the order you are looking at, so
+                                 sorting BY it would be asking to sort by the
+                                 order it is already in. -->
+                            <th class="text-right">Sl</th>
+                            <th>
+                                <button type="button" class="equity-sort"
+                                        title="Sort by stock name, A to Z" onclick="equitySortBy('symbol')">Stock<span
+                                        class="equity-sort-mark" id="equity-sort-mark-symbol"></span></button>
+                            </th>
+                            <th>
+                                <button type="button" class="equity-sort"
+                                        title="Sort by how many accounts hold it" onclick="equitySortBy('accounts_count')">Account<span
+                                        class="equity-sort-mark" id="equity-sort-mark-accounts_count"></span></button>
+                            </th>
+                            <th>
+                                <button type="button" class="equity-sort"
+                                        title="Sort by product" onclick="equitySortBy('product')">Product<span
+                                        class="equity-sort-mark" id="equity-sort-mark-product"></span></button>
+                            </th>
+                            <th>
+                                <button type="button" class="equity-sort"
+                                        title="Sort by trade nature, A to Z" onclick="equitySortBy('trade_nature')">Trade Nature<span
+                                        class="equity-sort-mark" id="equity-sort-mark-trade_nature"></span></button>
+                            </th>
+                            <th class="text-right">
+                                <button type="button" class="equity-sort"
+                                        title="Sort by quantity" onclick="equitySortBy('quantity')">Qty<span
+                                        class="equity-sort-mark" id="equity-sort-mark-quantity"></span></button>
+                            </th>
+                            <th class="text-right">
+                                <button type="button" class="equity-sort"
+                                        title="Sort by average cost" onclick="equitySortBy('avg_cost')">Avg Cost<span
+                                        class="equity-sort-mark" id="equity-sort-mark-avg_cost"></span></button>
+                            </th>
+                            <th class="text-right">
+                                <button type="button" class="equity-sort"
+                                        title="Sort by stop loss" onclick="equitySortBy('stop_loss')">Stop Loss<span
+                                        class="equity-sort-mark" id="equity-sort-mark-stop_loss"></span></button>
+                            </th>
+                            <th class="text-right">
+                                <button type="button" class="equity-sort"
+                                        title="Sort by target" onclick="equitySortBy('target')">Target<span
+                                        class="equity-sort-mark" id="equity-sort-mark-target"></span></button>
+                            </th>
+                            <th class="text-right">
+                                <button type="button" class="equity-sort"
+                                        title="Sort by last traded price" onclick="equitySortBy('ltp')">LTP<span
+                                        class="equity-sort-mark" id="equity-sort-mark-ltp"></span></button>
+                            </th>
+                            <th class="text-right">
+                                <button type="button" class="equity-sort"
+                                        title="Sort by the variance between cost and the live price" onclick="equitySortBy('pnl_pct')">Variance<span
+                                        class="equity-sort-mark" id="equity-sort-mark-pnl_pct"></span></button>
+                            </th>
+                            <th class="text-right">
+                                <button type="button" class="equity-sort"
+                                        title="Sort by profit and loss" onclick="equitySortBy('pnl')">P&amp;L<span
+                                        class="equity-sort-mark" id="equity-sort-mark-pnl"></span></button>
+                            </th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="equity-positions-body">
+                        <tr>
+                            <td colspan="13" class="text-center py-8 text-base-content/60">
+                                Loading positions.
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!--
+        The one standing note on this screen, at the bottom, where it is read
+        after the table rather than before it.
+    -->
+    <p class="text-xs text-base-content/60">
+        Stock bought today stays here and moves to Holdings on T+1 after settlement.
+    </p>
+    {% else %}
+    <div class="card bg-base-100 shadow-xl">
+        <div class="card-body items-center text-center py-12">
+            <h2 class="card-title">No Trading Account Connected</h2>
+            <p class="text-base-content/70">Positions are read from a connected account. Add one to start.</p>
+            <a href="{{ url_for('accounts.add') }}" class="btn btn-primary btn-sm">Add Account</a>
+        </div>
+    </div>
+    {% endif %}
+</div>
+
+<!-- The accounts behind one position row -->
+<!--
+    COVER NOW.
+
+    Its own dialog rather than a browser confirm, because it has to restate
+    what is about to happen: this places a real MARKET buy at the broker, and
+    the stop resting behind the short is cancelled first so the two cannot both
+    close it. The final button is green, like every other button in this
+    application that actually sends something.
+-->
+<dialog id="equity-cover-modal" class="modal">
+    <div class="modal-box">
+        <h3 class="font-bold text-lg">Buy This Short Back Now?</h3>
+        <p class="text-sm mt-2" id="equity-cover-summary"></p>
+        <p class="text-sm text-base-content/60 mt-2">
+            This places a MARKET buy at your broker, so it fills at whatever the price is.
+            The stop-loss order resting behind this short is cancelled first - if it cannot
+            be cancelled, nothing is bought and the resting stop is left to do the job.
+        </p>
+        <div class="modal-action">
+            <!-- Cancel, not Back. This dialog abandons something you were about
+                 to COMMIT; Back is for a panel you only opened to look at. -->
+            <form method="dialog">
+                <button class="btn btn-sm btn-outline equity-btn">Cancel</button>
+            </form>
+            <button class="btn btn-sm btn-primary equity-btn" id="equity-cover-confirm"
+                    onclick="equityConfirmCover()">Buy Back Now</button>
+        </div>
+    </div>
+</dialog>
+
+<!-- Edit the stop loss and target on a position.
+     Holdings stopped listing today's unsettled buys on 6 September, so this is
+     now the only screen where the level on this morning's purchase can be
+     changed. Deliberately narrow: three fields, no trade nature, no selling. -->
+<dialog id="equity-edit-modal" class="modal">
+    <div class="modal-box">
+        <h3 class="font-bold text-lg" id="equity-edit-title">Edit Position</h3>
+        <p class="text-sm text-base-content/60 mt-1" id="equity-edit-scope"></p>
+
+        <div class="space-y-3 py-4">
+            <div class="form-control">
+                <label class="label" for="equity-edit-stop-loss">
+                    <span class="label-text">Stop Loss</span>
+                </label>
+                <input type="number" id="equity-edit-stop-loss" class="input input-bordered input-sm equity-num"
+                       min="0" step="0.05" placeholder="Leave blank to clear">
+            </div>
+
+            <div class="form-control">
+                <label class="label" for="equity-edit-target">
+                    <span class="label-text">Target</span>
+                </label>
+                <input type="number" id="equity-edit-target" class="input input-bordered input-sm equity-num"
+                       min="0" step="0.05" placeholder="Leave blank to clear">
+            </div>
+
+            <div class="form-control">
+                <label class="label" for="equity-edit-mode">
+                    <span class="label-text">Exit Mode</span>
+                </label>
+                <select id="equity-edit-mode" class="select select-bordered select-sm"
+                        onchange="equityRefreshEditWarning()">
+                    <option value="CONFIRM">To Confirm</option>
+                    <option value="AUTO">Auto Sell</option>
+                </select>
+            </div>
+
+            <p class="text-xs text-base-content/60">
+                Trade Nature is not changed here. A position inherits it from the order that bought it, and it can be
+                set on the Holdings screen once these shares settle.
+            </p>
+        </div>
+
+        <div class="alert my-3" id="equity-edit-headline">
+            <span id="equity-edit-headline-text"></span>
+        </div>
+
+        <ul class="list-disc list-inside space-y-1 text-sm" id="equity-edit-lines"></ul>
+
+        <div class="modal-action">
+            <form method="dialog">
+                <button class="btn btn-sm btn-outline equity-btn">Cancel</button>
+            </form>
+            <button type="button" class="btn btn-sm btn-primary equity-btn" id="equity-edit-save-btn"
+                    onclick="equitySaveEdit()">Save</button>
+        </div>
+    </div>
+</dialog>
+
+<dialog id="equity-position-modal" class="modal">
+    <div class="modal-box max-w-3xl">
+        <h3 class="font-bold text-lg" id="equity-position-title">Account-Wise Position</h3>
+        <p class="text-sm text-base-content/60" id="equity-position-subtitle"></p>
+
+        <div class="overflow-x-auto mt-3">
+            <table class="table table-sm">
+                <thead>
+                    <tr>
+                        <!-- "Account". Settled module-wide on 6 September at
+                             the owner's instruction: every screen that used to
+                             say "Member" now says Account, and the function
+                             that draws the cell was renamed with it, so the
+                             code and the screen cannot drift apart. -->
+                        <th>Account</th>
+                        <th class="text-right">Qty</th>
+                        <th class="text-right">Avg Cost</th>
+                        <th class="text-right">Invested</th>
+                        <th class="text-right">P&amp;L</th>
+                    </tr>
+                </thead>
+                <tbody id="equity-position-body"></tbody>
+            </table>
+        </div>
+
+        <div class="modal-action">
+            <form method="dialog">
+                <button class="btn btn-sm btn-outline equity-btn">Back</button>
+            </form>
+        </div>
+    </div>
+</dialog>
+
+<!-- The "Updated" line, shared by every equity screen so one thing is
+     said one way: date and time, green while the market is open and
+     amber while it is closed. -->
+<script src="{{ url_for('static', filename='js/equity_updated.js') }}"></script>
+
+<script>
+// ---------------------------------------------------------------------------
+// Equity Positions.
+//
+// The step between placing an order and owning stock. In the Indian market a
+// delivery buy is a position until it settles and only then becomes a holding,
+// so without this screen everything bought today is invisible until tomorrow.
+//
+// Read-only by design, with ONE exception. Selling, stop losses and targets all
+// work on holdings, and offering an exit here would suggest shares are
+// available that cannot yet be delivered.
+//
+// The exception is Cover Now on a short. A short is not a position you have,
+// it is an obligation you owe, and between the square-off at its minute and the
+// stop resting at the broker there was previously no way out at all: a short
+// that looked wrong at two in the afternoon had to be closed at the broker's
+// own terminal, where nothing here would know about it.
+// ---------------------------------------------------------------------------
+
+const EQUITY_POLL_MS = 10000;
+const EQUITY_FETCH_TIMEOUT_MS = 20000;
+const EQUITY_COLUMN_COUNT = 13;
+
+// Every page level status message on this screen wears the same shape: a pill
+// only as wide as its text, centred, rather than a bar stretched across the
+// page. Rewriting className replaces the whole list, so the sizing has to be
+// restated wherever a banner's colour is set.
+const EQUITY_BANNER_CLASS = 'alert w-auto max-w-2xl shadow-lg';
+
+// A level save syncs the tracked holdings from the broker before it writes, so
+// it is given the same sixty seconds the Holdings screen gives it rather than
+// the twenty a plain read gets.
+const EQUITY_WRITE_TIMEOUT_MS = 60000;
+
+let equityPollTimer = null;
+let equityLoading = false;
+
+// The rendered rows, so View Split can find the accounts behind a merged row
+// without a second request.
+// Place Order is the one screen that can reach a broker, so Buy and Sell
+// here are links to it rather than a second way to send an order.
+const EQUITY_PLACE_ORDER_URL = '{{ url_for("equity.place_order") }}';
+
+// How many accounts were read at all - the denominator behind each row's
+// "2/2". Set from the payload on every load.
+let equityAccountsInView = 0;
+
+let equityPositionRows = [];
+
+const EquityFormat = {
+    LAKH: 100000,
+
+    /**
+     * Rupees ALWAYS in lakhs: Rs 0.54L, Rs 20.64L. The same formatter the
+     * Trade Book uses, word for word, so one figure means one thing across
+     * the module.
+     *
+     * Not compact(), which switches units at one lakh - so two days could not
+     * be compared without first reading which unit each of them was in.
+     */
+    lakhs: function (value) {
+        const num = Number(value);
+        if (!isFinite(num)) { return '--'; }
+        const sign = num < 0 ? '-' : '';
+        return sign + '₹' + (Math.abs(num) / EquityFormat.LAKH).toFixed(2) + 'L';
+    },
+
+    compact: function (value) {
+        const num = Number(value);
+        if (!isFinite(num)) { return '₹0'; }
+        const sign = num < 0 ? '-' : '';
+        const abs = Math.abs(num);
+        if (abs >= EquityFormat.LAKH) {
+            return sign + '₹' + (abs / EquityFormat.LAKH).toFixed(2) + 'L';
+        }
+        return sign + '₹' + abs.toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+    },
+
+    rupees: function (value) {
+        const num = Number(value);
+        if (!isFinite(num)) { return '₹0.00'; }
+        const sign = num < 0 ? '-' : '';
+        return sign + '₹' + Math.abs(num).toLocaleString('en-IN',
+            { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    },
+
+    percent: function (value) {
+        const num = Number(value);
+        if (!isFinite(num)) { return '0.0'; }
+        let text = num.toFixed(2);
+        if (text.slice(-1) === '0') { text = text.slice(0, -1); }
+        return text + '%';
+    },
+
+    signed: function (value, style) {
+        const num = Number(value) || 0;
+        const text = style === 'compact' ? EquityFormat.compact(num) : EquityFormat.rupees(num);
+        return num > 0 ? '+' + text : text;
+    },
+
+    signedPercent: function (value) {
+        const num = Number(value) || 0;
+        const text = EquityFormat.percent(num);
+        return num > 0 ? '+' + text : text;
+    },
+
+    pnlClass: function (value) {
+        const num = Number(value) || 0;
+        if (num > 0) { return 'text-success'; }
+        if (num < 0) { return 'text-error'; }
+        return '';
+    },
+
+    integer: function (value) {
+        const num = Number(value);
+        if (!isFinite(num)) { return '0'; }
+        return Math.round(num).toLocaleString('en-IN');
+    },
+
+    // The server sends UTC with no timezone marker. A marker-less value is read
+    // by the browser as LOCAL time, which put every clock on these screens
+    // 5h30m behind. Mark it as UTC, then render explicitly in IST.
+    clockTime: function (isoText) {
+        if (!isoText) { return ''; }
+        let text = String(isoText);
+        if (!/(Z|[+-]\d{2}:?\d{2})$/.test(text)) { text += 'Z'; }
+        const parsed = new Date(text);
+        if (isNaN(parsed.getTime())) { return ''; }
+        return parsed.toLocaleTimeString('en-IN', { hour12: false, timeZone: 'Asia/Kolkata' });
+    }
+};
+
+function equitySetText(id, text, className) {
+    const el = document.getElementById(id);
+    if (!el) { return; }
+    el.textContent = text;
+    if (className !== undefined) { el.className = className; }
+}
+
+function equityShowStale(message) {
+    const banner = document.getElementById('equity-stale-banner');
+    const text = document.getElementById('equity-stale-text');
+    if (!banner || !text) { return; }
+    if (!message) {
+        banner.classList.add('hidden');
+        return;
+    }
+    text.textContent = message;
+    banner.className = EQUITY_BANNER_CLASS + ' alert-warning';
+}
+
+function equityMinutesText(minutes) {
+    /*
+     * How long a short has left, in words a person reads at a glance.
+     *
+     * "2h 14m" rather than 134, because the number that matters is whether
+     * there is time to do something about it.
+     */
+    const total = Math.max(Math.round(Number(minutes) || 0), 0);
+    const hours = Math.floor(total / 60);
+    const rest = total % 60;
+    if (hours && rest) { return hours + 'h ' + rest + 'm'; }
+    if (hours) { return hours + 'h'; }
+    return rest + 'm';
+}
+
+function equityCell(text, className) {
+    const td = document.createElement('td');
+    td.textContent = text;
+    if (className) { td.className = className; }
+    return td;
+}
+
+function equityLevelCell(value, armed) {
+    // Blank, never zero. Zero on a stop loss column reads as "sell at any
+    // price", which is the opposite of nothing being set.
+    if (value === null || value === undefined || value === '') {
+        return equityCell('\u2014', 'text-right opacity-40');
+    }
+    const cell = equityCell(
+        EquityFormat.rupees(value),
+        'text-right equity-num' + (armed ? '' : ' opacity-50')
+    );
+    cell.title = armed
+        ? 'Being watched by the stop loss and target monitor'
+        : 'Recorded, but not currently being watched - the holding is awaiting '
+          + 'a confirmation or already has a sell in flight';
+    return cell;
+}
+
+function equityMessageRow(message) {
+    const tr = document.createElement('tr');
+    const td = document.createElement('td');
+    td.colSpan = EQUITY_COLUMN_COUNT;
+    td.className = 'text-center py-8 text-base-content/60';
+    td.textContent = message;
+    tr.appendChild(td);
+    return tr;
+}
+
+function equityRenderTotals(totals) {
+    // Remembered here because every row's Account column is read against it.
+    equityAccountsInView = Number(totals.accounts_in_view) || 0;
+
+    equitySetText('equity-total-positions', EquityFormat.integer(totals.positions),
+        'stat-value text-2xl lg:text-4xl equity-num');
+    equitySetText('equity-total-quantity',
+        EquityFormat.integer(totals.quantity) + ' shares', 'stat-desc equity-num');
+
+    equitySetText('equity-total-accounts', EquityFormat.integer(totals.accounts),
+        'stat-value text-2xl lg:text-4xl equity-num');
+    equitySetText('equity-total-accounts-desc',
+        'of ' + EquityFormat.integer(equityAccountsInView) + ' read', 'stat-desc');
+
+    // Lakhs, always, so two days can be compared at a glance without first
+    // reading which unit each of them is in.
+    equitySetText('equity-total-invested', EquityFormat.lakhs(totals.invested),
+        'stat-value text-2xl lg:text-4xl equity-num equity-accent');
+    equitySetText('equity-total-value', EquityFormat.lakhs(totals.market_value),
+        'stat-value text-2xl lg:text-4xl equity-num equity-accent');
+    equitySetText('equity-total-pnl', EquityFormat.lakhs(totals.pnl),
+        ('stat-value text-2xl lg:text-4xl equity-num ' + EquityFormat.pnlClass(totals.pnl)).trim());
+    equitySetText('equity-total-pnl-pct', EquityFormat.signedPercent(totals.pnl_pct),
+        ('stat-desc equity-num ' + EquityFormat.pnlClass(totals.pnl)).trim());
+}
+
+// ---------------------------------------------------------------------------
+// Sorting
+//
+// The same behaviour as the Watch List, Holdings, Order Book and Trade Book:
+// ascending, then descending, then back to the order the server sent.
+// ---------------------------------------------------------------------------
+
+const EQUITY_SORT_COLUMNS = {
+    symbol: 'text',
+    accounts_count: 'number',
+    product: 'text',
+    trade_nature: 'text',
+    quantity: 'number',
+    avg_cost: 'number',
+    stop_loss: 'number',
+    target: 'number',
+    ltp: 'number',
+    pnl_pct: 'number',
+    pnl: 'number'
+};
+
+// Columns whose first click sorts DESCENDING. A name reads best A to Z; a
+// size, a price or a result reads best largest first, because that is the
+// question being asked when the heading is clicked.
+const EQUITY_SORT_DESC_FIRST = {
+    accounts_count: true, quantity: true, avg_cost: true, stop_loss: true,
+    target: true, ltp: true, pnl_pct: true, pnl: true
+};
+
+let equitySortKey = '';
+let equitySortDir = 'asc';
+
+function equitySortBy(key) {
+    if (!Object.prototype.hasOwnProperty.call(EQUITY_SORT_COLUMNS, key)) { return; }
+
+    const first = EQUITY_SORT_DESC_FIRST[key] ? 'desc' : 'asc';
+    const second = first === 'asc' ? 'desc' : 'asc';
+
+    if (equitySortKey !== key) {
+        equitySortKey = key;
+        equitySortDir = first;
+    } else if (equitySortDir === first) {
+        equitySortDir = second;
+    } else {
+        equitySortKey = '';
+        equitySortDir = 'asc';
+    }
+
+    equityRenderPositions(equityPositionRows);
+}
+
+function equityUpdateSortMarks() {
+    Object.keys(EQUITY_SORT_COLUMNS).forEach(function (key) {
+        const mark = document.getElementById('equity-sort-mark-' + key);
+        if (!mark) { return; }
+        if (equitySortKey === key) {
+            mark.textContent = equitySortDir === 'asc' ? '↑' : '↓';
+            mark.className = 'equity-sort-mark is-active';
+        } else {
+            mark.textContent = '↕';
+            mark.className = 'equity-sort-mark';
+        }
+    });
+}
+
+/**
+ * What one row is worth in the column being sorted.
+ *
+ * A row with nothing in the column is not a row holding zero. A position with
+ * no live price has no place among the prices at either end of the order, and
+ * a stop loss that was never set is not a stop loss of nought - so both are
+ * reported as missing and sink to the bottom whichever way the sort runs.
+ */
+function equitySortValue(row, key) {
+    const numeric = EQUITY_SORT_COLUMNS[key] === 'number';
+    const blank = { missing: true, value: numeric ? 0 : '' };
+
+    if ((key === 'ltp' || key === 'pnl' || key === 'pnl_pct') && !row.has_ltp) {
+        return blank;
+    }
+
+    const raw = row[key];
+    if (raw === null || raw === undefined || raw === '') { return blank; }
+
+    if (numeric) {
+        const num = Number(raw);
+        return isFinite(num) ? { missing: false, value: num } : blank;
+    }
+    return { missing: false, value: String(raw).toUpperCase() };
+}
+
+function equitySortRows(rows) {
+    if (!equitySortKey || !EQUITY_SORT_COLUMNS[equitySortKey]) { return rows.slice(); }
+
+    const key = equitySortKey;
+    const factor = equitySortDir === 'desc' ? -1 : 1;
+
+    return rows.slice().sort(function (first, second) {
+        const left = equitySortValue(first, key);
+        const right = equitySortValue(second, key);
+
+        if (left.missing !== right.missing) { return left.missing ? 1 : -1; }
+        if (left.value < right.value) { return -factor; }
+        if (left.value > right.value) { return factor; }
+
+        const a = String(first.symbol || '');
+        const b = String(second.symbol || '');
+        return a < b ? -1 : (a > b ? 1 : 0);
+    });
+}
+
+/**
+ * The Account column: how many accounts hold this stock, over how many were
+ * read at all.
+ *
+ * One stock, one row. A ten share buy split across two accounts is one
+ * decision, so the row shows the total and the accounts behind it open from
+ * the Actions column.
+ *
+ * Read as 2/2 the way the Order Book and Trade Book read. "1/2" is a real and
+ * useful state - one account holds this and the other does not - and naming a
+ * single account, which is what this column used to do, hid it.
+ */
+function equityAccountCell(row) {
+    const td = document.createElement('td');
+    td.className = 'text-sm';
+
+    const held = row.accounts_count || (row.accounts || []).length || 1;
+    const label = document.createElement('div');
+    label.className = 'equity-num font-semibold';
+    label.textContent = held + '/' + (equityAccountsInView || held);
+    td.appendChild(label);
+
+    return td;
+}
+
+function equityOpenPositionSplit(index) {
+    const row = equityPositionRows[index];
+    if (!row) { return; }
+
+    const body = document.getElementById('equity-position-body');
+    const modal = document.getElementById('equity-position-modal');
+    if (!body || !modal) { return; }
+
+    equitySetText(
+        'equity-position-title',
+        'Account-Wise Position: ' + row.symbol + ' ' +
+        EquityFormat.integer(row.quantity)
+    );
+    let subtitle;
+    if (row.is_short) {
+        subtitle = '. Sold WITHOUT owning these shares. They are bought back '
+            + 'automatically at ' + (row.squareoff_at || '15:12') + '.';
+    } else if (row.sold_from_holding) {
+        subtitle = '. Sold out of the holding today, which is why the quantity '
+            + 'is negative.';
+    } else {
+        subtitle = '. The average cost on the row is weighted by shares across '
+            + 'the accounts below.';
+    }
+    equitySetText(
+        'equity-position-subtitle',
+        (row.product || '') + ' on ' + (row.exchange || '') + subtitle
+    );
+
+    body.textContent = '';
+    (row.accounts || []).forEach(function (entry) {
+        const tr = document.createElement('tr');
+        tr.className = 'hover';
+
+        tr.appendChild(equityCell(entry.account_name || ('Account ' + entry.account_id), 'text-sm'));
+        tr.appendChild(equityCell(
+            EquityFormat.integer(entry.quantity),
+            'text-right equity-num' + (row.sold_from_holding ? ' text-error' : '')
+        ));
+        tr.appendChild(equityCell(EquityFormat.rupees(entry.avg_cost), 'text-right equity-num'));
+        tr.appendChild(equityCell(EquityFormat.rupees(entry.invested), 'text-right equity-num'));
+
+        if (row.has_ltp) {
+            const pnl = document.createElement('td');
+            pnl.className = ('text-right equity-num ' + EquityFormat.pnlClass(entry.pnl)).trim();
+            pnl.textContent = EquityFormat.signed(entry.pnl) +
+                ' (' + EquityFormat.signedPercent(entry.pnl_pct) + ')';
+            tr.appendChild(pnl);
+        } else {
+            tr.appendChild(equityCell('-', 'text-right equity-num text-base-content/50'));
+        }
+
+        body.appendChild(tr);
+    });
+
+    modal.showModal();
+}
+
+function equityRenderPositions(rows) {
+    const body = document.getElementById('equity-positions-body');
+    if (!body) { return; }
+
+    body.textContent = '';
+
+    if (!rows.length) {
+        body.appendChild(equityMessageRow(
+            'No open positions. Stock bought today appears here until it settles.'
+        ));
+        return;
+    }
+
+    equityPositionRows = rows;
+    equityUpdateSortMarks();
+
+    // _row_index is set BEFORE the sort, so it keeps pointing at the row in
+    // equityPositionRows. Cover Now and View Split look the row up by it, and
+    // sorting the screen must not make them act on a different position.
+    rows.forEach(function (row, index) { row._row_index = index; });
+
+    equitySortRows(rows).forEach(function (row, position) {
+        const index = row._row_index;
+        const serial = position + 1;
+        const tr = document.createElement('tr');
+        tr.className = 'hover';
+
+        // Where this row sits in the order ON SCREEN, which renumbers when
+        // you sort - which is what a serial number on a sorted table means.
+        tr.appendChild(equityCell(
+            String(serial), 'text-right equity-num text-base-content/60'
+        ));
+
+        const stock = document.createElement('td');
+        const symbol = document.createElement('div');
+        symbol.className = 'font-semibold';
+        symbol.textContent = row.symbol;
+        stock.appendChild(symbol);
+        const exchange = document.createElement('div');
+        exchange.className = 'text-xs text-base-content/50';
+        exchange.textContent = row.exchange || '';
+        stock.appendChild(exchange);
+
+        // A negative delivery line is a sale out of the portfolio, not a short.
+        // Brokers show it exactly this way, so the number stays as the broker
+        // reports it - but "-1 RELIANCE" reads as a short to anyone who did not
+        // just place the sale, so it is named.
+        if (row.sold_from_holding) {
+            const sold = document.createElement('div');
+            sold.className = 'badge badge-sm badge-outline mt-1';
+            sold.title = 'Sold out of your holding today. It nets against the '
+                + 'shares at settlement.';
+            sold.textContent = 'Sold from holding';
+            stock.appendChild(sold);
+        }
+
+        // A short is also a negative line, and it is the opposite situation:
+        // not money already taken off the table, but shares that have to be
+        // bought back this afternoon. It gets the loudest label on the screen,
+        // plus the time it has left and whether anything is protecting it.
+        if (row.is_short) {
+            const badge = document.createElement('div');
+            badge.className = 'badge badge-sm badge-error mt-1';
+            badge.title = 'Sold without owning these shares. AlgoMirror buys '
+                + 'them back automatically at ' + (row.squareoff_at || '15:12') + '.';
+            badge.textContent = 'SHORT';
+            stock.appendChild(badge);
+
+            const left = Number(row.minutes_to_squareoff);
+            const clock = document.createElement('div');
+            clock.className = 'text-xs mt-1';
+            if (Number.isFinite(left) && left > 0) {
+                clock.textContent = 'Bought back ' + (row.squareoff_at || '15:12')
+                    + ', ' + equityMinutesText(left) + ' left';
+            } else {
+                clock.className = 'text-xs mt-1 text-error';
+                clock.textContent = 'Past ' + (row.squareoff_at || '15:12')
+                    + '. The buy-back should have run.';
+            }
+            stock.appendChild(clock);
+
+            const stop = document.createElement('div');
+            stop.className = 'text-xs mt-1';
+            if (row.short_stop_status === 'RESTING') {
+                stop.textContent = 'Stop resting at your broker'
+                    + (row.short_stop_price
+                        ? ' at ' + EquityFormat.rupees(row.short_stop_price) : '');
+            } else {
+                stop.className = 'text-xs mt-1 text-error font-semibold';
+                stop.textContent = 'NO stop at your broker';
+                stop.title = 'This short is only protected while AlgoMirror is '
+                    + 'running. If this machine goes off, nothing closes it '
+                    + 'until your broker does.';
+            }
+            stock.appendChild(stop);
+        }
+
+        tr.appendChild(stock);
+
+        tr.appendChild(equityAccountCell(row));
+        tr.appendChild(equityCell(row.product || '', 'text-sm'));
+        tr.appendChild(equityCell(row.trade_nature || 'Unassigned', 'text-sm'));
+        tr.appendChild(equityCell(
+            EquityFormat.integer(row.quantity),
+            'text-right equity-num' + (row.sold_from_holding ? ' text-error' : '')
+        ));
+        tr.appendChild(equityCell(EquityFormat.rupees(row.avg_cost), 'text-right equity-num'));
+
+        // Read from the holding row that carries them, which is the same row
+        // the monitor acts on - so a level printed here in ordinary type is a
+        // level genuinely being watched. One shown greyed is recorded but not
+        // armed: a confirmation is outstanding, or a sell is already in flight.
+        tr.appendChild(equityLevelCell(row.stop_loss, row.levels_armed));
+        tr.appendChild(equityLevelCell(row.target, row.levels_armed));
+
+        const ltp = equityCell(
+            row.has_ltp ? EquityFormat.rupees(row.ltp) : 'No price yet',
+            row.has_ltp ? 'text-right equity-num font-semibold'
+                        : 'text-right equity-num text-base-content/50'
+        );
+        tr.appendChild(ltp);
+
+        // Variance: how far the live price sits from what was paid, as a
+        // percentage. It replaced the Invested and Market Value columns, which
+        // were two large figures whose only interesting property was the gap
+        // between them - and that gap is this number.
+        //
+        // The rupee amount stays in the next column, so one column answers
+        // "how far" and the other "how much". They used to share a cell.
+        if (row.has_ltp) {
+            const variance = document.createElement('td');
+            variance.className = ('text-right equity-num ' + EquityFormat.pnlClass(row.pnl)).trim();
+            variance.textContent = EquityFormat.signedPercent(row.pnl_pct);
+            tr.appendChild(variance);
+
+            const pnl = document.createElement('td');
+            pnl.className = ('text-right equity-num ' + EquityFormat.pnlClass(row.pnl)).trim();
+            pnl.textContent = EquityFormat.signed(row.pnl);
+            tr.appendChild(pnl);
+        } else {
+            tr.appendChild(equityCell('-', 'text-right equity-num text-base-content/50'));
+            tr.appendChild(equityCell('-', 'text-right equity-num text-base-content/50'));
+        }
+
+        tr.appendChild(equityActionsCell(row, index));
+
+        body.appendChild(tr);
+    });
+}
+
+/**
+ * Buy and Sell are PURE NAVIGATION. They open Place Order with the stock
+ * already filled in and place nothing on their own.
+ *
+ * That is deliberate and it is the whole safety argument. Place Order is the
+ * one screen that can reach a broker: it shows the account split, checks the
+ * cash, and raises a confirmation that restates the stock, the side and the
+ * quantity. A second way to send an order would be a second way to sell the
+ * same shares twice - and a position bought today has no holding row yet, so
+ * the claim-before-sell guard that stops a double sale does not cover it.
+ *
+ * Same shape as the Holdings screen's Buy and Sell, down to the query string.
+ */
+function equityPlaceOrderUrl(row, side) {
+    const params = new URLSearchParams();
+    params.set('symbol', row.symbol);
+    params.set('exchange', row.exchange || 'NSE');
+    params.set('side', side);
+    if (row.trade_nature_id) {
+        params.set('trade_nature_id', String(row.trade_nature_id));
+    }
+
+    // A SELL carries the quantity and the accounts holding it, so Place Order
+    // opens with a live Review button instead of an empty box. A starting
+    // point, not a limit: change it and the split follows.
+    if (side === 'SELL') {
+        const quantity = Math.abs(Number(row.quantity) || 0);
+        if (quantity > 0) { params.set('quantity', String(quantity)); }
+    }
+    const accounts = (row.accounts || [])
+        .map(function (entry) { return entry.account_id; })
+        .filter(function (id) { return id !== null && id !== undefined; });
+    if (accounts.length) { params.set('accounts', accounts.join(',')); }
+
+    return EQUITY_PLACE_ORDER_URL + '?' + params.toString();
+}
+
+
+// ---------------------------------------------------------------------------
+// Editing the level on a position
+//
+// Holdings stopped listing today's unsettled buys on 6 September - a stock
+// bought today is a POSITION until it settles, and listing it on both screens
+// counted one purchase twice. That made this the only screen where the stop
+// loss on this morning's buy can be changed, so it gained the same Edit dialog
+// Holdings has, cut down to the three fields that apply here.
+//
+// The same endpoint, the same warning that follows the exit mode, and the same
+// refusal rules. Nothing here sells anything.
+// ---------------------------------------------------------------------------
+
+let equityEditRow = null;
+
+function equityShowLevelResult(message, kind) {
+    const banner = document.getElementById('equity-level-banner');
+    const text = document.getElementById('equity-level-text');
+    if (!banner || !text) { return; }
+    if (!message) {
+        banner.classList.add('hidden');
+        return;
+    }
+    banner.classList.remove('hidden');
+    banner.className = EQUITY_BANNER_CLASS + ' ' + kind;
+    text.textContent = message;
+}
+
+function equityReadLevelBox(id) {
+    const el = document.getElementById(id);
+    if (!el) { return { present: false, value: null }; }
+    const raw = (el.value || '').trim();
+    if (raw === '') { return { present: true, value: null }; }
+    const value = parseFloat(raw);
+    if (!isFinite(value) || value <= 0) { return { present: true, value: NaN }; }
+    return { present: true, value: value };
+}
+
+function equityEditAccountNames() {
+    if (!equityEditRow) { return []; }
+    return (equityEditRow.accounts || []).map(function (account) {
+        return account.account_name || ('Account ' + account.account_id);
+    });
+}
+
+function equityCollectLevels() {
+    if (!equityEditRow) { return { error: 'Nothing is open for editing.' }; }
+    const row = equityEditRow;
+
+    const stopLoss = equityReadLevelBox('equity-edit-stop-loss');
+    const target = equityReadLevelBox('equity-edit-target');
+    const modeEl = document.getElementById('equity-edit-mode');
+    const exitMode = modeEl ? modeEl.value : 'CONFIRM';
+
+    if (isNaN(stopLoss.value)) {
+        return { error: 'The stop loss must be a positive number, or blank to clear it.' };
+    }
+    if (isNaN(target.value)) {
+        return { error: 'The target must be a positive number, or blank to clear it.' };
+    }
+    if (stopLoss.value !== null && target.value !== null && stopLoss.value >= target.value) {
+        return {
+            error: 'The stop loss must be below the target. A stop loss at or above the target is treated as bad '
+                 + 'data and the monitor skips the row entirely.'
+        };
+    }
+
+    const accounts = row.accounts || [];
+    if (!accounts.length) {
+        return { error: 'This row has no contributing account to save against.' };
+    }
+
+    // No trade_nature_id. The endpoint changes only the keys it is sent, so
+    // leaving it out keeps the tag the position inherited from the order that
+    // bought it - which is the right answer here, because this screen has no
+    // picker to set it with and sending a null would silently clear it.
+    const levels = accounts.map(function (account) {
+        return {
+            account_id: account.account_id,
+            symbol: row.symbol,
+            exchange: row.exchange,
+            stop_loss: stopLoss.value,
+            target: target.value,
+            exit_mode: exitMode
+        };
+    });
+
+    return { levels: levels };
+}
+
+function equityEditLine(text) {
+    const li = document.createElement('li');
+    li.textContent = text;
+    return li;
+}
+
+/**
+ * Say what saving will mean, and say it again whenever the exit mode changes.
+ *
+ * Auto Sell and To Confirm are two different promises, and which one is in
+ * force is the most consequential thing on this dialog. Re-written on every
+ * change, so it can never describe the mode that was showing a moment ago.
+ */
+function equityRefreshEditWarning() {
+    const modeEl = document.getElementById('equity-edit-mode');
+    const mode = modeEl ? modeEl.value : 'CONFIRM';
+    const names = equityEditAccountNames();
+
+    const headline = document.getElementById('equity-edit-headline');
+    if (headline) {
+        headline.className = 'alert my-3 ' + (mode === 'AUTO' ? 'alert-warning' : 'alert-info');
+    }
+    equitySetText(
+        'equity-edit-headline-text',
+        mode === 'AUTO'
+            ? ('Auto Sell on ' + names.length + ' account(s). A breach of either level sells '
+               + 'immediately, with no further confirmation.')
+            : ('To Confirm on ' + names.length + ' account(s). A breach raises an alert on the '
+               + 'Holdings screen and waits for you before anything is sold.')
+    );
+
+    const lines = document.getElementById('equity-edit-lines');
+    if (lines) {
+        lines.textContent = '';
+        lines.appendChild(equityEditLine('Applies to: ' + names.join(', ')));
+        lines.appendChild(equityEditLine(
+            'Saving re-arms the level, so a level that has already fired can fire again.'
+        ));
+        lines.appendChild(equityEditLine(
+            'The monitor runs in the background scheduler, so it keeps watching with every browser tab closed.'
+        ));
+    }
+}
+
+function equityOpenEdit(row) {
+    equityEditRow = row;
+
+    equitySetText('equity-edit-title', 'Edit ' + row.symbol);
+    equitySetText(
+        'equity-edit-scope',
+        'A stop loss and target on shares bought today. They settle on T+1 and move to Holdings, where the same '
+        + 'levels can be changed from then on.'
+    );
+
+    const stopLoss = document.getElementById('equity-edit-stop-loss');
+    if (stopLoss) {
+        stopLoss.value = (row.stop_loss === null || row.stop_loss === undefined) ? '' : row.stop_loss;
+    }
+    const target = document.getElementById('equity-edit-target');
+    if (target) {
+        target.value = (row.target === null || row.target === undefined) ? '' : row.target;
+    }
+    const mode = document.getElementById('equity-edit-mode');
+    if (mode) { mode.value = row.exit_mode === 'AUTO' ? 'AUTO' : 'CONFIRM'; }
+
+    equityRefreshEditWarning();
+
+    const button = document.getElementById('equity-edit-save-btn');
+    if (button) {
+        button.disabled = false;
+        button.textContent = 'Save';
+    }
+
+    const modal = document.getElementById('equity-edit-modal');
+    if (modal) { modal.showModal(); }
+}
+
+async function equitySaveEdit() {
+    // Read and check BEFORE anything is disabled or closed, so a rejected
+    // entry leaves the dialog open with the figures still in it.
+    const pending = equityCollectLevels();
+    if (pending.error) {
+        equityShowLevelResult(pending.error, 'alert-error');
+        return;
+    }
+
+    const button = document.getElementById('equity-edit-save-btn');
+    if (button) {
+        if (button.disabled) { return; }
+        button.disabled = true;
+        button.textContent = 'Saving';
+    }
+
+    try {
+        const response = await fetchWithCSRF('/equity/api/holdings/levels', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({ levels: pending.levels }),
+            signal: AbortSignal.timeout(EQUITY_WRITE_TIMEOUT_MS)
+        });
+        const data = await response.json();
+
+        if (data.status !== 'success') {
+            equityShowLevelResult(data.message || 'The levels could not be saved.', 'alert-error');
+            return;
+        }
+
+        const skipped = (data.results || []).filter(function (result) { return !result.ok; });
+        let message = data.message || 'Levels saved.';
+        if (skipped.length) {
+            message += ' ' + skipped.map(function (result) { return result.message; }).join(' ');
+        }
+        equityShowLevelResult(
+            message,
+            (skipped.length || (data.rearm_failed || []).length) ? 'alert-warning' : 'alert-success'
+        );
+    } catch (error) {
+        equityShowLevelResult(
+            'The levels could not be saved. Check the connection and confirm on screen before relying on them.',
+            'alert-error'
+        );
+        console.error('Equity position level save failed:', error);
+    } finally {
+        equityEditRow = null;
+        const modal = document.getElementById('equity-edit-modal');
+        if (modal) { modal.close(); }
+        equityLoadPositions();
+    }
+}
+
+function equityActionsCell(row, index) {
+    const cell = document.createElement('td');
+    const wrapper = document.createElement('div');
+    wrapper.className = 'flex items-center gap-1 flex-wrap';
+
+    // Cover Now comes FIRST on a short, and only on a short. It is the one row
+    // here that carries an obligation rather than a position, and the one
+    // action on this screen with a deadline.
+    if (row.is_short && (row.short_ids || []).length) {
+        const cover = document.createElement('button');
+        cover.type = 'button';
+        // Hollow, because pressing it commits nothing: it opens a dialog, and
+        // the button INSIDE that dialog is the one that sends the buy-back.
+        // It was briefly red, which both broke that rule and made it look like
+        // the Sell beside it - and Cover Now is a BUY.
+        cover.className = 'btn btn-xs btn-outline';
+        cover.textContent = 'Cover Now';
+        cover.title = 'Buy these shares back now, instead of waiting for '
+            + (row.squareoff_at || '15:12') + '.';
+        cover.onclick = function () { equityOpenCover(index); };
+        wrapper.appendChild(cover);
+    }
+
+    // Green Buy, red Sell - the same colours the Watch List and Holdings give
+    // these two, so one action wears one colour across the module. The hollow
+    // buttons beside them open panels; these two lead to an order.
+    const buy = document.createElement('a');
+    buy.className = 'btn btn-xs btn-success';
+    buy.textContent = 'Buy';
+    buy.title = 'Open Place Order with this stock filled in';
+    buy.href = equityPlaceOrderUrl(row, 'BUY');
+    wrapper.appendChild(buy);
+
+    // Not offered on a short. There is nothing to sell there - the obligation
+    // is to BUY these shares back, which is what Cover Now does.
+    if (!row.is_short) {
+        const sell = document.createElement('a');
+        sell.className = 'btn btn-xs btn-error';
+        sell.textContent = 'Sell';
+        sell.title = 'Open Place Order to sell this position';
+        sell.href = equityPlaceOrderUrl(row, 'SELL');
+        wrapper.appendChild(sell);
+    }
+
+    // The stop loss and target on this position.
+    //
+    // Only where there is a holding row behind it to write to - a delivery buy
+    // has one from the moment it fills. Not on a short, whose stop is the
+    // square-off obligation itself, and not on a sale out of a holding, which
+    // describes shares that have already left.
+    //
+    // This is the only screen that can change the level on a stock bought
+    // today: Holdings lists settled stock only.
+    if (row.can_set_levels) {
+        const edit = document.createElement('button');
+        edit.type = 'button';
+        edit.className = 'btn btn-xs btn-outline';
+        edit.textContent = 'Edit';
+        edit.title = 'Change the stop loss, target and exit mode';
+        edit.onclick = function () { equityOpenEdit(row); };
+        wrapper.appendChild(edit);
+    }
+
+    const view = document.createElement('button');
+    view.type = 'button';
+    view.className = 'btn btn-xs btn-outline';
+    view.textContent = 'View Split';
+    view.title = 'The quantity and cost on each account';
+    view.onclick = function () { equityOpenPositionSplit(row._row_index); };
+    wrapper.appendChild(view);
+
+    cell.appendChild(wrapper);
+    return cell;
+}
+
+let equityCoverIndex = null;
+let equityCoverInFlight = false;
+
+function equityOpenCover(index) {
+    /*
+     * Ask first, and say exactly what will happen.
+     *
+     * The row is remembered by index rather than the ids being carried into
+     * the dialog, so a refresh that lands between opening this and confirming
+     * it re-reads the row it is about to act on rather than firing at ids that
+     * may no longer be open.
+     */
+    const row = equityPositionRows[index];
+    if (!row || !row.is_short) { return; }
+
+    equityCoverIndex = index;
+
+    const ids = row.short_ids || [];
+    const quantity = Number(row.short_quantity) || Math.abs(Number(row.quantity) || 0);
+    const accounts = ids.length === 1 ? '1 account' : ids.length + ' accounts';
+
+    equitySetText('equity-cover-summary',
+        'Buying back ' + EquityFormat.integer(quantity) + ' ' + row.symbol
+        + ' across ' + accounts + '. Without this they are bought back '
+        + 'automatically at ' + (row.squareoff_at || '15:12') + '.');
+
+    const modal = document.getElementById('equity-cover-modal');
+    if (modal && typeof modal.showModal === 'function') { modal.showModal(); }
+}
+
+async function equityConfirmCover() {
+    const button = document.getElementById('equity-cover-confirm');
+    // Disabled as the FIRST statement, so a double click cannot send twice.
+    if (equityCoverInFlight) { return; }
+    equityCoverInFlight = true;
+    if (button) { button.disabled = true; }
+
+    const row = equityPositionRows[equityCoverIndex];
+    const ids = (row || {}).short_ids || [];
+
+    const modal = document.getElementById('equity-cover-modal');
+    if (modal && typeof modal.close === 'function') { modal.close(); }
+
+    if (!ids.length) {
+        equityCoverInFlight = false;
+        if (button) { button.disabled = false; }
+        return;
+    }
+
+    try {
+        const response = await fetchWithCSRF('/equity/api/shorts/cover', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({ short_ids: ids }),
+            signal: AbortSignal.timeout(EQUITY_FETCH_TIMEOUT_MS)
+        });
+        const data = await response.json();
+        equityReportCover(data);
+    } catch (error) {
+        // The request itself never completed, so whether the buy-back reached
+        // the broker is UNKNOWN. Said that way rather than as a failure.
+        equityShowCover(
+            'It is UNKNOWN whether this was bought back.',
+            ['The request was sent but no answer came back. Check this short at '
+             + 'your broker before pressing Cover again - sending it twice would '
+             + 'leave you holding shares you never wanted.'],
+            'alert-error'
+        );
+        console.error('Equity cover failed:', error);
+    } finally {
+        equityCoverInFlight = false;
+        if (button) { button.disabled = false; }
+        equityLoadPositions();
+    }
+}
+
+function equityShowCover(headline, lines, kind) {
+    const banner = document.getElementById('equity-cover-banner');
+    if (!banner) { return; }
+    banner.classList.remove('hidden');
+    banner.className = EQUITY_BANNER_CLASS + ' ' + kind;
+    equitySetText('equity-cover-headline', headline);
+
+    const detail = document.getElementById('equity-cover-detail');
+    if (!detail) { return; }
+    detail.textContent = '';
+    (lines || []).forEach(function (line) {
+        const row = document.createElement('div');
+        row.textContent = line;
+        detail.appendChild(row);
+    });
+}
+
+function equityReportCover(data) {
+    /*
+     * What happened, per short, in the words the server used.
+     *
+     * The reasons matter more here than the count. "Nothing was bought because
+     * the resting stop could not be cancelled" is a completely different
+     * situation from "your broker refused it", and both would read as one
+     * failure if only the number came back.
+     */
+    const results = (data || {}).results || [];
+    const lines = results.map(function (row) {
+        const where = row.symbol ? row.symbol + ': ' : '';
+        return where + (row.message || row.status || '');
+    }).filter(Boolean);
+
+    const status = (data || {}).status;
+    const headline = (data || {}).message || 'The buy-back finished.';
+    const kind = status === 'success' ? 'alert-success'
+        : (status === 'partial' ? 'alert-warning' : 'alert-error');
+
+    equityShowCover(headline, lines, kind);
+    if (typeof showToast === 'function') {
+        showToast(headline, status === 'success' ? 'success'
+            : (status === 'partial' ? 'warning' : 'error'));
+    }
+}
+
+async function equityLoadPositions() {
+    if (equityLoading) { return; }
+    equityLoading = true;
+
+    const button = document.getElementById('equity-refresh-btn');
+    if (button) { button.disabled = true; }
+
+    try {
+        const response = await fetch('/equity/api/positions?_t=' + Date.now(), {
+            signal: AbortSignal.timeout(EQUITY_FETCH_TIMEOUT_MS)
+        });
+        const data = await response.json();
+
+        if (data.status !== 'success') {
+            equityShowStale('Positions unavailable, showing the last values loaded. '
+                + (data.message || ''));
+            return;
+        }
+
+        equityRenderPositions(data.positions || []);
+        equityRenderTotals(data.totals || {});
+
+        const missing = data.accounts_missing || [];
+        equityShowStale(missing.length
+            ? missing.length + ' account(s) did not answer. Their positions are not shown.'
+            : '');
+
+        const feed = data.price_feed || {};
+        equitySetText('equity-feed-marker',
+            feed.source === 'websocket' ? 'Prices: live feed'
+                : (feed.source === 'mixed' ? 'Prices: feed and fallback'
+                    : (feed.source === 'rest' ? 'Prices: fallback quotes' : 'Prices: none yet')));
+
+        if (window.EquityUpdated) {
+        // The prices this screen just drew, so the line can say whether
+        // they are MOVING rather than guess from the clock.
+        window.EquityUpdated.write(
+            'equity-last-updated', data.generated_at, null,
+            window.EquityUpdated.priceKey(data.positions)
+        );
+    }
+    } catch (error) {
+        // Degrade to a visible stale marker, never blank the page.
+        equityShowStale('Positions unavailable, showing the last values loaded. Retrying shortly.');
+        console.error('Equity positions load failed:', error);
+    } finally {
+        equityLoading = false;
+        if (button) { button.disabled = false; }
+    }
+}
+
+document.addEventListener('DOMContentLoaded', function () {
+    {% if accounts %}
+    equityLoadPositions();
+    equityPollTimer = setInterval(equityLoadPositions, EQUITY_POLL_MS);
+    {% endif %}
+});
+</script>
+
+
+{% endblock %}

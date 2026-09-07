@@ -182,10 +182,12 @@ class QuantitySplit:
 
     Attributes:
         quantities: account key to the whole quantity allocated to that account,
-            already rounded DOWN to that account's tradable lot.
-        leftover: the quantity that could not be allocated, in shares. It is
-            reported for display ("show the leftover value"), never silently
-            redistributed to another account.
+            already rounded DOWN to that account's tradable lot, then topped up
+            from the rounding remainder so the parts add to the whole.
+        leftover: the quantity that STILL could not be allocated after that top
+            up. With ordinary lot sizes it is always zero; it can only be
+            non-zero when a lot size is larger than what is left, which is a
+            genuine constraint rather than a rounding artefact.
     """
 
     quantities: Dict[Hashable, int] = field(default_factory=dict)
@@ -206,9 +208,21 @@ def split_quantity_by_ratio(
     Split a total quantity across accounts by Order Qty Ratio.
 
     Each account gets total_quantity * ratio / 100, rounded DOWN to the nearest
-    tradable lot for that account. Whatever cannot be allocated is returned as
-    leftover so the caller can show it. It is never carried over to another
-    account automatically.
+    tradable lot. Flooring every account always loses something: 100 shares
+    across 66.67 and 33.33 percent gives 66 and 33, and the hundredth share
+    goes nowhere. Asking for 100 and getting 99 is not what was asked for.
+
+    So the shares left by that rounding are handed back out, one lot at a time,
+    to the account with the LARGEST FRACTIONAL REMAINDER - the one that came
+    closest to earning another share and was rounded down hardest. This is the
+    largest remainder method, and it is the standard way of making rounded parts
+    add up to their whole.
+
+    Ties are broken by the larger allocation, then by the order the accounts
+    were given, so the same inputs always produce the same split. That matters
+    more than it sounds: the preview the admin approves and the order actually
+    sent are compared for equality, and a split that could vary between two
+    identical passes would fail that comparison at random.
 
     Args:
         total_quantity: total shares to distribute. Fractions round down. Zero or
@@ -221,9 +235,10 @@ def split_quantity_by_ratio(
             invalid entry is treated as a lot size of 1.
 
     Returns:
-        QuantitySplit with per-account quantities and the unallocated leftover.
-        The allocated total never exceeds total_quantity, so leftover is never
-        negative even if the supplied ratios total more than 100 percent.
+        QuantitySplit with per-account quantities and whatever still could not
+        be allocated. The allocated total never exceeds total_quantity, so
+        leftover is never negative even if the supplied ratios total more than
+        100 percent.
     """
     quantities: Dict[Hashable, int] = {key: 0 for key in (ratios or {})}
     total = _as_quantity(total_quantity)
@@ -231,7 +246,10 @@ def split_quantity_by_ratio(
         return QuantitySplit(quantities=quantities, leftover=total)
 
     remaining = total
-    for key, ratio in ratios.items():
+    remainders: Dict[Hashable, float] = {}
+    order: Dict[Hashable, int] = {}
+
+    for position, (key, ratio) in enumerate(ratios.items()):
         lot_size = _as_lot_size(lot_sizes.get(key) if lot_sizes else None)
         share = total * _as_ratio(ratio) / 100.0
         if share > remaining:
@@ -239,7 +257,31 @@ def split_quantity_by_ratio(
         lots = math.floor(share / lot_size + _FLOOR_TOLERANCE)
         quantity = int(lots * lot_size) if lots > 0 else 0
         quantities[key] = quantity
+        # How much of a lot this account was rounded down by. This is what
+        # decides who gets the leftover back.
+        remainders[key] = (share - quantity) / lot_size
+        order[key] = position
         remaining -= quantity
+
+    # Hand the rounding remainder back out, one lot at a time.
+    #
+    # Sorted once and walked in order rather than re-sorted each pass: an
+    # account that has just been topped up has had its claim met, and letting
+    # it win again on the same fractional part would give one account the whole
+    # remainder while the next was rounded down and ignored.
+    if remaining > 0:
+        claimants = sorted(
+            (key for key in quantities if remainders.get(key, 0.0) > 0),
+            key=lambda key: (-remainders[key], -quantities[key], order[key]),
+        )
+        for key in claimants:
+            lot_size = _as_lot_size(lot_sizes.get(key) if lot_sizes else None)
+            if lot_size > remaining:
+                continue
+            quantities[key] += lot_size
+            remaining -= lot_size
+            if remaining <= 0:
+                break
 
     return QuantitySplit(quantities=quantities, leftover=remaining)
 

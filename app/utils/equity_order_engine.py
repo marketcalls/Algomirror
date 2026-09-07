@@ -108,6 +108,7 @@ from app.models import (
     EQUITY_ORDER_TYPE_GTT,
     EQUITY_ORDER_TYPE_LIMIT,
     EQUITY_ORDER_TYPE_MARKET,
+    EQUITY_ORDER_TYPE_SL_M,
     EQUITY_PRODUCT_CNC,
     EQUITY_SIDE_BUY,
     EQUITY_SIDE_SELL,
@@ -115,6 +116,7 @@ from app.models import (
     EQUITY_SPLIT_STATUS_COMPLETED,
     EQUITY_SPLIT_STATUS_FAILED,
     EQUITY_SPLIT_STATUS_INDETERMINATE,
+    EQUITY_SPLIT_STATUS_PARTIAL,
     EQUITY_SPLIT_STATUS_PENDING,
     EQUITY_SPLIT_STATUS_REJECTED,
     EQUITY_SPLIT_STATUS_SKIPPED,
@@ -122,7 +124,9 @@ from app.models import (
     EQUITY_SPLIT_STATUSES_OPEN,
     equity_is_indeterminate_response,
 )
-from app.utils.equity_ratio import compute_order_qty_ratios, split_quantity_by_ratio
+from app.utils.equity_ratio import (
+    QuantitySplit, compute_order_qty_ratios, split_quantity_by_ratio
+)
 from app.utils.openalgo_client import ExtendedOpenAlgoAPI
 
 logger = logging.getLogger(__name__)
@@ -131,6 +135,8 @@ __all__ = [
     'EquityOrderError',
     'DEFAULT_STRATEGY_NAME',
     'BROKER_ORDER_TIMEOUT_SECONDS',
+    'MIN_ORDER_TIMEOUT_SECONDS',
+    'MAX_ORDER_TIMEOUT_SECONDS',
     'BROKER_FUNDS_TIMEOUT_SECONDS',
     'DEFAULT_MAX_ATTEMPTS',
     'DEFAULT_RETRY_DELAY_SECONDS',
@@ -145,6 +151,7 @@ __all__ = [
     'exit_holding',
     'exit_holdings',
     'recompute_parent_status',
+    'split_sell_by_holdings',
     'summarise_splits',
 ]
 
@@ -162,10 +169,28 @@ DEFAULT_STRATEGY_NAME = 'AlgoMirror Equity'
 # INDETERMINATE one that a human then has to reconcile by hand.
 BROKER_ORDER_TIMEOUT_SECONDS = 30
 
+# The admin can raise or lower it in Equity Settings, within these bounds. The
+# floor stops a value so small that every order comes back indeterminate; the
+# ceiling stops a browser being held open for minutes on a broker that has
+# stopped answering.
+MIN_ORDER_TIMEOUT_SECONDS = 10
+MAX_ORDER_TIMEOUT_SECONDS = 180
+
 # The pre-trade funds read sits in front of the order, so it fails fast. An
 # account whose cash cannot be read is not blocked, it is placed with the funds
 # check recorded as not performed.
 BROKER_FUNDS_TIMEOUT_SECONDS = 8
+
+# How long to wait for the holdings read that verifies a quantity before a
+# sell. Short: an exit that cannot be verified quickly is an exit that must not
+# be placed, and waiting longer does not change that.
+BROKER_HOLDINGS_TIMEOUT_SECONDS = 20
+
+# Different OpenAlgo broker adapters spell the pledged figure differently.
+_HOLDING_PLEDGED_KEYS = (
+    'collateralquantity', 'collateral_quantity',
+    'pledgedquantity', 'pledged_quantity',
+)
 
 # Placement attempts per account. Only a DEFINITE failure is re-sent, so this
 # can never duplicate an order. Kept low because every extra attempt widens the
@@ -207,6 +232,7 @@ _VALID_SIDES = (EQUITY_SIDE_BUY, EQUITY_SIDE_SELL)
 _VALID_ORDER_TYPES = (
     EQUITY_ORDER_TYPE_MARKET,
     EQUITY_ORDER_TYPE_LIMIT,
+    EQUITY_ORDER_TYPE_SL_M,
     EQUITY_ORDER_TYPE_GTT,
 )
 
@@ -428,7 +454,11 @@ def _call_endpoint(client, endpoint, payload):
 
 def _place_regular_order(client, job):
     """
-    One MARKET or LIMIT placement attempt. Product is CNC, always.
+    One MARKET, LIMIT or SL-M placement attempt.
+
+    Product is CNC unless the job says otherwise. The only things that say
+    otherwise are an intraday short, the resting stop behind it, and the
+    buy-back that closes it.
 
     placeorder is called directly. Equity delivery has no freeze quantity
     regime, so splitorder and the freeze quantity handler are not involved.
@@ -440,11 +470,19 @@ def _place_regular_order(client, job):
         'action': job['side'],
         'exchange': job['exchange'],
         'price_type': job['order_type'],
-        'product': EQUITY_PRODUCT_CNC,
+        # CNC unless the job says otherwise. The only thing that says otherwise
+        # is an intraday short and the buy-back that closes it; everything else
+        # in this module is delivery and always was.
+        'product': job.get('product') or EQUITY_PRODUCT_CNC,
         'quantity': job['quantity'],
     }
     if job['order_type'] == EQUITY_ORDER_TYPE_LIMIT:
         params['price'] = job['price']
+    elif job['order_type'] == EQUITY_ORDER_TYPE_SL_M:
+        # The resting protective stop behind an intraday short. It sits in the
+        # exchange's stop-loss book and fires whether or not this machine is
+        # switched on.
+        params['trigger_price'] = job['trigger_price']
     return client.placeorder(**params)
 
 
@@ -795,6 +833,16 @@ def _normalise_price_fields(order_type, price, trigger_price):
             raise EquityOrderError('A LIMIT order needs a price')
         return order_type, limit_price, None
 
+    if order_type == EQUITY_ORDER_TYPE_SL_M:
+        # A stop-loss-market order carries a trigger and nothing else. Any
+        # limit price is dropped rather than sent, because an SL - which is
+        # what a price would make it - can sit unfilled while the price runs
+        # away from the stop, which on a short is the exact scenario the stop
+        # exists for.
+        if trigger is None or trigger <= 0:
+            raise EquityOrderError('An SL-M order needs a trigger price')
+        return order_type, None, trigger
+
     if trigger is None or trigger <= 0:
         raise EquityOrderError('A GTT order needs a trigger price')
     if limit_price is None or limit_price <= 0:
@@ -847,6 +895,29 @@ def _reference_price_for(order_type, price, reference_price):
     return value if value and value > 0 else None
 
 
+def _order_timeout_for(user_id):
+    """
+    This admin's order timeout, falling back to the module default.
+
+    Read here rather than passed in, so all three placement paths get it
+    without each having to remember. Any unreadable or out of range value falls
+    back to the default: an order write is not the place to honour a setting
+    nobody can vouch for.
+    """
+    try:
+        from app.models import EquitySetting
+
+        settings = EquitySetting.query.filter_by(user_id=user_id).first()
+        seconds = int(getattr(settings, 'order_timeout_seconds', 0) or 0)
+    except Exception as exc:
+        logger.debug('Could not read the order timeout setting: %s', exc)
+        return BROKER_ORDER_TIMEOUT_SECONDS
+
+    if seconds < MIN_ORDER_TIMEOUT_SECONDS or seconds > MAX_ORDER_TIMEOUT_SECONDS:
+        return BROKER_ORDER_TIMEOUT_SECONDS
+    return seconds
+
+
 def _credential_for(account, timeout=None):
     """
     Plain credential dict for one account, built on the calling thread.
@@ -866,7 +937,7 @@ def _credential_for(account, timeout=None):
         'account_name': account.account_name,
         'api_key': api_key,
         'host_url': account.host_url,
-        'timeout': timeout or BROKER_ORDER_TIMEOUT_SECONDS,
+        'timeout': timeout or _order_timeout_for(account.user_id),
     }
 
 
@@ -902,9 +973,119 @@ def _fetch_cash_balances(credentials, client_factory=None, max_workers=None):
     return {result['account_id']: result.get('cash') for result in results}
 
 
+def split_sell_by_holdings(total_quantity, capacity, ratios=None):
+    """
+    Split a SELL across accounts by what each account actually HOLDS.
+
+    WHY THIS EXISTS. Selling was split by the allocation ratio - the ratio that
+    decides how new money is deployed on a BUY. On a sell that ratio governs
+    nothing: the shares decide where a sale can come from.
+
+    Observed 7 September. 250 NIFTYBEES held as 196 on one account and 54 on
+    the other. Selling all 250 was split 64.29 / 35.71 into 161 and 89. The
+    account holding 54 was asked for 89, so 35 shares it did not own became a
+    naked intraday SHORT, while the other account was left holding 35 it should
+    have sold. Every one of the 250 shares was owned. A fully covered sale must
+    never manufacture a short.
+
+    The rule, which is the one already used by the exit queue on Holdings:
+
+      * In proportion to what each account can deliver.
+      * Never more than an account can deliver.
+      * Largest remainder, so the parts always add back to the total. Plain
+        rounding loses a share on most numbers.
+      * An account that can deliver nothing is left out rather than sent a
+        zero.
+
+    ASKING FOR MORE THAN IS HELD IS STILL ALLOWED, because a deliberate short
+    is a real instruction. The owned part is placed where the shares actually
+    are, and only the genuine excess is spread by the allocation ratio - so the
+    short is as small as the instruction can be honoured with, and lands on the
+    accounts the admin funds for it.
+
+    Args:
+        total_quantity: shares to sell in all
+        capacity: {account_id: deliverable shares}. An account missing from
+            this mapping is treated as unknown and gets nothing from the owned
+            part; the caller flags it separately.
+        ratios: {account_id: allocation ratio}, used only to place an excess
+            beyond what is held.
+
+    Returns:
+        (OrderedDict {account_id: quantity}, short_quantity)
+    """
+    wanted = _to_int(total_quantity, 0)
+    quantities = OrderedDict()
+    for account_id in (capacity or {}):
+        quantities[account_id] = 0
+    if wanted <= 0:
+        return quantities, 0
+
+    holdable = OrderedDict()
+    for account_id, shares in (capacity or {}).items():
+        holdable[account_id] = max(_to_int(shares, 0), 0)
+    available = sum(holdable.values())
+
+    covered = min(wanted, available)
+    if covered > 0 and available > 0:
+        # Largest remainder over the holdings themselves.
+        exact = {}
+        floors = {}
+        for account_id, shares in holdable.items():
+            share = (shares * covered) / float(available)
+            floors[account_id] = int(share)
+            exact[account_id] = share - int(share)
+        placed = sum(floors.values())
+        leftover = covered - placed
+        # Biggest fraction first; the account holding most breaks a tie, so the
+        # same numbers always split the same way whatever order they arrive in.
+        order = sorted(
+            holdable.keys(),
+            key=lambda a: (-exact[a], -holdable[a], a)
+        )
+        index = 0
+        while leftover > 0 and order:
+            account_id = order[index % len(order)]
+            if floors[account_id] < holdable[account_id]:
+                floors[account_id] += 1
+                leftover -= 1
+            index += 1
+            if index > len(order) * (covered + 2):
+                break
+        for account_id, shares in floors.items():
+            quantities[account_id] = min(shares, holdable[account_id])
+
+    short = wanted - sum(quantities.values())
+    if short > 0:
+        # Beyond what is held. Spread by the allocation ratio, which is the
+        # admin's own statement of how much of this stock each account should
+        # be carrying, and therefore where he would want a short to sit.
+        weights = OrderedDict()
+        for account_id in quantities:
+            weights[account_id] = _to_float((ratios or {}).get(account_id)) or 0.0
+        if sum(weights.values()) <= 0:
+            for account_id in weights:
+                weights[account_id] = 1.0
+        spread = split_quantity_by_ratio(short, weights)
+        for account_id, extra in spread.quantities.items():
+            quantities[account_id] = quantities.get(account_id, 0) + _to_int(extra, 0)
+        placed_short = sum(_to_int(v, 0) for v in spread.quantities.values())
+        # split_quantity_by_ratio can leave a remainder of its own. It goes to
+        # the largest holder, so the total is always exactly what was asked.
+        stray = short - placed_short
+        if stray > 0 and quantities:
+            biggest = sorted(
+                quantities.keys(), key=lambda a: (-holdable.get(a, 0), a)
+            )[0]
+            quantities[biggest] += stray
+
+    return quantities, max(wanted - sum(min(quantities[a], holdable.get(a, 0))
+                                        for a in quantities), 0)
+
+
 def _build_split_plan(user_id, accounts, total_quantity, quantity_overrides,
                       order_type, price, side, reference_price, cash_balances,
-                      client_factory, max_workers):
+                      client_factory, max_workers, sell_capacity=None):
     """
     Work out what each account would be sent, and whether it can afford it.
 
@@ -919,7 +1100,30 @@ def _build_split_plan(user_id, accounts, total_quantity, quantity_overrides,
     """
     allocations = _allocation_amounts(user_id, accounts)
     ratios = compute_order_qty_ratios(allocations)
-    split = split_quantity_by_ratio(total_quantity, ratios)
+
+    # A BUY is split by the allocation ratio: it is new money, and the ratio is
+    # how the admin wants money deployed. A SELL is split by the STOCK, because
+    # a sale can only come out of the accounts that hold the shares. Using the
+    # ratio for both is what turned a fully covered sale of 250 shares into a
+    # short of 35 on 7 September.
+    sell_by_holdings = (
+        side == EQUITY_SIDE_SELL and sell_capacity is not None
+    )
+    if sell_by_holdings:
+        capacity = OrderedDict(
+            (account.id, _to_int(sell_capacity.get(account.id), 0))
+            for account in accounts
+        )
+        planned, _short = split_sell_by_holdings(
+            total_quantity, capacity, ratios
+        )
+        split = QuantitySplit(
+            quantities=planned,
+            leftover=max(total_quantity - sum(planned.values()), 0),
+        )
+    else:
+        capacity = None
+        split = split_quantity_by_ratio(total_quantity, ratios)
 
     overrides = {}
     for raw_account_id, raw_quantity in (quantity_overrides or {}).items():
@@ -974,7 +1178,11 @@ def _build_split_plan(user_id, accounts, total_quantity, quantity_overrides,
 
         if quantity <= 0:
             ok = False
-            if allocations.get(account.id, 0.0) <= 0:
+            if sell_by_holdings and _to_int((capacity or {}).get(account.id), 0) <= 0:
+                reason = 'This account holds none of this stock, so it has nothing to sell'
+            elif sell_by_holdings:
+                reason = 'This account holds too few shares to take a whole share of the sale'
+            elif allocations.get(account.id, 0.0) <= 0:
                 reason = 'No equity allocation on this account, so the ratio gives it no quantity'
             else:
                 reason = 'The ratio gives this account no whole share of the total quantity'
@@ -1004,6 +1212,10 @@ def _build_split_plan(user_id, accounts, total_quantity, quantity_overrides,
         })
 
     meta = {
+        # HOLDINGS on a sell that knows what each account can deliver, RATIO
+        # otherwise. The screen says which, so the Qty column is never a number
+        # with an unexplained basis.
+        'split_basis': 'HOLDINGS' if sell_by_holdings else 'RATIO',
         'ratio_leftover': _to_int(split.leftover, 0),
         'leftover_quantity': max(total_quantity - allocated, 0),
         'allocated_quantity': allocated,
@@ -1149,6 +1361,7 @@ def recompute_parent_status(order_id, user_id, commit=True):
     if order is None:
         return None
 
+    was = order.status
     counts = summarise_splits(order.splits.all())
     status = _rollup_status(counts, order.status)
 
@@ -1156,9 +1369,113 @@ def recompute_parent_status(order_id, user_id, commit=True):
         order.status = status
         if status == EQUITY_ORDER_STATUS_CANCELLED and order.cancelled_at is None:
             order.cancelled_at = _now()
+
+    # The moment a buy first fills, the levels it was placed with become the
+    # levels that are actually armed.
+    if (status != was
+            and status in (EQUITY_ORDER_STATUS_COMPLETED, EQUITY_ORDER_STATUS_PARTIAL)
+            and was not in (EQUITY_ORDER_STATUS_COMPLETED, EQUITY_ORDER_STATUS_PARTIAL)):
+        _arm_levels_from_order(order, user_id)
+
     if commit:
         db.session.commit()
     return status
+
+
+def _arm_levels_from_order(order, user_id):
+    """
+    Push a filled BUY's stop loss and target onto the holdings it just added to.
+
+    WHY THIS EXISTS. A stop loss set on a buy order was written to the order
+    and, if the holding row did not yet exist, copied onto it when the row was
+    created. If the stock was ALREADY held, nothing happened at all: the
+    holding kept the levels from whatever buy created it, and the new order's
+    levels governed nothing.
+
+    Observed 6 September. GOLDBEES was held at a stop of 125 and a target of
+    130 from a 4 September buy. A fresh buy on 6 September specified 120 and
+    140. The Order Book and Trade Book showed 120 / 140 because that is what
+    the ORDER says; Positions and Holdings showed 125 / 130 because that is
+    what is armed; and the monitor - which reads the holding - would have sold
+    at 125. The owner had moved his stop and it had not moved.
+
+    A holding can hold exactly one stop loss and one target, so the only
+    question is which instruction wins. It is the newest: an admin who names a
+    level on a new buy of a stock he already holds is stating his view of that
+    stock, not of those particular shares.
+
+    ONLY on the first fill, and deliberately. This runs where a split has just
+    changed, which is often; re-applying on every later pass would overwrite a
+    level the admin had since set by hand on the Holdings screen. The first
+    transition into a filled state happens once.
+
+    A SELL is ignored - it takes shares out and arms nothing - and so is a buy
+    that named no level, which is not an instruction to clear the levels
+    already there.
+    """
+    if order.side != EQUITY_SIDE_BUY:
+        return
+    if order.stop_loss is None and order.target is None:
+        return
+
+    # Only the accounts that actually filled. An account whose leg was
+    # rejected bought nothing and has no reason to have its stop moved.
+    accounts = {
+        split.account_id for split in order.splits.all()
+        if split.fill_status in (
+            EQUITY_SPLIT_STATUS_COMPLETED, EQUITY_SPLIT_STATUS_PARTIAL
+        )
+    }
+    if not accounts:
+        return
+
+    try:
+        holdings = EquityHolding.query.filter(
+            EquityHolding.user_id == user_id,
+            EquityHolding.account_id.in_(accounts),
+            EquityHolding.symbol == order.symbol,
+            EquityHolding.exchange == order.exchange,
+        ).all()
+    except Exception as exc:
+        logger.warning(
+            '[EQUITY_ORDER] Could not arm levels for order %s: %s',
+            order.id, exc
+        )
+        return
+
+    for holding in holdings:
+        stop_changed = (
+            order.stop_loss is not None
+            and _to_float(holding.stop_loss) != _to_float(order.stop_loss)
+        )
+        target_changed = (
+            order.target is not None
+            and _to_float(holding.target) != _to_float(order.target)
+        )
+        if not stop_changed and not target_changed:
+            continue
+
+        if order.stop_loss is not None:
+            holding.stop_loss = order.stop_loss
+        if order.target is not None:
+            holding.target = order.target
+
+        # A level that has already fired stays silent for good unless the
+        # breach is cleared, so moving a level must re-arm it.
+        try:
+            EquityHolding.clear_breach(holding.id, user_id)
+        except Exception as exc:
+            logger.warning(
+                '[EQUITY_ORDER] Could not re-arm %s on account %s: %s',
+                order.symbol, holding.account_id, exc
+            )
+
+        logger.info(
+            '[EQUITY_ORDER] %s on account %s: levels moved to stop %s / '
+            'target %s by order %s',
+            order.symbol, holding.account_id, holding.stop_loss,
+            holding.target, order.id
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1170,7 +1487,8 @@ def preview_order_split(user_id, symbol, exchange, side, total_quantity,
                         trigger_price=None, account_ids=None,
                         quantity_overrides=None, reference_price=None,
                         cash_balances=None, insufficient_funds_action=None,
-                        client_factory=None, max_workers=None):
+                        client_factory=None, max_workers=None,
+                        sell_capacity=None):
     """
     Work out the account-wise order split WITHOUT touching a broker or writing
     a row. This is what fills the Place Order split table, including the Check
@@ -1205,6 +1523,7 @@ def preview_order_split(user_id, symbol, exchange, side, total_quantity,
             cash_balances=cash_balances,
             client_factory=client_factory,
             max_workers=max_workers,
+            sell_capacity=sell_capacity,
         )
     except EquityOrderError as exc:
         return {'status': 'error', 'message': str(exc), 'rows': []}
@@ -1223,6 +1542,7 @@ def preview_order_split(user_id, symbol, exchange, side, total_quantity,
         'total_quantity': total_quantity,
         'rows': rows,
         'leftover_quantity': meta['leftover_quantity'],
+        'split_basis': meta.get('split_basis', 'RATIO'),
         'ratio_leftover': meta['ratio_leftover'],
         'allocated_quantity': meta['allocated_quantity'],
         'reference_price': meta['reference_price'],
@@ -1240,7 +1560,8 @@ def preview_order_split(user_id, symbol, exchange, side, total_quantity,
 
 def _create_parent_order(user_id, symbol, exchange, side, order_type, price,
                          trigger_price, total_quantity, stop_loss, target,
-                         trade_nature_id, source, leftover_quantity, funds_action):
+                         trade_nature_id, source, leftover_quantity, funds_action,
+                         product=EQUITY_PRODUCT_CNC):
     """Create and COMMIT the parent order before any broker is called."""
     order = EquityOrder(
         user_id=user_id,
@@ -1248,7 +1569,10 @@ def _create_parent_order(user_id, symbol, exchange, side, order_type, price,
         exchange=exchange,
         side=side,
         order_type=order_type,
-        product=EQUITY_PRODUCT_CNC,
+        # Recorded rather than assumed. Every screen that shows an order has to
+        # be able to say whether it was delivery or intraday, and an intraday
+        # one carries an obligation that a delivery one does not.
+        product=product,
         total_quantity=total_quantity,
         price=price,
         trigger_price=trigger_price,
@@ -1396,7 +1720,9 @@ def place_multi_account_order(user_id, symbol, exchange, side, total_quantity,
                               gtt_trigger_leg=None,
                               max_attempts=DEFAULT_MAX_ATTEMPTS,
                               retry_delay_seconds=DEFAULT_RETRY_DELAY_SECONDS,
-                              sleeper=None, max_workers=None):
+                              sleeper=None, max_workers=None,
+                              product=EQUITY_PRODUCT_CNC,
+                              sell_capacity=None):
     """
     Place one equity instruction across several accounts at once.
 
@@ -1406,8 +1732,11 @@ def place_multi_account_order(user_id, symbol, exchange, side, total_quantity,
     calls then run concurrently, one worker per account, and the results are
     written back on this thread in one transaction.
 
-    Product is always CNC. Stop loss and target are recorded on the order for
-    AlgoMirror's own monitor and are NOT sent to the broker.
+    Product is CNC unless told otherwise, which is what it is for every
+    delivery order this module places. MIS appears in exactly two places: the
+    part of a sell the account does not own, and the buy-back that closes it.
+    Stop loss and target are recorded on the order for AlgoMirror's own monitor
+    and are NOT sent to the broker.
 
     Args:
         user_id: owner. Every query in here is scoped to it.
@@ -1473,6 +1802,7 @@ def place_multi_account_order(user_id, symbol, exchange, side, total_quantity,
             cash_balances=cash_balances,
             client_factory=client_factory,
             max_workers=max_workers,
+            sell_capacity=sell_capacity,
         )
     except EquityOrderError as exc:
         return {
@@ -1493,6 +1823,7 @@ def place_multi_account_order(user_id, symbol, exchange, side, total_quantity,
         total_quantity=total_quantity, stop_loss=stop_loss, target=target,
         trade_nature_id=trade_nature_id, source=source,
         leftover_quantity=meta['leftover_quantity'], funds_action=funds_action,
+        product=product,
     )
 
     # ABORT: every account is recorded as skipped and nothing is sent anywhere.
@@ -1539,6 +1870,7 @@ def place_multi_account_order(user_id, symbol, exchange, side, total_quantity,
             'price': price,
             'trigger_price': trigger_price,
             'quantity': row['quantity'],
+            'product': product,
             'strategy_name': strategy_name,
             'gtt_trigger_leg': gtt_trigger_leg,
             'max_attempts': max_attempts,
@@ -1870,14 +2202,31 @@ def modify_order(user_id, order_id, price=None, trigger_price=None,
             split.error_type = result['error_type']
         split.last_synced_at = _now()
 
-    if new_price is not None:
-        order.price = new_price
-    if new_trigger is not None:
-        order.trigger_price = new_trigger
+    # The parent is written ONLY when at least one account accepted.
+    #
+    # It used to be written unconditionally, and that put a lie on the screen:
+    # a modify every account refused still showed the new price, so AlgoMirror
+    # displayed a figure no broker had ever held on an order that was still
+    # live at the old one. Observed on 4 September with a GTT both accounts
+    # refused; the screen read 712.85 for days.
+    #
+    # A PARTIAL is written. One account holding the new price is a real change
+    # and the accounts that refused carry their own error_message, which is
+    # where a per-account failure belongs.
+    accepted = any(result.get('ok') for result in results)
+
+    if accepted:
+        if new_price is not None:
+            order.price = new_price
+        if new_trigger is not None:
+            order.trigger_price = new_trigger
+
     if new_quantities:
-        # The parent total follows the per-account quantities that are really
-        # at the broker. A split that was never sent carries zero, so it does
-        # not inflate the total.
+        # Safe either way, and deliberately outside the guard: this is summed
+        # from the splits themselves, and a split is only re-quantified when
+        # its own account accepted. With nothing accepted it recomputes the
+        # number it already held. A split that was never sent carries zero, so
+        # it does not inflate the total.
         order.total_quantity = sum(
             _to_int(split.quantity, 0) for split in order.splits.all()
         )
@@ -2045,13 +2394,223 @@ def _exit_result(status, holding_id, message, **extra):
     return result
 
 
+def _broker_holding_counts(credential, symbol, exchange, client_factory=None):
+    """
+    Read one account's holding of one symbol straight from the broker.
+
+    Returns (quantity, pledged), or None when the broker could not be read.
+
+    None means UNKNOWN and never zero. An unreadable broker must not be allowed
+    to look like an empty account, because the caller's next decision is
+    whether to sell.
+
+    A broker that answers and simply does not list the symbol IS zero: the
+    account genuinely holds none.
+    """
+    account_id = credential.get('account_id')
+    try:
+        client = _resolve_factory(client_factory)(
+            dict(credential, timeout=BROKER_HOLDINGS_TIMEOUT_SECONDS)
+        )
+        response = client.holdings()
+    except Exception as exc:
+        logger.warning(
+            'Equity holdings read failed for account %s while verifying %s: %s',
+            account_id, symbol, exc
+        )
+        return None
+
+    if not isinstance(response, dict) or response.get('status') != 'success':
+        logger.warning(
+            'Equity holdings read for account %s did not succeed while '
+            'verifying %s', account_id, symbol
+        )
+        return None
+
+    data = response.get('data')
+    rows = data.get('holdings') if isinstance(data, dict) else data
+    if not isinstance(rows, list):
+        logger.warning(
+            'Equity holdings payload for account %s carried no rows while '
+            'verifying %s', account_id, symbol
+        )
+        return None
+
+    want_symbol = (symbol or '').strip().upper()
+    want_exchange = (exchange or '').strip().upper()
+    quantity = 0
+    pledged = 0
+
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        # Holdings are delivery by definition, so an adapter that leaves the
+        # product blank is kept. A row that names another product is not ours.
+        product = str(row.get('product') or '').strip().upper()
+        if product and product != EQUITY_PRODUCT_CNC:
+            continue
+        if str(row.get('symbol') or '').strip().upper() != want_symbol:
+            continue
+        row_exchange = str(row.get('exchange') or '').strip().upper()
+        if want_exchange and row_exchange and row_exchange != want_exchange:
+            continue
+
+        quantity += _to_int(row.get('quantity'))
+        for key in _HOLDING_PLEDGED_KEYS:
+            if row.get(key) is not None:
+                pledged += _to_int(row.get(key))
+                break
+
+    return max(quantity, 0), max(pledged, 0)
+
+
+def _broker_position_counts(credential, symbol, exchange, client_factory=None):
+    """
+    Read one account's OPEN POSITION in one symbol straight from the broker.
+
+    Same contract as _broker_holding_counts: returns (quantity, pledged), or
+    None when the broker could not be read. None means UNKNOWN and never zero.
+    Pledged is always zero here - shares bought today have not been delivered,
+    so there is nothing to pledge.
+
+    Why a second reader. A delivery buy is a POSITION on the day it is bought
+    and only becomes a HOLDING at settlement. Asking the holdings book about a
+    stock bought this morning gets a truthful zero, and a zero from that book
+    reads as "those shares are gone" - which would withhold a stop loss exit on
+    exactly the shares it was armed to protect. An unsettled row is therefore
+    verified here instead.
+
+    A negative position is a sale already made out of the same day's buy and is
+    floored at zero: there is nothing left to sell.
+    """
+    account_id = credential.get('account_id')
+    try:
+        client = _resolve_factory(client_factory)(
+            dict(credential, timeout=BROKER_HOLDINGS_TIMEOUT_SECONDS)
+        )
+        response = client.positionbook()
+    except Exception as exc:
+        logger.warning(
+            'Equity position read failed for account %s while verifying %s: %s',
+            account_id, symbol, exc
+        )
+        return None
+
+    if not isinstance(response, dict) or response.get('status') != 'success':
+        logger.warning(
+            'Equity position read for account %s did not succeed while '
+            'verifying %s', account_id, symbol
+        )
+        return None
+
+    data = response.get('data')
+    rows = data.get('positions') if isinstance(data, dict) else data
+    if not isinstance(rows, list):
+        logger.warning(
+            'Equity position payload for account %s carried no rows while '
+            'verifying %s', account_id, symbol
+        )
+        return None
+
+    want_symbol = (symbol or '').strip().upper()
+    want_exchange = (exchange or '').strip().upper()
+    quantity = 0
+
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        # A position book carries intraday lines too. Only the delivery product
+        # can settle into a holding, so only that one is counted. A blank
+        # product is kept for the same reason as in the holdings reader: some
+        # adapters do not fill it in.
+        product = str(row.get('product') or '').strip().upper()
+        if product and product != EQUITY_PRODUCT_CNC:
+            continue
+        if str(row.get('symbol') or '').strip().upper() != want_symbol:
+            continue
+        row_exchange = str(row.get('exchange') or '').strip().upper()
+        if want_exchange and row_exchange and row_exchange != want_exchange:
+            continue
+
+        quantity += _to_int(row.get('quantity'))
+
+    return max(quantity, 0), 0
+
+
+def _verify_holding_quantity(holding, credential, client_factory=None):
+    """
+    Refresh one holding's quantity and pledged count from the broker.
+
+    This runs BEFORE the claim, so the claim sizes the sell against what the
+    broker actually holds rather than against whatever was last written here.
+    It is the guard against a share count that moved outside AlgoMirror - an
+    emergency sell from the broker's own app, most obviously - leaving this
+    application ready to sell shares that are no longer there.
+
+    Returns (verified, message):
+        (True, None)      the broker answered and the row now matches it
+        (False, reason)   the broker could not be read; NOTHING may be sold
+
+    A shortfall is not a failure. The row is corrected and the sell goes ahead
+    for what is really there, because selling forty of the forty you still hold
+    is right and selling a hundred is not.
+    """
+    # An unsettled row is a buy that has filled but not yet been delivered, so
+    # the broker's HOLDINGS book truthfully reports none of it. Asking that
+    # book would return zero, the sell would be sized to nothing, and a stop
+    # loss would be withheld on exactly the shares it was armed to protect.
+    # The position book is where those shares are until tomorrow.
+    unsettled = not bool(getattr(holding, 'is_settled', True))
+    reader = _broker_position_counts if unsettled else _broker_holding_counts
+
+    counts = reader(
+        credential, holding.symbol, holding.exchange, client_factory
+    )
+    if counts is None:
+        return False, (
+            'The broker could not be read, so the quantity held could not be '
+            'verified. Nothing was sold.'
+        )
+
+    quantity, pledged = counts
+    was = _to_int(holding.quantity)
+
+    if quantity == was and _to_int(holding.pledged_quantity) == pledged:
+        return True, None
+
+    if quantity < was:
+        logger.warning(
+            'Equity %s %s (%s) verified at %s shares against %s stored. '
+            'The difference was not placed through AlgoMirror. The sell will '
+            'be sized to the broker figure.',
+            'position' if unsettled else 'holding',
+            holding.id, holding.symbol, quantity, was
+        )
+
+    try:
+        holding.quantity = quantity
+        holding.pledged_quantity = pledged
+        db.session.commit()
+    except Exception as exc:
+        db.session.rollback()
+        logger.error(
+            'Could not store the verified quantity for holding %s: %s',
+            holding.id, exc
+        )
+        return False, (
+            'The verified quantity could not be stored, so nothing was sold.'
+        )
+
+    return True, None
+
+
 def exit_holding(user_id, holding_id, reason=EQUITY_EXIT_REASON_MANUAL,
                  quantity=None, order_type=EQUITY_ORDER_TYPE_MARKET, price=None,
                  trigger_price=None, allow_from=None, client_factory=None,
                  strategy_name=DEFAULT_STRATEGY_NAME,
                  max_attempts=DEFAULT_MAX_ATTEMPTS,
                  retry_delay_seconds=DEFAULT_RETRY_DELAY_SECONDS, sleeper=None,
-                 gtt_trigger_leg=None):
+                 gtt_trigger_leg=None, verify_quantity=True):
     """
     Sell against one holding. This is the ONLY way an equity exit is placed.
 
@@ -2059,6 +2618,10 @@ def exit_holding(user_id, holding_id, reason=EQUITY_EXIT_REASON_MANUAL,
     call this function, which is what stops them selling the same shares twice.
     The order is fixed:
 
+        0. The quantity held is VERIFIED against the broker before anything is
+           claimed, because the stored figure may have been overtaken by a
+           trade placed outside AlgoMirror. A shortfall resizes the sell; a
+           broker that cannot be read stops it altogether.
         1. EquityHolding.claim_for_exit locks the row, re-checks that it is
            still claimable and still carries no broker order id, writes
            EXIT_PENDING and COMMITS. Losing that race returns a skipped result,
@@ -2090,6 +2653,8 @@ def exit_holding(user_id, holding_id, reason=EQUITY_EXIT_REASON_MANUAL,
         client_factory: the broker seam.
         strategy_name, max_attempts, retry_delay_seconds, sleeper,
         gtt_trigger_leg: as for place_multi_account_order.
+        verify_quantity: read the broker before claiming. Leave it True. It is
+            settable only so a test can drive the claim directly.
 
     Returns:
         dict with status:
@@ -2101,6 +2666,9 @@ def exit_holding(user_id, holding_id, reason=EQUITY_EXIT_REASON_MANUAL,
                              EXIT_INDETERMINATE and must be reconciled by hand.
             'error'          a definite failure. The claim was released and the
                              holding can be exited again.
+            'unverified'     the quantity held could not be confirmed with the
+                             broker. NO claim was taken and NO order was sent.
+                             Safe to try again once the broker answers.
         plus holding_id, account_id, quantity, order_id, split_id,
         broker_order_id, attempts, claimed and message.
     """
@@ -2116,6 +2684,47 @@ def exit_holding(user_id, holding_id, reason=EQUITY_EXIT_REASON_MANUAL,
             'error', holding_id,
             'Exit reason must be one of %s' % ', '.join(sorted(_EXIT_REASON_TO_SOURCE))
         )
+
+    # 0. VERIFY. The stored quantity is only as fresh as the last read, and a
+    # sell placed from the broker's own app in an emergency does not pass
+    # through here at all. Selling a hundred shares against a holding of forty
+    # is not a risk worth taking for the seconds this costs, so the broker is
+    # asked first and the claim below sizes itself against the answer.
+    if verify_quantity:
+        row = EquityHolding.query.filter_by(id=holding_id, user_id=user_id).first()
+        if row is None:
+            return _exit_result('error', holding_id, 'Holding not found')
+
+        verify_account = TradingAccount.query.filter_by(
+            id=row.account_id, user_id=user_id
+        ).first()
+        if verify_account is None or not verify_account.is_active:
+            return _exit_result(
+                'error', holding_id,
+                'The account for this holding is not available for trading',
+                account_id=row.account_id
+            )
+
+        verify_credential = _credential_for(verify_account)
+        if verify_credential.get('api_key') is None:
+            return _exit_result(
+                'error', holding_id,
+                'The API key for this account could not be read',
+                account_id=row.account_id
+            )
+
+        verified, reason_unverified = _verify_holding_quantity(
+            row, verify_credential, client_factory
+        )
+        if not verified:
+            logger.warning(
+                'Equity exit withheld for holding %s (%s): %s',
+                holding_id, row.symbol, reason_unverified
+            )
+            return _exit_result(
+                'unverified', holding_id, reason_unverified,
+                account_id=row.account_id
+            )
 
     # 1. THE CLAIM. Locked, re-checked and committed before anything else.
     holding, refusal = EquityHolding.claim_for_exit(

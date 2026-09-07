@@ -1,5 +1,6 @@
 from datetime import datetime
 from flask_login import UserMixin
+from sqlalchemy import or_, update as sa_update
 from werkzeug.security import generate_password_hash, check_password_hash
 from cryptography.fernet import Fernet
 import os
@@ -930,6 +931,14 @@ def load_user(user_id):
 
 EQUITY_PRODUCT_CNC = 'CNC'
 
+# Intraday. Used for ONE thing and nothing else: the part of a sell that the
+# account does not own, which would be a short delivery as CNC. It is not a
+# product the admin chooses; it appears only where a sell has run out of
+# shares, and every MIS position this application opens must be bought back
+# the same day. See EquityIntradayShort.
+EQUITY_PRODUCT_MIS = 'MIS'
+EQUITY_PRODUCTS = (EQUITY_PRODUCT_CNC, EQUITY_PRODUCT_MIS)
+
 # Order side values
 EQUITY_SIDE_BUY = 'BUY'
 EQUITY_SIDE_SELL = 'SELL'
@@ -938,6 +947,15 @@ EQUITY_SIDE_SELL = 'SELL'
 EQUITY_ORDER_TYPE_MARKET = 'MARKET'
 EQUITY_ORDER_TYPE_LIMIT = 'LIMIT'
 EQUITY_ORDER_TYPE_GTT = 'GTT'
+
+# Stop loss market: rests at the exchange until the trigger, then goes at
+# market. Used for ONE thing - the protective buy that sits behind an intraday
+# short - and never offered as a choice on the order form.
+#
+# SL-M rather than SL on purpose. SL becomes a LIMIT once triggered and can sit
+# unfilled while the price runs away from it, which on a short is the exact
+# scenario the stop exists for. SL-M gets out.
+EQUITY_ORDER_TYPE_SL_M = 'SL-M'
 
 # Parent order status values
 EQUITY_ORDER_STATUS_PENDING = 'PENDING'
@@ -1101,12 +1119,62 @@ def equity_is_indeterminate_response(response):
 #   EXIT_INDETERMINATE  the sell request never got an answer. Terminal until a
 #                       human reconciles it, never auto retried.
 #   EXITED              the sell filled and the holding is flat
+# An intraday short's life. OPEN means shares are owed and the clock is
+# running; everything else means a buy-back is in flight or done.
+EQUITY_SHORT_STATUS_OPEN = 'OPEN'
+EQUITY_SHORT_STATUS_COVER_PENDING = 'COVER_PENDING'
+EQUITY_SHORT_STATUS_COVER_SUBMITTED = 'COVER_SUBMITTED'
+EQUITY_SHORT_STATUS_COVER_INDETERMINATE = 'COVER_INDETERMINATE'
+EQUITY_SHORT_STATUS_COVERED = 'COVERED'
+
+# The protective order's own life, kept apart from the short's.
+EQUITY_STOP_STATUS_NONE = 'NONE'
+EQUITY_STOP_STATUS_RESTING = 'RESTING'
+EQUITY_STOP_STATUS_CANCELLED = 'CANCELLED'
+EQUITY_STOP_STATUS_TRIGGERED = 'TRIGGERED'
+EQUITY_STOP_STATUS_FAILED = 'FAILED'
+
+# Claimable: the buy-back has not started. Only OPEN qualifies.
+EQUITY_SHORT_STATUSES_CLAIMABLE = (EQUITY_SHORT_STATUS_OPEN,)
+
+# In flight: a buy-back is at the broker, or may be. Nothing may claim these.
+EQUITY_SHORT_STATUSES_IN_FLIGHT = (
+    EQUITY_SHORT_STATUS_COVER_PENDING,
+    EQUITY_SHORT_STATUS_COVER_SUBMITTED,
+    EQUITY_SHORT_STATUS_COVER_INDETERMINATE,
+)
+
 EQUITY_HOLDING_STATUS_ACTIVE = 'ACTIVE'
 EQUITY_HOLDING_STATUS_AWAITING_CONFIRM = 'AWAITING_CONFIRM'
 EQUITY_HOLDING_STATUS_EXIT_PENDING = 'EXIT_PENDING'
 EQUITY_HOLDING_STATUS_EXIT_SUBMITTED = 'EXIT_SUBMITTED'
 EQUITY_HOLDING_STATUS_EXIT_INDETERMINATE = 'EXIT_INDETERMINATE'
 EQUITY_HOLDING_STATUS_EXITED = 'EXITED'
+
+# Why a holding notice was raised. A notice is never an error: it is the
+# application saying out loud that a share count moved for a reason it did not
+# cause, so the admin is never surprised by their own broker.
+EQUITY_NOTICE_SHARES_ARRIVED = 'SHARES_ARRIVED'
+EQUITY_NOTICE_SHARES_LEFT = 'SHARES_LEFT'
+EQUITY_NOTICE_HOLDING_NEW = 'HOLDING_NEW'
+EQUITY_NOTICE_HOLDING_CLOSED = 'HOLDING_CLOSED'
+# A stop loss or target was actually hit. Not a share movement like the four
+# above, but it travels in the same feed for the same reason: it is a statement
+# about a holding that the admin has to see, and it should not need a second
+# place to look. Before these existed a breach reached the Holdings screen and
+# nowhere else, so a stop loss hit while the admin was on any other screen said
+# nothing at all.
+EQUITY_NOTICE_STOP_LOSS_HIT = 'STOP_LOSS_HIT'
+EQUITY_NOTICE_TARGET_HIT = 'TARGET_HIT'
+
+EQUITY_NOTICE_KINDS = (
+    EQUITY_NOTICE_SHARES_ARRIVED,
+    EQUITY_NOTICE_SHARES_LEFT,
+    EQUITY_NOTICE_HOLDING_NEW,
+    EQUITY_NOTICE_HOLDING_CLOSED,
+    EQUITY_NOTICE_STOP_LOSS_HIT,
+    EQUITY_NOTICE_TARGET_HIT,
+)
 
 # The only statuses EquityHolding.claim_for_exit will claim from
 EQUITY_HOLDING_STATUSES_CLAIMABLE = (
@@ -1231,10 +1299,52 @@ class EquityTradeNature(db.Model):
         db.session.commit()
 
 
+class EquityWatchlist(db.Model):
+    """
+    A named watch list. A user may keep several.
+
+    The same stock is allowed to sit in more than one list, in the manner of
+    Screener, and each entry carries its own target price and its own alert.
+    That is why the uniqueness rule on EquityWatchlistItem is scoped to the
+    list and not to the user.
+
+    Exactly one list per user is the default. It is the list the screen opens
+    on, and the one a stock lands in when no list is named. Deleting the
+    default is refused, so a user can never be left with nowhere to put a
+    stock. The flag moves only when another list is made default.
+    """
+    __tablename__ = 'equity_watchlists'
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
+    name = db.Column(db.String(60), nullable=False)
+
+    is_default = db.Column(db.Boolean, default=False, nullable=False, index=True)
+
+    # Display order of the lists in the selector. Ties fall back to name.
+    sort_order = db.Column(db.Integer, default=0, nullable=False)
+
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    user = db.relationship('User', backref='equity_watchlists')
+
+    __table_args__ = (
+        db.UniqueConstraint('user_id', 'name', name='_user_watchlist_name_uc'),
+    )
+
+    def __repr__(self):
+        return f'<EquityWatchlist {self.name}>'
+
+
 class EquityWatchlistItem(db.Model):
     """
-    Watch list entry. The watch list is shared at the admin level and is not
+    Watch list entry. Watch lists are shared at the admin level and are not
     scoped to a single trading account.
+
+    Every entry belongs to exactly one EquityWatchlist. Uniqueness is scoped to
+    the list, so the same stock may appear in several lists, each with its own
+    target price and its own alert.
 
     Alert de-duplication. The watch list refreshes its LTP every few seconds,
     so a price that has crossed alert_price would otherwise raise an alert on
@@ -1248,6 +1358,9 @@ class EquityWatchlistItem(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
+    watchlist_id = db.Column(
+        db.Integer, db.ForeignKey('equity_watchlists.id'), nullable=False, index=True
+    )
     symbol = db.Column(db.String(50), nullable=False, index=True)
     exchange = db.Column(db.String(20), nullable=False, default='NSE', index=True)
     trade_nature_id = db.Column(db.Integer, db.ForeignKey('equity_trade_natures.id'), nullable=True, index=True)
@@ -1273,14 +1386,73 @@ class EquityWatchlistItem(db.Model):
     # Relationships
     user = db.relationship('User', backref='equity_watchlist_items')
     trade_nature = db.relationship('EquityTradeNature', backref='watchlist_items')
+    watchlist = db.relationship(
+        'EquityWatchlist',
+        backref=db.backref('items', cascade='all, delete-orphan', lazy='dynamic')
+    )
 
-    # Unique constraint for user, symbol, and exchange
+    # Scoped to the list, not the user: the same stock may sit in several lists.
     __table_args__ = (
-        db.UniqueConstraint('user_id', 'symbol', 'exchange', name='_user_watchlist_symbol_uc'),
+        db.UniqueConstraint('watchlist_id', 'symbol', 'exchange', name='_watchlist_symbol_uc'),
     )
 
     def __repr__(self):
         return f'<EquityWatchlistItem {self.symbol} - {self.exchange}>'
+
+
+class EquityAlertEvent(db.Model):
+    """
+    One price alert that actually fired.
+
+    The alert itself lives on the watch list row. This is the record of that
+    alert going off, and it exists because the alert no longer depends on
+    anyone watching. The background monitor evaluates alerts on its own
+    schedule whether or not a screen is open, so a fired alert needs somewhere
+    to wait until a browser is there to show it - and a later delivery channel,
+    WhatsApp among them, reads these same rows rather than needing its own.
+
+    notified_at is the browser guard, and works the way alert_triggered_at
+    works on the watch list row: an event is offered to a screen only while it
+    is NULL, and stamping it is what marks it shown. Without it every poll
+    would raise the same alert again.
+
+    The row belongs to the watch list entry and goes with it. Removing a stock
+    from a watch list removes its alert and the record of that alert firing,
+    which is what "removing the row removes its alert" has to mean if it is to
+    be true.
+    """
+    __tablename__ = 'equity_alert_events'
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
+    watchlist_item_id = db.Column(
+        db.Integer,
+        db.ForeignKey('equity_watchlist_items.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True
+    )
+
+    # Copied onto the event rather than read back through the relationship. An
+    # alert is a statement about a moment, so it has to keep reading correctly
+    # even if the watch list row is edited a second after it fired.
+    symbol = db.Column(db.String(50), nullable=False)
+    exchange = db.Column(db.String(20), nullable=False, default='NSE')
+    alert_price = db.Column(db.Float)
+    alert_direction = db.Column(db.String(10))
+    ltp = db.Column(db.Float)
+    message = db.Column(db.String(255), nullable=False)
+
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+    notified_at = db.Column(db.DateTime, index=True)
+
+    user = db.relationship('User', backref='equity_alert_events')
+    watchlist_item = db.relationship(
+        'EquityWatchlistItem',
+        backref=db.backref('alert_events', cascade='all, delete-orphan', lazy='dynamic')
+    )
+
+    def __repr__(self):
+        return f'<EquityAlertEvent {self.symbol} at {self.alert_price}>'
 
 
 class EquityOrder(db.Model):
@@ -1553,6 +1725,62 @@ class EquityHolding(db.Model):
     last_price = db.Column(db.Float)
     last_price_updated = db.Column(db.DateTime)
 
+    # Shares the broker reports that AlgoMirror's own filled orders do not
+    # account for: the broker's quantity minus (filled buys - filled sells)
+    # placed through this application. It is normally a fixed number - shares
+    # bought elsewhere, or held before AlgoMirror existed - and its VALUE is
+    # uninteresting. What matters is when it CHANGES, because a change means
+    # shares moved at the broker without an order from here. The baseline is
+    # absorbed silently the first time a row is seen; every later change raises
+    # a notice. Never used to size a sell; only the broker's own count does
+    # that.
+    #
+    # NULL means "not measured yet" and is the whole reason no notice is raised
+    # for history: the first measurement writes the figure silently, and only a
+    # later change to it is worth telling anybody about.
+    external_quantity = db.Column(db.Integer, nullable=True, default=None)
+
+    # False while the shares are bought and filled but not yet delivered into
+    # the broker's holdings book. A delivery buy is a POSITION on the day it is
+    # bought and only becomes a HOLDING at settlement, which left a window -
+    # the whole of the trading day it was bought on - in which a stop loss the
+    # admin had set governed nothing at all, because the monitor works on
+    # holding rows and there was no holding row yet.
+    #
+    # An unsettled row is created from AlgoMirror's own fills so that the levels
+    # are armed from the moment the buy completes. Two rules follow from it, and
+    # both matter:
+    #
+    #   1. The holdings sync must NOT retire an unsettled row. That loop retires
+    #      anything the broker's holdings book no longer reports, and the broker
+    #      will not report this stock until tomorrow.
+    #   2. A sell against an unsettled row must verify its quantity against the
+    #      POSITION book, not the holdings book. The holdings book would answer
+    #      zero, which reads as "these shares are gone" and would withhold a
+    #      legitimate exit.
+    #
+    # It flips to True the first time the broker's holdings book reports the
+    # stock, after which the row is an ordinary holding and every normal rule
+    # applies. Existing rows are settled by definition, which is why the default
+    # is True.
+    is_settled = db.Column(db.Boolean, nullable=False, default=True)
+
+    # True once this stock has been put back on a watch list after being sold
+    # out. Reset to False the moment shares are held again.
+    #
+    # The owner's rule from 6 September: one stock, one home. A held stock does
+    # not appear on a watch list, and when the last share is sold it goes back
+    # to one - including a stock that was never on a watch list before, which
+    # gets a row on the default list.
+    #
+    # This flag exists for exactly one reason: so a row the owner then DELETES
+    # stays deleted. Without it the return is recomputed on every read and a
+    # deleted row would reappear seconds later, which would make the watch list
+    # impossible to curate. A stock previously on a watch list needs none of
+    # this - its row is only hidden while held and comes back by itself - so
+    # this is only ever consulted for the never-watched case.
+    returned_to_watchlist = db.Column(db.Boolean, nullable=False, default=False)
+
     # --- Exit claim state, see the class docstring ---
 
     # One of EQUITY_HOLDING_STATUS_*. ACTIVE means nothing is in flight.
@@ -1647,10 +1875,24 @@ class EquityHolding(db.Model):
     # ------------------------------------------------------------------
     # Exit claim transitions
     #
-    # All of these lock the row with with_for_update(nowait=False), re-check
-    # the state under that lock, and then either commit the change or roll the
-    # session back to release the lock. Call them with no other uncommitted
-    # work pending in the session, because a rejected claim rolls back.
+    # These read the row with with_for_update(nowait=False), re-check the state
+    # and then either commit the change or roll the session back. Call them
+    # with no other uncommitted work pending in the session, because a rejected
+    # claim rolls back.
+    #
+    # WITH ONE IMPORTANT CAVEAT. This application runs on SQLite, and
+    # SQLAlchemy's SQLite dialect emits nothing at all for FOR UPDATE - its
+    # for_update_clause returns an empty string. So on this database
+    # with_for_update() is decoration, not mutual exclusion, and a
+    # read-check-write pair here is NOT atomic however it reads.
+    #
+    # claim_for_exit does not rely on it. It settles the claim with a single
+    # conditional UPDATE and treats the row count as the verdict, which is
+    # correct on SQLite and on PostgreSQL alike. The others below still carry
+    # the read-check-write shape; they are less dangerous, because losing a
+    # race on a release or a status stamp costs a redundant write rather than a
+    # duplicate sell, but they are on the list to convert. See
+    # docs/equity/13-AUDIT-2026-09-01.md.
     # ------------------------------------------------------------------
 
     @classmethod
@@ -1659,10 +1901,19 @@ class EquityHolding(db.Model):
         Claim one holding for an exit, before any broker call is made.
 
         This is the only supported way to start an equity sell against a
-        holding. It locks the row, re-checks that the holding is still in a
-        claimable state and still carries no in-flight broker order id, writes
-        EXIT_PENDING and commits. The commit is what makes the claim visible to
-        the monitor thread and to any other request.
+        holding. The claim is settled by ONE conditional UPDATE whose WHERE
+        clause repeats every precondition - still owned by this user, still in
+        a claimable status, still carrying no in-flight broker order id, and
+        still holding the exact quantity the claim was sized against. The
+        database decides the winner; a row count of 1 means this caller took
+        the claim and a row count of 0 means somebody else did.
+
+        It reads the row first, but only to produce a useful refusal message
+        and to size the claim. Nothing is decided on that read - a decision
+        taken there would be a read-check-write pair, and on SQLite there is no
+        row lock to make such a pair atomic (see the note above this block).
+        The single UPDATE is what makes two workers unable to both claim a
+        holding of 40 and sell it twice.
 
         Args:
             holding_id: EquityHolding.id to claim
@@ -1725,14 +1976,58 @@ class EquityHolding(db.Model):
             db.session.rollback()
             return None, 'Requested exit quantity must be positive'
 
-        holding.exit_status = EQUITY_HOLDING_STATUS_EXIT_PENDING
-        holding.exit_reason = reason
-        holding.exit_quantity = claim_qty
-        holding.exit_claimed_at = datetime.utcnow()
-        holding.exit_submitted_at = None
-        holding.exit_error = None
+        # The claim. Every precondition checked above is repeated here as a
+        # WHERE clause, because the checks above were advisory: between that
+        # read and this write another worker may have claimed the row, and on
+        # SQLite nothing was holding it. The quantity and pledge are included
+        # because claim_qty was sized against them - if either moved, this
+        # claim is for the wrong number of shares and losing is the right
+        # outcome.
+        table = cls.__table__
+
+        # pledged_quantity is nullable, and a NULL there reads as zero
+        # everywhere else in this class. Only zero may therefore match NULL; a
+        # non-zero pledge must match exactly, or a row whose pledge was cleared
+        # concurrently would satisfy the claim it should have blocked.
+        if pledged == 0:
+            pledge_unchanged = or_(table.c.pledged_quantity.is_(None),
+                                   table.c.pledged_quantity == 0)
+        else:
+            pledge_unchanged = table.c.pledged_quantity == pledged
+
+        result = db.session.execute(
+            sa_update(table)
+            .where(table.c.id == holding_id)
+            .where(table.c.user_id == user_id)
+            .where(table.c.exit_status.in_(allowed))
+            .where(or_(table.c.exit_broker_order_id.is_(None),
+                       table.c.exit_broker_order_id == ''))
+            .where(table.c.quantity == held)
+            .where(pledge_unchanged)
+            .values(
+                exit_status=EQUITY_HOLDING_STATUS_EXIT_PENDING,
+                exit_reason=reason,
+                exit_quantity=claim_qty,
+                exit_claimed_at=datetime.utcnow(),
+                exit_submitted_at=None,
+                exit_error=None,
+            )
+        )
         db.session.commit()
 
+        if result.rowcount != 1:
+            # Somebody else claimed it, or the holding moved under us. Both are
+            # normal outcomes of a contested exit, not errors.
+            db.session.expire_all()
+            return None, (
+                'Another exit claimed this holding first, or its quantity '
+                'changed while the claim was being prepared'
+            )
+
+        # The UPDATE went round the ORM, so the in-session copy still holds the
+        # pre-claim values. Refresh before handing it back, or the caller reads
+        # a holding that is EXIT_PENDING in the database and ACTIVE in memory.
+        db.session.refresh(holding)
         return holding, None
 
     @classmethod
@@ -1906,6 +2201,68 @@ class EquityHolding(db.Model):
         holding.exit_claimed_at = None
         holding.exit_submitted_at = None
         holding.exit_error = None
+        db.session.commit()
+        return True
+
+    @classmethod
+    def release_rejected_exit(cls, holding_id, user_id, split_id, message=None):
+        """
+        Return a holding to ACTIVE after the broker refused its sell outright.
+
+        The other release, release_exit_claim, only ever acts on EXIT_PENDING
+        with no broker order id - a sell that never reached anyone. This is the
+        other end: an order the broker took, gave an id for, and then rejected
+        or cancelled with nothing filled. Without this the row stays
+        EXIT_SUBMITTED for ever, out of the monitor's reach, on a sell that will
+        never happen.
+
+        Only for a sell where NOTHING filled. A rejection or cancellation after
+        a partial fill is a settlement, not a release, and belongs to
+        mark_exit_completed - releasing it here would restore the full quantity
+        and lose the shares that really were sold.
+
+        Two re-checks under the lock, because the caller decided from a broker
+        read taken moments earlier:
+
+          * the row must still be EXIT_SUBMITTED, and
+          * it must still point at the same split the caller examined.
+
+        Between those, a claim that was replaced by a newer exit while the
+        caller was working cannot be reopened underneath it.
+
+        The breach markers are deliberately left alone. The level was crossed
+        and it stays crossed, so the monitor will not immediately place the sell
+        again on the next tick. Why it failed is on exit_error, and re-arming is
+        the admin's decision - which is the same rule D2 applies to any
+        placement whose outcome was not a clean success.
+
+        Returns:
+            True when the claim was released, False when it was not safe to.
+        """
+        holding = cls.query.filter_by(
+            id=holding_id, user_id=user_id
+        ).with_for_update(nowait=False).first()
+
+        if holding is None:
+            db.session.rollback()
+            return False
+
+        if holding.exit_status != EQUITY_HOLDING_STATUS_EXIT_SUBMITTED:
+            db.session.rollback()
+            return False
+
+        if split_id is None or holding.exit_split_id != split_id:
+            db.session.rollback()
+            return False
+
+        holding.exit_status = EQUITY_HOLDING_STATUS_ACTIVE
+        holding.exit_broker_order_id = None
+        holding.exit_split_id = None
+        holding.exit_reason = None
+        holding.exit_quantity = None
+        holding.exit_claimed_at = None
+        holding.exit_submitted_at = None
+        holding.exit_error = str(message)[:1000] if message else None
         db.session.commit()
         return True
 
@@ -2087,6 +2444,379 @@ class EquityHolding(db.Model):
         return True
 
 
+class EquityIntradayShort(db.Model):
+    """
+    Shares sold that the account did not own, and must buy back today.
+
+    Why this is its own table
+    -------------------------
+    Every other position in this module is something you HAVE. This is the one
+    that is something you OWE, and the difference is not academic: a holding
+    left alone does nothing, while a short left alone past the close is
+    unlimited loss above your entry, a forced buy-back by the broker at
+    whatever price is there, and a penalty. It is the only row in this
+    application that MUST be acted on.
+
+    It could have been inferred from order splits with product MIS. It is not,
+    for two reasons. Inference is a query that can quietly return the wrong
+    answer after a partial fill; and a thing that must be closed needs a claim,
+    so that the square-off monitor and a person pressing Cover cannot both buy
+    the same shares back.
+
+    The claim
+    ---------
+    Identical in shape and intent to EquityHolding's exit claim, and for the
+    same reason: two things can decide to close this at once. One conditional
+    UPDATE, every precondition repeated in the WHERE clause, the database
+    deciding the winner. See claim_for_cover.
+
+    What squares it off
+    -------------------
+    app/utils/equity_intraday_monitor.py, on the shared scheduler, at the
+    minute named in EquitySetting.intraday_squareoff_minute. It verifies the
+    quantity against the broker's POSITION book first - a short lives there,
+    never in holdings - then claims, then places a MARKET buy. Market, because
+    at that point being filled matters more than the price.
+    """
+    __tablename__ = 'equity_intraday_shorts'
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
+    account_id = db.Column(db.Integer, db.ForeignKey('trading_accounts.id'), nullable=False, index=True)
+
+    symbol = db.Column(db.String(50), nullable=False, index=True)
+    exchange = db.Column(db.String(20), nullable=False, default='NSE')
+
+    # Shares owed. Reduced only by a confirmed buy-back.
+    quantity = db.Column(db.Integer, nullable=False, default=0)
+    entry_price = db.Column(db.Float)
+
+    # The sell that opened it, so the two are never guessed at.
+    opening_order_id = db.Column(db.Integer, db.ForeignKey('equity_orders.id'), nullable=True)
+    opening_split_id = db.Column(db.Integer, db.ForeignKey('equity_order_splits.id'), nullable=True)
+    opened_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+
+    # The trading day this belongs to, as a plain date. A short is a same-day
+    # obligation, so "which day" is the question asked of it most often and it
+    # is stored rather than derived from a UTC timestamp that crosses midnight
+    # five and a half hours early in IST.
+    trade_date = db.Column(db.Date, nullable=False, index=True)
+
+    status = db.Column(
+        db.String(24), nullable=False,
+        default=EQUITY_SHORT_STATUS_OPEN, index=True
+    )
+    cover_reason = db.Column(db.String(20))
+    cover_quantity = db.Column(db.Integer)
+    cover_claimed_at = db.Column(db.DateTime)
+    cover_submitted_at = db.Column(db.DateTime)
+    cover_completed_at = db.Column(db.DateTime)
+    cover_broker_order_id = db.Column(db.String(64))
+    cover_order_id = db.Column(db.Integer, db.ForeignKey('equity_orders.id'), nullable=True)
+    cover_price = db.Column(db.Float)
+    cover_error = db.Column(db.Text)
+
+    # The protective SL-M buy resting at the broker.
+    #
+    # This is the half of the protection that does NOT depend on this machine
+    # being switched on. AlgoMirror's own stop loss lives in a monitor here and
+    # dies with a power cut; this one sits in the exchange's stop-loss book and
+    # fires regardless.
+    #
+    # Recorded because it must be CANCELLED before any other buy-back is
+    # placed. Two things closing the same short means buying it back twice,
+    # which leaves a long position nobody asked for - so the order id is not
+    # optional bookkeeping, it is what makes the cancel possible.
+    stop_trigger_price = db.Column(db.Float)
+    stop_order_id = db.Column(db.Integer, db.ForeignKey('equity_orders.id'), nullable=True)
+    stop_broker_order_id = db.Column(db.String(64))
+    # RESTING, CANCELLED, TRIGGERED, or NONE when there is no protective order
+    # at the broker - which is a state worth naming rather than inferring from
+    # a null id.
+    stop_status = db.Column(db.String(16), nullable=False, default='NONE')
+    stop_error = db.Column(db.Text)
+
+    # Raised to true once the admin has been told this could not be closed.
+    # An unclosed short is the one thing in this module worth interrupting
+    # somebody for, and it must not be announced on a loop.
+    alerted_at = db.Column(db.DateTime)
+
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    account = db.relationship('TradingAccount', foreign_keys=[account_id])
+
+    __table_args__ = (
+        db.Index('ix_equity_short_open', 'user_id', 'status', 'trade_date'),
+    )
+
+    @property
+    def is_open(self):
+        """True while shares are still owed and nothing is in flight."""
+        return self.status == EQUITY_SHORT_STATUS_OPEN and int(self.quantity or 0) > 0
+
+    @property
+    def is_cover_in_flight(self):
+        """True while a buy-back is claimed or sitting at the broker."""
+        return self.status in EQUITY_SHORT_STATUSES_IN_FLIGHT
+
+    @classmethod
+    def claim_for_cover(cls, short_id, user_id, reason, quantity=None):
+        """
+        Claim one short for a buy-back, before any broker call is made.
+
+        The only supported way to start a cover. One conditional UPDATE, every
+        precondition repeated in the WHERE clause - still this user's, still
+        OPEN, still carrying no broker order id, still the exact quantity the
+        claim was sized against. A row count of 1 means this caller won; 0
+        means something else did, which is a skip and not an error.
+
+        Written this way rather than as read-check-write because SQLAlchemy's
+        SQLite dialect emits nothing for FOR UPDATE - with_for_update() is
+        decoration on this database, and two racers would both believe they
+        had the claim. That mistake is what EquityHolding.claim_for_exit was
+        rewritten to remove; this is built with the answer already known.
+
+        Returns (short, None) on success, or (None, message).
+        """
+        short = cls.query.filter_by(id=short_id, user_id=user_id).first()
+        if short is None:
+            return None, 'That intraday short is not available for this user.'
+
+        owed = int(short.quantity or 0)
+        if owed <= 0:
+            return None, 'That short owes nothing.'
+        if short.status != EQUITY_SHORT_STATUS_OPEN:
+            return None, (
+                'A buy-back is already under way on this short (%s).' % short.status
+            )
+
+        wanted = int(quantity) if quantity else owed
+        wanted = max(min(wanted, owed), 0)
+        if wanted <= 0:
+            return None, 'Nothing to buy back.'
+
+        table = cls.__table__
+        result = db.session.execute(
+            sa_update(table)
+            .where(table.c.id == short_id)
+            .where(table.c.user_id == user_id)
+            .where(table.c.status == EQUITY_SHORT_STATUS_OPEN)
+            .where(or_(table.c.cover_broker_order_id.is_(None),
+                       table.c.cover_broker_order_id == ''))
+            .where(table.c.quantity == owed)
+            .values(
+                status=EQUITY_SHORT_STATUS_COVER_PENDING,
+                cover_reason=reason,
+                cover_quantity=wanted,
+                cover_claimed_at=datetime.utcnow(),
+                cover_error=None,
+                updated_at=datetime.utcnow(),
+            )
+        )
+        db.session.commit()
+
+        if result.rowcount != 1:
+            db.session.expire_all()
+            return None, (
+                'Another buy-back claimed this short first. Nothing was placed.'
+            )
+
+        db.session.refresh(short)
+        return short, None
+
+    @classmethod
+    def release_claim(cls, short_id, user_id, error=None):
+        """
+        Put a claimed short back to OPEN after a DEFINITE refusal.
+
+        Only ever from COVER_PENDING with no broker order id - that pair is the
+        only state in which we know for certain nothing reached the broker. An
+        indeterminate outcome must NEVER come through here: the buy may be live,
+        and releasing it would let a second one be placed on top.
+        """
+        table = cls.__table__
+        result = db.session.execute(
+            sa_update(table)
+            .where(table.c.id == short_id)
+            .where(table.c.user_id == user_id)
+            .where(table.c.status == EQUITY_SHORT_STATUS_COVER_PENDING)
+            .where(or_(table.c.cover_broker_order_id.is_(None),
+                       table.c.cover_broker_order_id == ''))
+            .values(
+                status=EQUITY_SHORT_STATUS_OPEN,
+                cover_reason=None,
+                cover_quantity=None,
+                cover_claimed_at=None,
+                cover_error=error,
+                updated_at=datetime.utcnow(),
+            )
+        )
+        db.session.commit()
+        return result.rowcount == 1
+
+
+class EquityStockNote(db.Model):
+    """
+    What the admin thinks about a stock, in his own words.
+
+    The only thing in this module that does not come from a broker. Every other
+    row here is a fact reported by somebody else - a price, a fill, a balance.
+    This one is the reasoning behind the trade, which no API returns and which
+    is the first thing forgotten.
+
+    Keyed to the STOCK, not to a watch list entry and not to a holding. A
+    thesis is about the company: it has to survive the stock being dropped from
+    a list, sold out of entirely, and bought back again months later. Attaching
+    it to a holding would have thrown it away at the exact moment it became
+    interesting - when you sold, and later wondered why you had bought.
+
+    Three fields rather than one free box. The owner named them: the thesis,
+    the risk, and what he is watching for. Written as one paragraph in a hurry,
+    everything after the first thought stops getting written. Any of them may be
+    left empty; all three empty means there is no note.
+    """
+    __tablename__ = 'equity_stock_notes'
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
+
+    symbol = db.Column(db.String(50), nullable=False, index=True)
+    exchange = db.Column(db.String(20), nullable=False, default='NSE')
+
+    thesis = db.Column(db.Text)
+    risk = db.Column(db.Text)
+    # What would change the answer: a number, a date, a trigger being waited on.
+    # Separate from risk because a risk is what could go wrong and this is what
+    # would tell you it is going wrong, which is a different sentence.
+    to_watch = db.Column(db.Text)
+
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    versions = db.relationship(
+        'EquityStockNoteVersion', backref='note', lazy='dynamic',
+        cascade='all, delete-orphan'
+    )
+
+    __table_args__ = (
+        # One current note per stock per person. The history lives in its own
+        # table, so this row is always simply "what I think now".
+        db.UniqueConstraint('user_id', 'symbol', 'exchange',
+                            name='uq_equity_stock_note'),
+        db.Index('ix_equity_note_lookup', 'user_id', 'symbol', 'exchange'),
+    )
+
+    @property
+    def is_empty(self):
+        return not any(
+            (getattr(self, field) or '').strip()
+            for field in ('thesis', 'risk', 'to_watch')
+        )
+
+
+class EquityStockNoteVersion(db.Model):
+    """
+    A note as it read before it was last changed.
+
+    Kept because a thesis that is quietly rewritten to match what happened is
+    worth nothing. The point of writing one down is to be able to read, in
+    September, what you actually believed in March - including the parts that
+    turned out wrong, which are the parts worth reading.
+
+    Written on every save, before the current row is changed. Nothing here is
+    ever edited: a version is a record of what was, and a record you can edit
+    is not a record.
+
+    symbol and exchange are repeated here rather than only reached through the
+    note. A version has to stay readable if the current note is ever deleted,
+    and a history that depends on the thing it outlives is not a history.
+    """
+    __tablename__ = 'equity_stock_note_versions'
+
+    id = db.Column(db.Integer, primary_key=True)
+    note_id = db.Column(
+        db.Integer, db.ForeignKey('equity_stock_notes.id'), nullable=True, index=True
+    )
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
+
+    symbol = db.Column(db.String(50), nullable=False, index=True)
+    exchange = db.Column(db.String(20), nullable=False, default='NSE')
+
+    thesis = db.Column(db.Text)
+    risk = db.Column(db.Text)
+    to_watch = db.Column(db.Text)
+
+    # When this version STOPPED being the current one.
+    saved_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+
+    __table_args__ = (
+        db.Index('ix_equity_note_version_lookup',
+                 'user_id', 'symbol', 'exchange', 'saved_at'),
+    )
+
+
+class EquityHoldingNotice(db.Model):
+    """
+    A record that a holding changed for a reason AlgoMirror did not cause.
+
+    An emergency sell from the broker's own app, a purchase made at the
+    terminal, shares transferred in - none of these pass through this
+    application, and until now all of them were absorbed in silence the next
+    time holdings were read. Silence is the wrong answer: a stop loss can be
+    left armed on a quantity the admin no longer recognises, and nothing on any
+    screen would say so.
+
+    A notice is not an error and never blocks anything. It is delivered through
+    the same feed as watch list price alerts - the same pop-up, the same
+    navigation badge, the same log - because the admin should not have to learn
+    a second place to look.
+
+    Deliberately NOT attached to EquityHolding by foreign key. A notice is a
+    statement about a moment and has to survive the holding row being retired
+    or removed, exactly as a fired price alert keeps reading correctly after
+    its watch list row is edited. The account, symbol and exchange are copied
+    on for the same reason.
+    """
+    __tablename__ = 'equity_holding_notices'
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
+    account_id = db.Column(db.Integer, db.ForeignKey('trading_accounts.id'), nullable=False, index=True)
+
+    symbol = db.Column(db.String(50), nullable=False, index=True)
+    exchange = db.Column(db.String(20), nullable=False, default='NSE')
+
+    # One of EQUITY_NOTICE_*
+    kind = db.Column(db.String(20), nullable=False, index=True)
+
+    # The share counts that produced this notice, kept so the message can be
+    # re-read months later without recomputing anything.
+    quantity_before = db.Column(db.Integer)
+    quantity_after = db.Column(db.Integer)
+    quantity_delta = db.Column(db.Integer)
+
+    # True when a stop loss or target was armed at the moment this happened,
+    # which is what turns an interesting notice into an urgent one.
+    had_armed_level = db.Column(db.Boolean, nullable=False, default=False)
+
+    message = db.Column(db.String(255), nullable=False)
+
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+    # Stamped when a browser has been shown this notice. An unstamped notice is
+    # offered to the next screen that asks, which is what makes a notice raised
+    # overnight still arrive in the morning.
+    notified_at = db.Column(db.DateTime, index=True)
+    # Stamped when the admin has marked the log read.
+    seen_at = db.Column(db.DateTime, index=True)
+
+    user = db.relationship('User', backref='equity_holding_notices')
+    account = db.relationship('TradingAccount')
+
+    def __repr__(self):
+        return f'<EquityHoldingNotice {self.kind} {self.symbol}>'
+
+
 class EquityBrokerageRate(db.Model):
     """
     Brokerage and statutory charge rates for one account, versioned by
@@ -2211,10 +2941,48 @@ class EquitySetting(db.Model):
     # Master switch for watch list price alerts
     price_alerts_enabled = db.Column(db.Boolean, nullable=False, default=True)
 
+    # How long to wait for a broker to answer an order write, in seconds.
+    #
+    # Configurable because the right answer depends entirely on what is on the
+    # other end. A live broker answers in a second or two, so a short wait is
+    # correct there and a long one would hide a real problem. A sandbox can take
+    # a minute, and every second shaved off turns a slow success into an
+    # INDETERMINATE order that a person then has to reconcile by hand - which is
+    # exactly what happened on 2026-08-30, when a 63 second placement was
+    # reported as failed while both orders had in fact gone through.
+    order_timeout_seconds = db.Column(db.Integer, nullable=False, default=30)
+
+    # Intraday shorts. Minutes past midnight IST, so the value sorts and
+    # compares without any date arithmetic.
+    #
+    # 15:12 by default. It has to stay IN FRONT of whoever else would close
+    # the position: OpenAlgo's sandbox squares MIS off at 15:15 on NSE and BSE,
+    # and a real broker has its own cut-off that varies. Being second means the
+    # broker does it, at market, at whatever price is there - and it means our
+    # own square-off never gets to prove it works. A setting, because those
+    # cut-offs move.
+    intraday_squareoff_minute = db.Column(db.Integer, nullable=False, default=15 * 60 + 12)
+
+    # After this, a sell that would open a NEW short is refused outright. A
+    # short opened at 15:18 has two minutes to work and must then be bought
+    # back whatever the price, which is not a trade.
+    intraday_cutoff_minute = db.Column(db.Integer, nullable=False, default=15 * 60)
+
+    # Master switch for the square-off monitor. Turning it off does NOT make
+    # shorts safe - it makes them impossible: the placement path refuses to
+    # open one when the thing that closes it is not running.
+    intraday_monitor_enabled = db.Column(db.Boolean, nullable=False, default=True)
+
     # Monitor heartbeat. A monitor that is meant to run without a browser open
     # has to be able to prove it is running, and to show why it stopped.
     monitor_last_run_at = db.Column(db.DateTime)
     monitor_last_error = db.Column(db.Text)
+
+    # The square-off monitor's own heartbeat, kept apart from the stop loss
+    # monitor's. One of them being alive says nothing about the other, and the
+    # screen has to be able to prove the square-off in particular is running.
+    intraday_last_run_at = db.Column(db.DateTime)
+    intraday_last_error = db.Column(db.Text)
 
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

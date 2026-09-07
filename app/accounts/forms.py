@@ -1,6 +1,6 @@
 from flask_wtf import FlaskForm
 from wtforms import StringField, SelectField, SubmitField, BooleanField
-from wtforms.validators import DataRequired, URL, Length, ValidationError
+from wtforms.validators import DataRequired, URL, Length, Optional, ValidationError
 from app.models import TradingAccount
 from flask_login import current_user
 
@@ -105,7 +105,14 @@ class EditAccountForm(FlaskForm):
         Length(max=500, message='WebSocket URL is too long.')
     ])
     
+    # Optional() has to come first. Length() runs on an empty box as well as a
+    # filled one, so on its own it rejected the very thing the label tells the
+    # admin to do - leave the box empty to keep the current key - and the whole
+    # form refused to save. Optional() stops the chain when the box is empty;
+    # the length check still applies to a key that is actually typed. The route
+    # already treats a blank key as "keep the existing one".
     api_key = StringField('OpenAlgo API Key', validators=[
+        Optional(),
         Length(min=10, message='API Key seems too short.')
     ])
     
@@ -117,7 +124,37 @@ class EditAccountForm(FlaskForm):
     def __init__(self, original_name, *args, **kwargs):
         super(EditAccountForm, self).__init__(*args, **kwargs)
         self.original_name = original_name
-    
+        self._offer_current_broker(original_name)
+
+    def _offer_current_broker(self, original_name):
+        """
+        Make sure the account's own broker is one of the choices.
+
+        The list above holds display names, but broker_name on the account is
+        whatever OpenAlgo reports through its ping response - an identifier such
+        as "dhan_sandbox". Those never match, so the dropdown fell back to
+        showing the first entry in the list, and saving the form quietly
+        rewrote the account's broker to that first entry. Adding the real value
+        as a choice keeps the dropdown honest and stops an edit to some other
+        field from changing the broker behind the admin's back.
+        """
+        try:
+            account = TradingAccount.query.filter_by(
+                user_id=current_user.id,
+                account_name=original_name
+            ).first()
+        except Exception:
+            return
+
+        if account is None or not account.broker_name:
+            return
+
+        current = account.broker_name
+        if any(value == current for value, _label in self.broker_name.choices):
+            return
+
+        self.broker_name.choices = list(self.broker_name.choices) + [(current, current)]
+
     def validate_account_name(self, account_name):
         if account_name.data != self.original_name:
             account = TradingAccount.query.filter_by(

@@ -1,0 +1,674 @@
+{% extends "layout.html" %}
+
+{% block title %}Equity Alerts - AlgoMirror{% endblock %}
+
+{% block page_title %}Alerts{% endblock %}
+
+{% block content %}
+<style>
+    /* Tabular numerals for every column of aligned digits on this screen. The
+       compiled stylesheet only carries a dark-theme monospace helper, so the
+       rule is stated here so it applies in both themes. */
+    .equity-num { font-variant-numeric: tabular-nums; }
+
+    /* An entry in the log that has not been read yet is marked down the left
+       edge rather than by colouring the row, which would fight the alert
+       colours the rest of the module uses. */
+    .equity-unread { border-left: 3px solid hsl(var(--wa)); }
+</style>
+
+<div class="space-y-4">
+    <!--
+        Header.
+
+        No big heading here. The top bar already names the page and, unlike
+        anything in this content area, it does not scroll away - so a second
+        title below it was saying the same thing twice, and the copy that
+        survived scrolling was the one nobody had chosen.
+    -->
+    <div class="flex justify-between items-center flex-wrap gap-3">
+        <div>
+            <p class="text-base-content/70">
+                Every price alert you have set, across all your watch lists, and the record of what has fired.
+                Alerts are checked in the background, so they fire whether or not any screen is open. Nothing on
+                this screen places an order.
+            </p>
+        </div>
+        <div class="flex gap-3 items-center flex-wrap">
+            <span class="text-xs text-base-content/50 equity-num" id="equity-last-updated">Not loaded yet</span>
+            <button onclick="equityLoadAlerts(true)" class="btn btn-ghost btn-sm h-9" id="equity-refresh-btn">Refresh</button>
+            <a href="{{ url_for('equity.watchlist') }}" class="btn btn-primary btn-sm h-9">Watch List</a>
+        </div>
+    </div>
+
+    <!-- Result of the last write -->
+    <div class="flex justify-center">
+        <div class="alert w-auto max-w-2xl shadow-lg hidden" id="equity-result-banner">
+            <span id="equity-result-text"></span>
+        </div>
+    </div>
+
+    <!-- Tabs -->
+    <div class="grid grid-cols-2 gap-1 p-1 bg-base-300 rounded-lg" role="group" aria-label="Alerts section">
+        <button type="button" data-alerts-tab="alerts"
+                class="equity-alerts-tab text-sm font-semibold py-2 rounded-lg transition-colors">
+            Alerts
+        </button>
+        <button type="button" data-alerts-tab="log"
+                class="equity-alerts-tab text-sm font-semibold py-2 rounded-lg transition-colors">
+            <span>Log</span><span class="badge badge-sm badge-warning ml-2 hidden" id="equity-log-badge"></span>
+        </button>
+    </div>
+
+    {% if accounts %}
+
+    <!-- SECTION: Alerts -->
+    <div class="equity-alerts-section hidden" data-alerts-section="alerts">
+        <div class="card bg-base-100 shadow-xl">
+            <div class="card-body">
+                <h2 class="card-title">Alerts You Have Set</h2>
+                <p class="text-sm text-base-content/60">
+                    An alert fires once and then stops, so it cannot repeat while you are away from the desk. Use
+                    Re-arm to put a stopped alert back on watch at the same price. Pause leaves the price where it
+                    is but stops it firing.
+                </p>
+
+                <div class="flex items-center gap-2 flex-wrap mt-1" id="equity-alert-counts"></div>
+
+                <div class="overflow-x-auto">
+                    <table class="table table-sm">
+                        <thead>
+                            <tr>
+                                <th>Stock</th>
+                                <th>Watch List</th>
+                                <th class="text-right">Alert Price</th>
+                                <th>Condition</th>
+                                <th>Status</th>
+                                <th class="text-right">Fired At</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="equity-alerts-body">
+                            <tr>
+                                <td colspan="7" class="text-center py-8 text-base-content/60">
+                                    Loading your alerts.
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- SECTION: Log -->
+    <div class="equity-alerts-section hidden" data-alerts-section="log">
+        <div class="card bg-base-100 shadow-xl">
+            <div class="card-body">
+                <div class="flex justify-between items-center flex-wrap gap-3">
+                    <h2 class="card-title">What Has Fired</h2>
+                    <button onclick="equityMarkLogSeen()" class="btn btn-ghost btn-sm" id="equity-log-seen-btn">
+                        Mark All Read
+                    </button>
+                </div>
+                <p class="text-sm text-base-content/60" id="equity-log-note">
+                    Every alert that has actually fired, newest first.
+                </p>
+
+                <div class="overflow-x-auto">
+                    <table class="table table-sm">
+                        <thead>
+                            <tr>
+                                <th>When</th>
+                                <th>Stock</th>
+                                <th class="text-right">Alert Price</th>
+                                <th>Condition</th>
+                                <th class="text-right">Traded At</th>
+                            </tr>
+                        </thead>
+                        <tbody id="equity-log-body">
+                            <tr>
+                                <td colspan="5" class="text-center py-8 text-base-content/60">
+                                    Loading the log.
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    {% else %}
+    <div class="card bg-base-100 shadow-xl">
+        <div class="card-body items-center text-center py-12">
+            <h2 class="card-title">No Trading Account Connected</h2>
+            <p class="text-base-content/70">
+                Alerts read live prices through a connected account. Add one to start.
+            </p>
+            <a href="{{ url_for('accounts.add') }}" class="btn btn-primary btn-sm">Add Account</a>
+        </div>
+    </div>
+    {% endif %}
+</div>
+
+<!-- The "Updated" line, shared by every equity screen so one thing is
+     said one way: date and time, green while the market is open and
+     amber while it is closed. -->
+<script src="{{ url_for('static', filename='js/equity_updated.js') }}"></script>
+
+<script>
+// ---------------------------------------------------------------------------
+// Equity Alerts.
+//
+// Two tabs, because the two questions are different. "What am I watching for"
+// is the standing list of alerts, which is worth seeing across every watch list
+// at once because the Watch List screen only ever shows one. "What happened" is
+// the log, which exists because a popup lasts a few seconds and was never going
+// to be there at all if the module was closed when the level was crossed.
+//
+// The popups themselves are not this screen's job. equity_alerts.js raises
+// those on every equity page, and only for alerts fired in the last few
+// minutes; anything older is left unread and counted on the badge here.
+// ---------------------------------------------------------------------------
+
+const EQUITY_FETCH_TIMEOUT_MS = 20000;
+const EQUITY_ALERTS_DEFAULT_TAB = 'alerts';
+
+const EQUITY_STATUS_BADGES = {
+    ACTIVE: 'badge-success',
+    TRIGGERED: 'badge-warning',
+    PAUSED: 'badge-ghost'
+};
+
+const EQUITY_STATUS_LABELS = {
+    ACTIVE: 'Active',
+    TRIGGERED: 'Stopped, triggered',
+    PAUSED: 'Paused'
+};
+
+let equityAlertRows = [];
+let equityLoading = false;
+
+// Every page level status message on this screen wears the same shape: a pill
+// only as wide as its text, centred, rather than a bar stretched across the
+// page. Rewriting className replaces the whole list, so the sizing has to be
+// restated wherever a banner's colour is set.
+const EQUITY_BANNER_CLASS = 'alert w-auto max-w-2xl shadow-lg';
+
+const EquityFormat = {
+    rupees: function (value) {
+        const num = Number(value);
+        if (!isFinite(num)) { return '₹0.00'; }
+        const sign = num < 0 ? '-' : '';
+        return sign + '₹' + Math.abs(num).toLocaleString('en-IN',
+            { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    },
+
+    // The server sends UTC with no timezone marker. A marker-less value is read
+    // by the browser as LOCAL time, which put every clock on these screens
+    // 5h30m behind. Mark it as UTC, then render explicitly in IST so the screen
+    // agrees with the market whatever the machine thinks the time is.
+    dateTime: function (isoText) {
+        if (!isoText) { return ''; }
+        let text = String(isoText);
+        if (!/(Z|[+-]\d{2}:?\d{2})$/.test(text)) { text += 'Z'; }
+        const parsed = new Date(text);
+        if (isNaN(parsed.getTime())) { return ''; }
+        return parsed.toLocaleString('en-IN', {
+            day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit',
+            hour12: false, timeZone: 'Asia/Kolkata'
+        });
+    },
+
+    clockTime: function (isoText) {
+        if (!isoText) { return ''; }
+        let text = String(isoText);
+        if (!/(Z|[+-]\d{2}:?\d{2})$/.test(text)) { text += 'Z'; }
+        const parsed = new Date(text);
+        if (isNaN(parsed.getTime())) { return ''; }
+        return parsed.toLocaleTimeString('en-IN', { hour12: false, timeZone: 'Asia/Kolkata' });
+    }
+};
+
+function equitySetText(id, text, className) {
+    const el = document.getElementById(id);
+    if (!el) { return; }
+    el.textContent = text;
+    if (className !== undefined) { el.className = className; }
+}
+
+function equityShowResult(message, kind) {
+    const banner = document.getElementById('equity-result-banner');
+    const text = document.getElementById('equity-result-text');
+    if (!banner || !text) { return; }
+    if (!message) {
+        banner.classList.add('hidden');
+        return;
+    }
+    text.textContent = message;
+    banner.className = EQUITY_BANNER_CLASS + ' ' +
+        (kind === 'error' ? 'alert-error' : 'alert-success');
+}
+
+function equityCell(text, className) {
+    const td = document.createElement('td');
+    td.textContent = text;
+    if (className) { td.className = className; }
+    return td;
+}
+
+function equityMessageRow(message, columns) {
+    const tr = document.createElement('tr');
+    const td = document.createElement('td');
+    td.colSpan = columns;
+    td.className = 'text-center py-8 text-base-content/60';
+    td.textContent = message;
+    tr.appendChild(td);
+    return tr;
+}
+
+function equityConditionText(direction) {
+    if (direction === 'ABOVE') { return 'At or above'; }
+    if (direction === 'BELOW') { return 'At or below'; }
+    return 'Decided on the first price';
+}
+
+// ---------------------------------------------------------------------------
+// Tabs
+// ---------------------------------------------------------------------------
+
+function equityShowAlertsTab(name) {
+    document.querySelectorAll('.equity-alerts-section').forEach(function (section) {
+        section.classList.toggle(
+            'hidden', section.getAttribute('data-alerts-section') !== name
+        );
+    });
+
+    document.querySelectorAll('.equity-alerts-tab').forEach(function (button) {
+        const selected = button.getAttribute('data-alerts-tab') === name;
+        button.className = 'equity-alerts-tab text-sm font-semibold py-2 rounded-lg transition-colors'
+            + (selected
+                ? ' bg-primary text-primary-content'
+                : ' text-base-content/70 hover:bg-base-200');
+    });
+}
+
+// ---------------------------------------------------------------------------
+// The alerts you have set
+// ---------------------------------------------------------------------------
+
+function equityRenderAlerts(payload) {
+    const body = document.getElementById('equity-alerts-body');
+    if (!body) { return; }
+
+    equityLastAlertsPayload = payload;
+
+    equityAlertRows = payload.alerts || [];
+    body.textContent = '';
+
+    // The chips are filters, not decoration.
+    //
+    // They are also always shown, including at zero. A chip that disappears
+    // when its count reaches zero cannot be clicked to ask "is anything
+    // triggered", and the answer "none" is worth being able to ask for.
+    const counts = document.getElementById('equity-alert-counts');
+    if (counts) {
+        counts.textContent = '';
+
+        const all = document.createElement('button');
+        all.type = 'button';
+        all.className = 'badge ' + (equityAlertFilter === null
+            ? 'badge-primary' : 'badge-ghost');
+        all.textContent = 'All ' + equityAlertRows.length;
+        all.onclick = function () { equitySetAlertFilter(null); };
+        counts.appendChild(all);
+
+        ['ACTIVE', 'TRIGGERED', 'PAUSED'].forEach(function (status) {
+            const total = (payload.counts || {})[status] || 0;
+            const chip = document.createElement('button');
+            chip.type = 'button';
+            chip.className = 'badge ' + (equityAlertFilter === status
+                ? EQUITY_STATUS_BADGES[status] : 'badge-ghost');
+            chip.textContent = EQUITY_STATUS_LABELS[status] + ' ' + total;
+            chip.onclick = function () { equitySetAlertFilter(status); };
+            counts.appendChild(chip);
+        });
+    }
+
+    // Newest fired first, always. A triggered alert is a thing that HAPPENED,
+    // and the useful order for anything that happened is when. Alerts that
+    // have never fired keep the server's order and sit after them.
+    const ordered = equityAlertRows.slice().sort(function (first, second) {
+        const a = first.triggered_at || '';
+        const b = second.triggered_at || '';
+        if (a && b) { return a < b ? 1 : (a > b ? -1 : 0); }
+        if (a) { return -1; }
+        if (b) { return 1; }
+        return 0;
+    });
+
+    const shown = equityAlertFilter === null
+        ? ordered
+        : ordered.filter(function (row) { return row.status === equityAlertFilter; });
+
+    if (!shown.length) {
+        body.appendChild(equityMessageRow(
+            equityAlertFilter === null
+                ? 'No alerts set. Add an alert price against a stock on the Watch List.'
+                : 'Nothing is '
+                  + (EQUITY_STATUS_LABELS[equityAlertFilter] || '').toLowerCase() + '.',
+            7
+        ));
+        return;
+    }
+
+    shown.forEach(function (row) {
+        body.appendChild(equityAlertRow(row));
+    });
+}
+
+// Which status the table is filtered to, or null for all of them.
+let equityAlertFilter = null;
+
+// The last payload, kept so a filter click repaints without a round trip.
+let equityLastAlertsPayload = null;
+
+function equitySetAlertFilter(status) {
+    // Clicking the chip you are already on clears the filter, so a filter can
+    // always be undone with the control that set it.
+    equityAlertFilter = (equityAlertFilter === status) ? null : status;
+    if (equityLastAlertsPayload) {
+        equityRenderAlerts(equityLastAlertsPayload);
+    }
+}
+
+function equityAlertRow(row) {
+    const tr = document.createElement('tr');
+    tr.className = 'hover';
+
+    const stock = document.createElement('td');
+    const symbol = document.createElement('div');
+    symbol.className = 'font-semibold';
+    symbol.textContent = row.symbol;
+    stock.appendChild(symbol);
+    const exchange = document.createElement('div');
+    exchange.className = 'text-xs text-base-content/50';
+    exchange.textContent = row.exchange || '';
+    stock.appendChild(exchange);
+    tr.appendChild(stock);
+
+    tr.appendChild(equityCell(row.watchlist_name || '', 'text-sm'));
+    tr.appendChild(equityCell(
+        row.alert_price === null ? '-' : EquityFormat.rupees(row.alert_price),
+        'text-right equity-num font-semibold'
+    ));
+    tr.appendChild(equityCell(equityConditionText(row.alert_direction), 'text-sm'));
+
+    const status = document.createElement('td');
+    const badge = document.createElement('span');
+    badge.className = 'badge badge-sm ' + (EQUITY_STATUS_BADGES[row.status] || 'badge-ghost');
+    badge.textContent = EQUITY_STATUS_LABELS[row.status] || row.status;
+    status.appendChild(badge);
+    tr.appendChild(status);
+
+    const fired = document.createElement('td');
+    fired.className = 'text-right equity-num text-sm';
+    if (row.triggered_at) {
+        fired.textContent = EquityFormat.dateTime(row.triggered_at)
+            + (row.triggered_price ? ' at ' + EquityFormat.rupees(row.triggered_price) : '');
+    } else {
+        fired.textContent = '-';
+        fired.className += ' text-base-content/50';
+    }
+    tr.appendChild(fired);
+
+    const actions = document.createElement('td');
+    const wrap = document.createElement('div');
+    wrap.className = 'flex gap-2 flex-wrap';
+
+    if (row.status === 'TRIGGERED') {
+        wrap.appendChild(equityActionButton('Re-arm', 'btn-primary', function () {
+            equityRearm(row.item_id);
+        }));
+    }
+
+    wrap.appendChild(equityActionButton(
+        row.enabled ? 'Pause' : 'Resume',
+        row.enabled ? 'btn-ghost' : 'btn-success',
+        function () { equitySetEnabled(row.item_id, !row.enabled); }
+    ));
+
+    actions.appendChild(wrap);
+    tr.appendChild(actions);
+
+    return tr;
+}
+
+function equityActionButton(label, variant, handler) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'btn btn-xs ' + variant;
+    button.textContent = label;
+    button.onclick = handler;
+    return button;
+}
+
+// ---------------------------------------------------------------------------
+// The log
+// ---------------------------------------------------------------------------
+
+function equityRenderLog(payload) {
+    const body = document.getElementById('equity-log-body');
+    if (!body) { return; }
+
+    const entries = payload.entries || [];
+    body.textContent = '';
+
+    equitySetText(
+        'equity-log-note',
+        'Every alert that has actually fired, newest first. The last '
+        + (payload.days || 30) + ' days are kept.'
+    );
+
+    const unread = entries.filter(function (entry) { return entry.unread; }).length;
+    const badge = document.getElementById('equity-log-badge');
+    if (badge) {
+        badge.textContent = unread ? String(unread) : '';
+        badge.classList.toggle('hidden', unread === 0);
+    }
+
+    if (!entries.length) {
+        body.appendChild(equityMessageRow('Nothing has fired yet.', 5));
+        return;
+    }
+
+    entries.forEach(function (entry) {
+        const tr = document.createElement('tr');
+        tr.className = 'hover' + (entry.unread ? ' equity-unread' : '');
+
+        tr.appendChild(equityCell(EquityFormat.dateTime(entry.created_at),
+            'equity-num text-sm whitespace-nowrap'));
+
+        const stock = document.createElement('td');
+        const symbol = document.createElement('div');
+        symbol.className = 'font-semibold';
+        symbol.textContent = entry.symbol;
+        stock.appendChild(symbol);
+        const exchange = document.createElement('div');
+        exchange.className = 'text-xs text-base-content/50';
+        exchange.textContent = entry.exchange || '';
+        stock.appendChild(exchange);
+        tr.appendChild(stock);
+
+        // A holding notice is not a price alert and has no alert price, no
+        // condition and no traded-at. Rather than print three dashes, its
+        // sentence takes the width those columns would have used - the whole
+        // point of a notice is the sentence.
+        if (entry.source === 'holding') {
+            const label = document.createElement('div');
+            label.className = 'badge badge-sm badge-warning mt-1';
+            label.textContent = equityNoticeLabel(entry.kind);
+            stock.appendChild(label);
+
+            const said = document.createElement('td');
+            said.colSpan = 3;
+            said.className = 'text-sm';
+            said.textContent = entry.message || '';
+            tr.appendChild(said);
+
+            body.appendChild(tr);
+            return;
+        }
+
+        tr.appendChild(equityCell(EquityFormat.rupees(entry.alert_price),
+            'text-right equity-num'));
+        tr.appendChild(equityCell(equityConditionText(entry.alert_direction), 'text-sm'));
+        tr.appendChild(equityCell(EquityFormat.rupees(entry.ltp),
+            'text-right equity-num font-semibold'));
+
+        body.appendChild(tr);
+    });
+}
+
+/**
+ * A short name for what a holding notice is about.
+ *
+ * The full sentence is in the message; this is only the tag beside the stock,
+ * so it stays short enough not to wrap.
+ */
+function equityNoticeLabel(kind) {
+    switch (kind) {
+        case 'SHARES_LEFT': return 'Shares left';
+        case 'SHARES_ARRIVED': return 'Shares arrived';
+        case 'HOLDING_NEW': return 'New holding';
+        case 'HOLDING_CLOSED': return 'Holding closed';
+        case 'STOP_LOSS_HIT': return 'Stop loss hit';
+        case 'TARGET_HIT': return 'Target hit';
+        default: return 'Holding';
+    }
+}
+
+async function equityMarkLogSeen() {
+    const button = document.getElementById('equity-log-seen-btn');
+    if (button) { button.disabled = true; }
+
+    try {
+        const response = await fetchWithCSRF('/equity/api/alerts/log/seen', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({}),
+            signal: AbortSignal.timeout(EQUITY_FETCH_TIMEOUT_MS)
+        });
+        const data = await response.json();
+
+        if (data.status !== 'success') {
+            equityShowResult(data.message || 'The log could not be marked as read.', 'error');
+            return;
+        }
+        equityLoadAlerts(true);
+    } catch (error) {
+        equityShowResult('The log could not be marked as read. Check the connection.', 'error');
+        console.error('Equity alert log mark failed:', error);
+    } finally {
+        if (button) { button.disabled = false; }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Writes
+// ---------------------------------------------------------------------------
+
+async function equityRearm(itemId) {
+    await equityAlertWrite('/equity/api/alerts/' + itemId + '/rearm', {});
+}
+
+async function equitySetEnabled(itemId, enabled) {
+    await equityAlertWrite('/equity/api/alerts/' + itemId + '/enabled', { enabled: enabled });
+}
+
+async function equityAlertWrite(url, body) {
+    try {
+        const response = await fetchWithCSRF(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify(body),
+            signal: AbortSignal.timeout(EQUITY_FETCH_TIMEOUT_MS)
+        });
+        const data = await response.json();
+
+        if (data.status !== 'success') {
+            equityShowResult(data.message || 'That change could not be saved.', 'error');
+        } else {
+            equityShowResult(data.message || 'Saved.', 'success');
+        }
+    } catch (error) {
+        equityShowResult('That change could not be saved. Check the connection.', 'error');
+        console.error('Equity alert write failed:', error);
+    }
+
+    // Re-read either way, so the rows show what the server actually holds.
+    equityLoadAlerts(true);
+}
+
+// ---------------------------------------------------------------------------
+// Load
+// ---------------------------------------------------------------------------
+
+async function equityLoadAlerts(force) {
+    if (equityLoading && !force) { return; }
+    equityLoading = true;
+
+    const button = document.getElementById('equity-refresh-btn');
+    if (button) { button.disabled = true; }
+
+    try {
+        const [alertsResponse, logResponse] = await Promise.all([
+            fetch('/equity/api/alerts?_t=' + Date.now(),
+                { signal: AbortSignal.timeout(EQUITY_FETCH_TIMEOUT_MS) }),
+            fetch('/equity/api/alerts/log?_t=' + Date.now(),
+                { signal: AbortSignal.timeout(EQUITY_FETCH_TIMEOUT_MS) })
+        ]);
+
+        const alertsData = await alertsResponse.json();
+        const logData = await logResponse.json();
+
+        if (alertsData.status === 'success') { equityRenderAlerts(alertsData); }
+        if (logData.status === 'success') { equityRenderLog(logData); }
+
+        if (window.EquityUpdated) {
+        window.EquityUpdated.write('equity-last-updated', alertsData.generated_at);
+    }
+    } catch (error) {
+        equityShowResult('The alerts could not be loaded. Check the connection.', 'error');
+        console.error('Equity alerts load failed:', error);
+    } finally {
+        equityLoading = false;
+        if (button) { button.disabled = false; }
+    }
+}
+
+// A popup raised while this screen is open should appear in the log without
+// waiting for a refresh.
+window.EquityAlerts = window.EquityAlerts || {};
+window.EquityAlerts.onAlert = function () { equityLoadAlerts(true); };
+
+document.addEventListener('DOMContentLoaded', function () {
+    equityShowAlertsTab(EQUITY_ALERTS_DEFAULT_TAB);
+
+    document.querySelectorAll('.equity-alerts-tab').forEach(function (button) {
+        button.addEventListener('click', function () {
+            equityShowAlertsTab(button.getAttribute('data-alerts-tab'));
+        });
+    });
+
+    {% if accounts %}
+    equityLoadAlerts(true);
+    {% endif %}
+});
+</script>
+
+
+{% endblock %}
