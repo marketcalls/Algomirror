@@ -62,12 +62,15 @@ from app import db
 from app.models import (
     ActivityLog,
     EquityHolding,
+    EquityHoldingNotice,
     EquitySetting,
     EQUITY_EXIT_MODE_AUTO,
     EQUITY_EXIT_MODE_CONFIRM,
     EQUITY_EXIT_REASON_STOP_LOSS,
     EQUITY_EXIT_REASON_TARGET,
     EQUITY_HOLDING_STATUS_ACTIVE,
+    EQUITY_NOTICE_STOP_LOSS_HIT,
+    EQUITY_NOTICE_TARGET_HIT,
     EQUITY_ORDER_SOURCE_STOP_LOSS,
     EQUITY_ORDER_SOURCE_TARGET,
 )
@@ -732,6 +735,10 @@ class EquityExitMonitor:
                 user_id, account_id, reason, symbol, exchange,
                 price, level_price, exit_mode
             )
+            self._raise_breach_notice(
+                user_id, account_id, reason, symbol, exchange,
+                price, level_price, exit_mode
+            )
 
             if not is_auto:
                 self._stats['confirm_alerts_raised'] += 1
@@ -899,7 +906,26 @@ class EquityExitMonitor:
                     else:
                         result = placer(**kwargs)
                         success, message = _interpret_placer_result(result)
-                        if success:
+
+                        # An exit the engine WITHHELD because it could not
+                        # confirm the quantity with the broker is not an
+                        # ordinary failure. Nothing was claimed and nothing was
+                        # sent, so a retry is safe, but the admin has to be
+                        # able to see that a stop loss fired and no sale
+                        # followed. Silence here would be the worst outcome
+                        # available.
+                        if (not success and isinstance(result, dict)
+                                and str(result.get('status')).lower() == 'unverified'):
+                            logger.error(
+                                '[EQUITY_EXIT] Exit for holding %s (%s:%s) was '
+                                'WITHHELD: %s The level stays armed and the '
+                                'next tick will try again.',
+                                holding_id, payload['exchange'],
+                                payload['symbol'], message
+                            )
+                            self._log_withheld_exit(payload, message)
+
+                        elif success:
                             logger.info(
                                 '[EQUITY_EXIT] Exit placed for holding %s (%s:%s) '
                                 'via %s, reason %s',
@@ -1171,6 +1197,79 @@ class EquityExitMonitor:
             self._safe_rollback()
 
     @staticmethod
+    def _raise_breach_notice(user_id, account_id, reason, symbol, exchange,
+                             price, level_price, exit_mode):
+        """
+        Put the breach into the alert feed, so it reaches whatever screen the
+        admin is actually on.
+
+        Until this existed a breach was written to the log and, in CONFIRM
+        mode, parked in the Holdings confirm queue - and nowhere else. Someone
+        sitting on the Watch List or the Dashboard when a stop loss was hit was
+        told nothing, and found out whenever they next opened Holdings. That is
+        the wrong silence for the most urgent event this module produces.
+
+        It rides in EquityHoldingNotice rather than a table of its own, because
+        the feed, the pop-up, the badge and the log already read that table and
+        a breach is the same kind of thing: a statement about a holding that
+        has to be seen. had_armed_level is true by definition here - a breach
+        cannot happen without an armed level.
+
+        The level and the traded price are carried in the sentence rather than
+        in columns, because the columns that exist hold share counts. That is a
+        real limitation: they cannot be reformatted or sorted on later. Adding
+        two price columns is a schema change and was not worth interrupting a
+        review for; it is the obvious next step if these are ever charted.
+
+        Written once per armed level, because it sits behind record_breach.
+        Never raises: a notice that cannot be written must not stop an exit.
+        """
+        try:
+            if reason == EQUITY_EXIT_REASON_TARGET:
+                kind = EQUITY_NOTICE_TARGET_HIT
+                level_name = 'Target'
+            else:
+                kind = EQUITY_NOTICE_STOP_LOSS_HIT
+                level_name = 'Stop loss'
+
+            if exit_mode == EQUITY_EXIT_MODE_AUTO:
+                outcome = 'The exit order has been placed automatically.'
+            else:
+                outcome = ('Waiting for your confirmation on the Holdings '
+                           'screen. Nothing has been placed.')
+
+            message = (
+                '%s hit on %s: traded at %s through %s. %s'
+                % (level_name, symbol, price, level_price, outcome)
+            )
+
+            db.session.add(EquityHoldingNotice(
+                user_id=user_id,
+                account_id=account_id,
+                symbol=symbol,
+                exchange=exchange,
+                kind=kind,
+                # Share counts belong to a movement notice, not to a breach.
+                # Left null rather than filled with a zero that would read as
+                # "went to nothing".
+                quantity_before=None,
+                quantity_after=None,
+                quantity_delta=None,
+                had_armed_level=True,
+                message=message[:255],
+            ))
+            db.session.commit()
+        except Exception as exc:
+            logger.error(
+                '[EQUITY_EXIT] Could not record the breach notice for %s: %s',
+                symbol, exc
+            )
+            try:
+                db.session.rollback()
+            except Exception:
+                pass
+
+    @staticmethod
     def _log_activity(user_id, account_id, reason, symbol, exchange,
                       price, level_price, exit_mode):
         """
@@ -1203,6 +1302,45 @@ class EquityExitMonitor:
             db.session.commit()
         except Exception as exc:
             logger.error('[EQUITY_EXIT] Could not write the breach activity log: %s', exc)
+            try:
+                db.session.rollback()
+            except Exception:
+                pass
+
+    @staticmethod
+    def _log_withheld_exit(payload, message):
+        """
+        Audit row for an exit the engine refused to place unverified.
+
+        Separate from the breach entry on purpose. The breach says a level was
+        hit; this says a sale that should have followed did not, and why. An
+        admin reading the log needs both lines to understand the day.
+
+        A failure here must never stop the monitor, so it is swallowed.
+        """
+        try:
+            entry = ActivityLog(
+                user_id=payload.get('user_id'),
+                account_id=payload.get('account_id'),
+                action='equity_auto_exit_withheld',
+                details={
+                    'symbol': payload.get('symbol'),
+                    'exchange': payload.get('exchange'),
+                    'reason': payload.get('reason'),
+                    'breach_price': payload.get('breach_price'),
+                    'level_price': payload.get('level_price'),
+                    'withheld_because': message,
+                    'source': 'equity_exit_monitor',
+                },
+                status='warning'
+            )
+            db.session.add(entry)
+            db.session.commit()
+        except Exception as exc:
+            logger.error(
+                '[EQUITY_EXIT] Could not write the withheld exit activity log: %s',
+                exc
+            )
             try:
                 db.session.rollback()
             except Exception:
@@ -1320,5 +1458,31 @@ def run_equity_exit_checks():
 
     and call equity_exit_monitor.start() once the app is up, since the monitor
     does nothing until it is armed.
+
+    Two other equity passes ride on this same tick: watch list price alerts, and
+    fill reconciliation. Both need a heartbeat, both are read-mostly, and this
+    tick already exists and already runs inside an app context, so registering
+    more scheduler jobs would buy nothing and would mean editing the shared app
+    factory. They run outside the exit monitor's own guards on purpose: an alert
+    must still fire and a fill must still be recorded for a user who has
+    switched the stop loss monitor off, and neither may stop an exit being
+    evaluated. Each paces itself, so a fast tick does not mean fast broker calls.
     """
-    equity_exit_monitor.run_checks()
+    try:
+        equity_exit_monitor.run_checks()
+    finally:
+        # Each rider is isolated from the others and from the exit monitor. One
+        # of them throwing must never stop the next from running, and none of
+        # them may stop an exit being evaluated.
+        for name, entry_point in (
+            ('Watch list alert', 'app.utils.equity_alert_monitor:run_watchlist_alert_checks'),
+            ('Fill reconciliation', 'app.utils.equity_fill_reconciler:run_equity_fill_reconciliation'),
+        ):
+            module_path, function_name = entry_point.split(':')
+            try:
+                module = __import__(module_path, fromlist=[function_name])
+                getattr(module, function_name)()
+            except Exception as exc:
+                logger.error(
+                    '[EQUITY_EXIT] %s pass failed: %s', name, exc, exc_info=True
+                )

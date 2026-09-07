@@ -2,7 +2,7 @@
 
 {% block title %}Equity Allocation - AlgoMirror{% endblock %}
 
-{% block page_title %}Equity Accounts{% endblock %}
+{% block page_title %}Manage Accounts{% endblock %}
 
 {% block content %}
 <style>
@@ -12,15 +12,16 @@
     .equity-num { font-variant-numeric: tabular-nums; }
 </style>
 
-<div class="space-y-6">
-    <!-- Header -->
-    <div class="flex justify-between items-center flex-wrap gap-3">
-        <div>
-            <h1 class="text-3xl font-bold">Manage Accounts</h1>
-            <p class="text-base-content/70 mt-1">
-                Set the investable equity corpus per account. Available Cash is read-only and comes from the broker.
-            </p>
-        </div>
+<div class="space-y-4">
+    <!--
+        Header.
+
+        No big heading here. The top bar already names the page and, unlike
+        anything in this content area, it does not scroll away - so a second
+        title below it was saying the same thing twice, and the copy that
+        survived scrolling was the one nobody had chosen.
+    -->
+    <div class="flex justify-end items-center flex-wrap gap-3">
         <div class="flex gap-3 items-center flex-wrap">
             <span class="text-xs text-base-content/50 equity-num" id="equity-last-updated">Not loaded yet</span>
             <button onclick="equityLoadAccounts()" class="btn btn-ghost btn-sm h-9" id="equity-refresh-btn">Refresh</button>
@@ -32,14 +33,19 @@
         </div>
     </div>
 
-    <!-- Stale marker. Shown instead of blanking the page when a poll fails. -->
-    <div class="alert alert-warning hidden" id="equity-stale-banner">
-        <span id="equity-stale-text"></span>
+    <!-- Stale marker. Shown instead of blanking the page when a poll fails.
+         Centred and sized to its text rather than stretched across the page. -->
+    <div class="flex justify-center">
+        <div class="alert w-auto max-w-2xl shadow-lg alert-warning hidden" id="equity-stale-banner">
+            <span id="equity-stale-text"></span>
+        </div>
     </div>
 
-    <!-- Save result -->
-    <div class="alert hidden" id="equity-save-banner">
-        <span id="equity-save-text"></span>
+    <!-- Save result. Centred and only as wide as its message. -->
+    <div class="flex justify-center">
+        <div class="alert w-auto max-w-2xl shadow-lg hidden" id="equity-save-banner">
+            <span id="equity-save-text"></span>
+        </div>
     </div>
 
     {% if accounts %}
@@ -47,46 +53,50 @@
     <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {% for account in accounts %}
         <div class="card bg-base-100 shadow-xl" id="equity-card-{{ account.id }}">
-            <div class="card-body p-4 space-y-3">
-                <div class="flex justify-between items-start gap-2">
+            <div class="card-body p-5 gap-0">
+                <!-- Account identity and live connection state -->
+                <div class="flex justify-between items-start gap-2 pb-3 border-b border-base-300">
                     <div class="min-w-0">
-                        <h3 class="font-semibold truncate">{{ account.account_name }}</h3>
-                        <p class="text-xs text-base-content/60 truncate">{{ account.broker_name or 'Broker not detected' }}</p>
+                        <h3 class="font-semibold text-lg leading-tight truncate">{{ account.account_name }}</h3>
+                        <p class="text-xs text-base-content/50 truncate mt-0.5">{{ account.broker_name or 'Broker not detected' }}</p>
                     </div>
-                    <div class="flex items-center gap-2 shrink-0">
+                    <div class="flex items-center gap-2 shrink-0 mt-1">
                         <span class="w-2 h-2 rounded-full bg-gray-400 inline-block" id="equity-dot-{{ account.id }}"></span>
                         <span class="text-xs text-base-content/60" id="equity-status-{{ account.id }}">{{ account.connection_status or 'unknown' }}</span>
                     </div>
                 </div>
 
-                <div>
-                    <div class="text-xs text-base-content/60">Available Cash (read-only, live from broker)</div>
-                    <div class="font-semibold equity-num" id="equity-cash-{{ account.id }}">--</div>
+                <!-- Three matching rows: label on the left, value on the right,
+                     one weight and one size throughout so the eye can compare
+                     the figures straight down the column. -->
+
+                <!-- 1 of 3: Available Cash -->
+                <div class="flex justify-between items-center gap-3 py-3">
+                    <span class="text-xs text-base-content/60">Available Cash (read-only, live from broker)</span>
+                    <span class="font-semibold equity-num whitespace-nowrap" id="equity-cash-{{ account.id }}">--</span>
                 </div>
 
-                <div class="form-control">
-                    <label class="label" for="equity-allocation-{{ account.id }}">
-                        <span class="label-text">Equity Fund Allocation (₹ Lakh)</span>
-                    </label>
-                    <input type="number"
+                <!-- 2 of 3: Equity Fund Allocation -->
+                <div class="flex justify-between items-center gap-3 py-3 border-t border-base-300">
+                    <label class="text-xs text-base-content/60" for="equity-allocation-{{ account.id }}">Equity Fund Allocation (₹ Lakh)</label>
+                    <input type="text"
+                           inputmode="decimal"
+                           autocomplete="off"
                            id="equity-allocation-{{ account.id }}"
-                           class="input input-bordered input-sm equity-num"
+                           class="input input-bordered input-sm w-24 text-right font-semibold equity-num"
                            data-account-id="{{ account.id }}"
-                           min="0"
-                           step="0.01"
-                           value="0"
-                           oninput="equityMarkDirty(); equityRecomputeRatios();">
-                    <label class="label">
-                        <span class="label-text-alt text-base-content/60" id="equity-allocation-hint-{{ account.id }}">--</span>
-                    </label>
+                           value="0.00"
+                           oninput="equityAllocationTyped(this);"
+                           onblur="equityAllocationSettled(this);">
                 </div>
 
-                <div class="flex justify-between items-center">
+                <!-- 3 of 3: derived ratio -->
+                <div class="flex justify-between items-center gap-3 py-3 border-t border-base-300">
                     <span class="text-xs text-base-content/60">Equity Allocation Ratio (auto computed)</span>
-                    <span class="font-semibold equity-num" id="equity-ratio-{{ account.id }}">--</span>
+                    <span class="font-semibold text-primary equity-num whitespace-nowrap" id="equity-ratio-{{ account.id }}">--</span>
                 </div>
 
-                <div class="text-xs text-warning hidden" id="equity-note-{{ account.id }}"></div>
+                <div class="text-xs text-warning hidden mt-2" id="equity-note-{{ account.id }}"></div>
             </div>
         </div>
         {% endfor %}
@@ -118,19 +128,6 @@
         </div>
     </div>
 
-    <!-- Rules panel. Copy is served by the route so the screen and the
-         behaviour implemented on the server cannot drift apart. -->
-    <div class="card bg-base-100 shadow-xl">
-        <div class="card-body">
-            <h2 class="card-title">Rules</h2>
-            <ul class="list-disc list-inside space-y-2 text-sm text-base-content/70">
-                {% for rule in allocation_rules %}
-                <li>{{ rule }}</li>
-                {% endfor %}
-            </ul>
-        </div>
-    </div>
-
     {% else %}
     <!-- No accounts at all -->
     <div class="card bg-base-100 shadow-xl">
@@ -140,12 +137,17 @@
                 Add and connect a trading account before setting an equity allocation.
             </p>
             <div class="mt-6">
-                <a href="{{ url_for('accounts.add') }}" class="btn btn-primary">Add Account</a>
+                <a href="{{ url_for('accounts.add') }}" class="btn btn-primary btn-sm">Add Account</a>
             </div>
         </div>
     </div>
     {% endif %}
 </div>
+
+<!-- The "Updated" line, shared by every equity screen so one thing is
+     said one way: date and time, green while the market is open and
+     amber while it is closed. -->
+<script src="{{ url_for('static', filename='js/equity_updated.js') }}"></script>
 
 <script>
 // ---------------------------------------------------------------------------
@@ -167,6 +169,15 @@ const EquityFormat = {
         const num = Number(lakh);
         if (!isFinite(num) || num <= 0) { return 0; }
         return Math.round(num * EquityFormat.LAKH);
+    },
+
+    // The allocation box always reads with two decimals, because a corpus is a
+    // money figure: 15 shows as 15.00, 15.21 stays 15.21, and anything blank or
+    // unreadable settles to 0.00. Rounding is to the nearer paisa.
+    lakhText: function (value) {
+        const num = Number(value);
+        if (!isFinite(num) || num <= 0) { return '0.00'; }
+        return num.toFixed(2);
     },
 
     rupeesToLakh: function (rupees) {
@@ -217,9 +228,15 @@ const EquityFormat = {
 
     clockTime: function (isoText) {
         if (!isoText) { return ''; }
-        const parsed = new Date(isoText);
+        // The server sends UTC with no timezone marker. A marker-less value is
+        // read by the browser as LOCAL time, which put every clock on this screen
+        // 5h30m behind. Mark it as UTC, then render explicitly in IST so the
+        // screen agrees with the market whatever the machine thinks the time is.
+        let text = String(isoText);
+        if (!/(Z|[+-]\d{2}:?\d{2})$/.test(text)) { text += 'Z'; }
+        const parsed = new Date(text);
         if (isNaN(parsed.getTime())) { return ''; }
-        return parsed.toLocaleTimeString('en-IN', { hour12: false });
+        return parsed.toLocaleTimeString('en-IN', { hour12: false, timeZone: 'Asia/Kolkata' });
     }
 };
 
@@ -234,6 +251,26 @@ let equityAllocationDirty = false;
 
 function equityMarkDirty() {
     equityAllocationDirty = true;
+}
+
+// Keep the allocation box to digits and a single decimal point. Typing is not
+// interrupted: "15." is allowed to stand while the decimals are still on their
+// way. Tidying to two decimals happens when the box loses focus, never mid-entry.
+function equityAllocationTyped(el) {
+    let text = el.value.replace(/[^0-9.]/g, '');
+    const firstDot = text.indexOf('.');
+    if (firstDot !== -1) {
+        text = text.slice(0, firstDot + 1) + text.slice(firstDot + 1).replace(/\./g, '');
+    }
+    if (text !== el.value) { el.value = text; }
+    equityMarkDirty();
+    equityRecomputeRatios();
+}
+
+// Settle the box to a money figure once the admin moves away from it.
+function equityAllocationSettled(el) {
+    el.value = EquityFormat.lakhText(el.value);
+    equityRecomputeRatios();
 }
 
 function equitySetText(id, text, className) {
@@ -266,7 +303,9 @@ function equityShowSaveResult(message, kind) {
         return;
     }
     text.textContent = message;
-    banner.className = 'alert ' + (kind === 'error' ? 'alert-error' : 'alert-success');
+    // This REPLACES the class list, so the sizing classes have to be repeated
+    // here or the banner snaps back to full width the first time it is shown.
+    banner.className = 'alert w-auto max-w-2xl shadow-lg ' + (kind === 'error' ? 'alert-error' : 'alert-success');
 }
 
 function equityStatusDotClass(status, isStale) {
@@ -301,12 +340,6 @@ function equityRecomputeRatios() {
         const ratio = total > 0 ? (value / total) * 100 : 0;
         ratioTotal += ratio;
         equitySetText('equity-ratio-' + id, EquityFormat.percent(ratio));
-        // Echo the resolved rupee figure so a lakh entry can never be mistaken
-        // for a rupee one: typing 40 shows "= Rs 40,00,000" underneath.
-        equitySetText(
-            'equity-allocation-hint-' + id,
-            value > 0 ? '= ' + EquityFormat.rupeesExact(EquityFormat.lakhToRupees(value)) : 'Not set'
-        );
     });
 
     equitySetText('equity-total-allocation', EquityFormat.compact(EquityFormat.lakhToRupees(total)));
@@ -328,7 +361,7 @@ function equityApplyAccounts(payload) {
             const input = document.getElementById('equity-allocation-' + id);
             if (input && document.activeElement !== input) {
                 // Server stores rupees, the box is entered in lakh.
-                input.value = EquityFormat.rupeesToLakh(entry.equity_fund_allocation);
+                input.value = EquityFormat.lakhText(EquityFormat.rupeesToLakh(entry.equity_fund_allocation));
             }
         }
 
@@ -372,7 +405,9 @@ function equityApplyAccounts(payload) {
         equityRecomputeRatios();
     }
 
-    equitySetText('equity-last-updated', 'Updated ' + EquityFormat.clockTime(payload.generated_at));
+    if (window.EquityUpdated) {
+        window.EquityUpdated.write('equity-last-updated', payload.generated_at);
+    }
 }
 
 async function equityLoadAccounts() {

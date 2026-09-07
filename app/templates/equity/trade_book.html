@@ -2,7 +2,7 @@
 
 {% block title %}Equity Trade Book - AlgoMirror{% endblock %}
 
-{% block page_title %}Equity Trade Book{% endblock %}
+{% block page_title %}Trade Book{% endblock %}
 
 {% block content %}
 <style>
@@ -12,139 +12,72 @@
     .equity-num { font-variant-numeric: tabular-nums; }
 </style>
 
-<div class="space-y-6">
-    <!-- Header -->
-    <div class="flex justify-between items-center flex-wrap gap-3">
-        <div>
-            <h1 class="text-3xl font-bold">Trade Book</h1>
-            <p class="text-base-content/70 mt-1">
-                One row per fill, with its execution price and the account it filled in. Every fill links back to the
-                order it came from. This screen is read-only.
-            </p>
-        </div>
+<div class="space-y-4">
+    <!--
+        Header.
+
+        No big heading here. The top bar already names the page and, unlike
+        anything in this content area, it does not scroll away - so a second
+        title below it was saying the same thing twice, and the copy that
+        survived scrolling was the one nobody had chosen.
+    -->
+    <div class="flex justify-end items-center flex-wrap gap-3">
         <div class="flex gap-3 items-center flex-wrap">
             <span class="text-xs text-base-content/50 equity-num" id="equity-last-updated">Not loaded yet</span>
             <button onclick="equityLoadTradeBook()" class="btn btn-ghost btn-sm h-9" id="equity-refresh-btn">Refresh</button>
+            <!-- A pure read, so it is a plain link and wears no commit colour. -->
+            <a href="{{ url_for('equity.api_trade_book_export') }}"
+               class="btn btn-outline btn-sm h-9" id="equity-export-link">Download CSV</a>
             <a href="{{ url_for('equity.order_book') }}" class="btn btn-primary btn-sm h-9">Order Book</a>
         </div>
     </div>
 
     <!-- Stale marker. Shown instead of blanking the page when a load fails. -->
-    <div class="alert alert-warning hidden" id="equity-stale-banner">
-        <span id="equity-stale-text"></span>
-    </div>
-
-    <!-- Filters -->
-    <div class="card bg-base-100 shadow">
-        <div class="card-body p-4">
-            <div class="flex items-end flex-wrap gap-4">
-                <div class="form-control">
-                    <label class="label" for="equity-filter-account">
-                        <span class="label-text">Account</span>
-                    </label>
-                    <select id="equity-filter-account" class="select select-bordered select-sm" onchange="equityLoadTradeBook()">
-                        <option value="all" selected>All Accounts</option>
-                    </select>
-                </div>
-
-                <div class="form-control">
-                    <label class="label" for="equity-filter-symbol">
-                        <span class="label-text">Stock</span>
-                    </label>
-                    <input type="text" id="equity-filter-symbol" class="input input-bordered input-sm w-36"
-                           placeholder="All" onchange="equityLoadTradeBook()">
-                </div>
-
-                <div class="form-control">
-                    <label class="label" for="equity-filter-side">
-                        <span class="label-text">Side</span>
-                    </label>
-                    <select id="equity-filter-side" class="select select-bordered select-sm" onchange="equityLoadTradeBook()">
-                        <option value="all" selected>All</option>
-                        <option value="BUY">BUY</option>
-                        <option value="SELL">SELL</option>
-                    </select>
-                </div>
-
-                <div class="form-control">
-                    <label class="label" for="equity-filter-status">
-                        <span class="label-text">Order Status</span>
-                    </label>
-                    <select id="equity-filter-status" class="select select-bordered select-sm" onchange="equityLoadTradeBook()">
-                        <option value="all" selected>All</option>
-                        <option value="PENDING">PENDING</option>
-                        <option value="PARTIAL">PARTIAL</option>
-                        <option value="COMPLETED">COMPLETED</option>
-                        <option value="CANCELLED">CANCELLED</option>
-                    </select>
-                </div>
-
-                <div class="form-control">
-                    <label class="label" for="equity-filter-type">
-                        <span class="label-text">Order Type</span>
-                    </label>
-                    <select id="equity-filter-type" class="select select-bordered select-sm" onchange="equityLoadTradeBook()">
-                        <option value="all" selected>All</option>
-                        <option value="MARKET">MARKET</option>
-                        <option value="LIMIT">LIMIT</option>
-                        <option value="GTT">GTT</option>
-                    </select>
-                </div>
-
-                <div class="form-control">
-                    <label class="label" for="equity-filter-nature">
-                        <span class="label-text">Trade Nature</span>
-                    </label>
-                    <select id="equity-filter-nature" class="select select-bordered select-sm" onchange="equityLoadTradeBook()">
-                        <option value="all" selected>All</option>
-                        {% for nature in trade_natures %}
-                        <option value="{{ nature.id }}">{{ nature.name }}</option>
-                        {% endfor %}
-                    </select>
-                </div>
-
-                <div class="form-control">
-                    <label class="label" for="equity-filter-from">
-                        <span class="label-text">From</span>
-                    </label>
-                    <input type="date" id="equity-filter-from" class="input input-bordered input-sm equity-num"
-                           onchange="equityLoadTradeBook()">
-                </div>
-
-                <div class="form-control">
-                    <label class="label" for="equity-filter-to">
-                        <span class="label-text">To</span>
-                    </label>
-                    <input type="date" id="equity-filter-to" class="input input-bordered input-sm equity-num"
-                           onchange="equityLoadTradeBook()">
-                </div>
-
-                <button onclick="equityClearFilters()" class="btn btn-ghost btn-sm">Clear Filters</button>
-            </div>
-
-            <p class="text-xs text-base-content/60 mt-2" id="equity-window-note">
-                With no date range the book shows today's fills.
-            </p>
+    <div class="flex justify-center">
+        <div class="alert w-auto max-w-2xl shadow-lg alert-warning hidden" id="equity-stale-banner">
+            <span id="equity-stale-text"></span>
         </div>
     </div>
 
-    <!-- Totals -->
+
+    <!--
+        An account the broker would not answer for. The rows below are then an
+        incomplete picture, and a screen that does not say so is telling you
+        everything is here when it is not.
+    -->
+    <div class="flex justify-center">
+        <div class="alert w-auto max-w-2xl shadow-lg alert-warning hidden mt-2"
+             id="equity-unverified-banner">
+            <span id="equity-unverified-text"></span>
+        </div>
+    </div>
+
+    <!--
+        Summary, in the shape the F&O trade book uses: the label above, the
+        figure below it, and a rule closing the strip off from the table.
+
+        Accounts counts the accounts that actually TRADED today, taken from the
+        fills themselves rather than from the rows above - a row is one action
+        and an action can reach two accounts, so counting rows would undercount
+        it. Buy and Sell count the rows, which is what is on the screen.
+    -->
     <div class="overflow-x-auto">
-        <div class="stats shadow w-full">
+        <div class="stats shadow w-full border-b border-base-300">
             <div class="stat">
-                <div class="stat-title">Fills</div>
-                <div class="stat-value text-2xl equity-num" id="equity-total-trades">--</div>
-                <div class="stat-desc">In the current view</div>
+                <div class="stat-title">Accounts</div>
+                <div class="stat-value text-2xl equity-num" id="equity-total-accounts">--</div>
             </div>
             <div class="stat">
-                <div class="stat-title">Quantity</div>
-                <div class="stat-value text-2xl equity-num" id="equity-total-quantity">--</div>
-                <div class="stat-desc">Shares executed</div>
+                <div class="stat-title">Buy Trades</div>
+                <div class="stat-value text-2xl equity-num text-success" id="equity-total-buy">--</div>
             </div>
             <div class="stat">
-                <div class="stat-title">Turnover</div>
-                <div class="stat-value text-2xl equity-num" id="equity-total-value">--</div>
-                <div class="stat-desc">Execution price times quantity</div>
+                <div class="stat-title">Sell Trades</div>
+                <div class="stat-value text-2xl equity-num text-error" id="equity-total-sell">--</div>
+            </div>
+            <div class="stat">
+                <div class="stat-title">Value</div>
+                <div class="stat-value text-2xl equity-num equity-accent" id="equity-total-value">--</div>
             </div>
         </div>
     </div>
@@ -152,32 +85,83 @@
     <!-- Trades -->
     <div class="card bg-base-100 shadow-xl">
         <div class="card-body">
-            <h2 class="card-title">Fills</h2>
-            <p class="text-sm text-base-content/60">
-                Turnover here is the raw traded value. It carries no brokerage or statutory charges: those are
-                estimated on the Holdings screen from the rates in Equity Settings.
-            </p>
+            <h2 class="card-title">Executed Orders</h2>
 
             <div class="overflow-x-auto">
                 <table class="table table-sm">
                     <thead>
                         <tr>
-                            <th>Time</th>
-                            <th>Stock</th>
-                            <th>Exchange</th>
-                            <th>Side</th>
-                            <th>Order Type</th>
-                            <th>Account</th>
-                            <th class="text-right">Qty</th>
-                            <th class="text-right">Execution Price</th>
-                            <th class="text-right">Value</th>
-                            <th>Trade Nature</th>
-                            <th>Order</th>
+                            <!-- Not sortable, and deliberately. This is where a
+                                 row sits in the order you are looking at, so
+                                 sorting BY it would be asking to sort by the
+                                 order it is already in. -->
+                            <th class="text-right">Sl</th>
+                            <th>
+                                <button type="button" class="equity-sort"
+                                        title="Sort by the time of the fill" onclick="equitySortBy('executed_at')">Time<span
+                                        class="equity-sort-mark" id="equity-sort-mark-executed_at"></span></button>
+                            </th>
+                            <th>
+                                <button type="button" class="equity-sort"
+                                        title="Sort by stock name, A to Z" onclick="equitySortBy('symbol')">Stock<span
+                                        class="equity-sort-mark" id="equity-sort-mark-symbol"></span></button>
+                            </th>
+                            <th>
+                                <button type="button" class="equity-sort"
+                                        title="Sort by exchange" onclick="equitySortBy('exchange')">Exchange<span
+                                        class="equity-sort-mark" id="equity-sort-mark-exchange"></span></button>
+                            </th>
+                            <th>
+                                <button type="button" class="equity-sort"
+                                        title="Sort by buy or sell" onclick="equitySortBy('side')">Side<span
+                                        class="equity-sort-mark" id="equity-sort-mark-side"></span></button>
+                            </th>
+                            <th>
+                                <button type="button" class="equity-sort"
+                                        title="Sort by order type" onclick="equitySortBy('order_type')">Order Type<span
+                                        class="equity-sort-mark" id="equity-sort-mark-order_type"></span></button>
+                            </th>
+                            <th>
+                                <button type="button" class="equity-sort"
+                                        title="Sort by account, A to Z" onclick="equitySortBy('account_name')">Account<span
+                                        class="equity-sort-mark" id="equity-sort-mark-account_name"></span></button>
+                            </th>
+                            <th class="text-right">
+                                <button type="button" class="equity-sort"
+                                        title="Sort by quantity" onclick="equitySortBy('executed_quantity')">Qty<span
+                                        class="equity-sort-mark" id="equity-sort-mark-executed_quantity"></span></button>
+                            </th>
+                            <th class="text-right">
+                                <button type="button" class="equity-sort"
+                                        title="Sort by execution price" onclick="equitySortBy('execution_price')">Execution Price<span
+                                        class="equity-sort-mark" id="equity-sort-mark-execution_price"></span></button>
+                            </th>
+                            <th class="text-right">
+                                <button type="button" class="equity-sort"
+                                        title="Sort by traded value" onclick="equitySortBy('trade_value')">Value<span
+                                        class="equity-sort-mark" id="equity-sort-mark-trade_value"></span></button>
+                            </th>
+                            <th class="text-right">
+                                <button type="button" class="equity-sort"
+                                        title="Sort by stop loss" onclick="equitySortBy('stop_loss')">Stop Loss<span
+                                        class="equity-sort-mark" id="equity-sort-mark-stop_loss"></span></button>
+                            </th>
+                            <th class="text-right">
+                                <button type="button" class="equity-sort"
+                                        title="Sort by target" onclick="equitySortBy('target')">Target<span
+                                        class="equity-sort-mark" id="equity-sort-mark-target"></span></button>
+                            </th>
+                            <th>
+                                <button type="button" class="equity-sort"
+                                        title="Sort by trade nature, A to Z" onclick="equitySortBy('trade_nature')">Trade Nature<span
+                                        class="equity-sort-mark" id="equity-sort-mark-trade_nature"></span></button>
+                            </th>
+                            <th>Actions</th>
                         </tr>
                     </thead>
                     <tbody id="equity-trades-body">
                         <tr>
-                            <td colspan="11" class="text-center py-8 text-base-content/60">
+                            <td colspan="14" class="text-center py-8 text-base-content/60">
                                 Loading fills.
                             </td>
                         </tr>
@@ -198,7 +182,7 @@
             <table class="table table-sm">
                 <thead>
                     <tr>
-                        <th>Member</th>
+                        <th>Account</th>
                         <th class="text-right">Qty Ratio</th>
                         <th class="text-right">Qty</th>
                         <th class="text-right">Est. Value</th>
@@ -218,11 +202,45 @@
 
         <div class="modal-action">
             <form method="dialog">
-                <button class="btn btn-sm">Close</button>
+                <button class="btn btn-sm btn-outline equity-btn">Back</button>
             </form>
         </div>
     </div>
 </dialog>
+
+<!-- Fill split: the accounts behind one merged fill row -->
+<dialog id="equity-fill-modal" class="modal">
+    <div class="modal-box max-w-3xl">
+        <h3 class="font-bold text-lg" id="equity-fill-title">Account-Wise Fill</h3>
+        <p class="text-sm text-base-content/60" id="equity-fill-subtitle"></p>
+
+        <div class="overflow-x-auto mt-3">
+            <table class="table table-sm">
+                <thead>
+                    <tr>
+                        <th>Account</th>
+                        <th class="text-right">Qty</th>
+                        <th class="text-right">Price</th>
+                        <th class="text-right">Value</th>
+                        <th>Broker Reference</th>
+                    </tr>
+                </thead>
+                <tbody id="equity-fill-body"></tbody>
+            </table>
+        </div>
+
+        <div class="modal-action">
+            <form method="dialog">
+                <button class="btn btn-sm btn-outline equity-btn">Back</button>
+            </form>
+        </div>
+    </div>
+</dialog>
+
+<!-- The "Updated" line, shared by every equity screen so one thing is
+     said one way: date and time, green while the market is open and
+     amber while it is closed. -->
+<script src="{{ url_for('static', filename='js/equity_updated.js') }}"></script>
 
 <script>
 // ---------------------------------------------------------------------------
@@ -240,6 +258,24 @@ const EquityFormat = {
 
     // Compact rupees for summary figures: the lakh suffix above one lakh
     // (Rs 47.10L), plain Indian grouped digits below it (Rs 1,14,500).
+    /**
+     * Rupees ALWAYS in lakhs: Rs 0.54L, Rs 20.64L.
+     *
+     * Not compact(), which switches units at one lakh - Rs 20.64L one day and
+     * Rs 53,707.5 the next, so a glance cannot compare two days without first
+     * reading which unit each of them is in. A summary tile is read at a
+     * glance, so it keeps one unit whatever the number.
+     *
+     * Two decimals, not one: at one decimal a Rs 12,000 day and a Rs 17,000
+     * day both read as 0.1.
+     */
+    lakhs: function (value) {
+        const num = Number(value);
+        if (!isFinite(num)) { return '--'; }
+        const sign = num < 0 ? '-' : '';
+        return sign + '₹' + (Math.abs(num) / EquityFormat.LAKH).toFixed(2) + 'L';
+    },
+
     compact: function (value) {
         const num = Number(value);
         if (!isFinite(num)) { return '₹0'; }
@@ -277,26 +313,44 @@ const EquityFormat = {
 
     clockTime: function (isoText) {
         if (!isoText) { return ''; }
-        const parsed = new Date(isoText);
+        // The server sends UTC with no timezone marker. A marker-less value is
+        // read by the browser as LOCAL time, which put every clock on this screen
+        // 5h30m behind. Mark it as UTC, then render explicitly in IST so the
+        // screen agrees with the market whatever the machine thinks the time is.
+        let text = String(isoText);
+        if (!/(Z|[+-]\d{2}:?\d{2})$/.test(text)) { text += 'Z'; }
+        const parsed = new Date(text);
         if (isNaN(parsed.getTime())) { return ''; }
-        return parsed.toLocaleTimeString('en-IN', { hour12: false });
+        return parsed.toLocaleTimeString('en-IN', { hour12: false, timeZone: 'Asia/Kolkata' });
     },
 
     dateTime: function (isoText) {
         if (!isoText) { return ''; }
-        const parsed = new Date(isoText);
+        // The server sends UTC with no timezone marker. A marker-less value is
+        // read by the browser as LOCAL time, which put every clock on this screen
+        // 5h30m behind. Mark it as UTC, then render explicitly in IST so the
+        // screen agrees with the market whatever the machine thinks the time is.
+        let text = String(isoText);
+        if (!/(Z|[+-]\d{2}:?\d{2})$/.test(text)) { text += 'Z'; }
+        const parsed = new Date(text);
         if (isNaN(parsed.getTime())) { return ''; }
-        return parsed.toLocaleString('en-IN', { hour12: false });
+        return parsed.toLocaleString('en-IN', { hour12: false, timeZone: 'Asia/Kolkata' });
     }
 };
 
 const EQUITY_POLL_MS = 30000;
 const EQUITY_FETCH_TIMEOUT_MS = 20000;
-const EQUITY_COLUMN_COUNT = 11;
+const EQUITY_COLUMN_COUNT = 14;
 
 let equityPollTimer = null;
+// The last payload received, so a sort can repaint without asking the broker
+// for the same rows again.
+let equityLastPayload = null;
 let equityLoading = false;
-let equityAccountsRendered = false;
+
+// The rendered fill rows, so View Split can find the accounts behind a merged
+// row without a second request.
+let equityTradeRows = [];
 
 function equitySetText(id, text, className) {
     const el = document.getElementById(id);
@@ -337,74 +391,120 @@ function equityMessageRow(message, columns) {
 }
 
 // ---------------------------------------------------------------------------
-// Filters
+// Sorting
+//
+// This screen used to carry eight filter boxes. They were removed: the book
+// now shows one day, which is short enough to read, and a column heading you
+// click is quicker than a box you type into and then have to remember to
+// clear. A filter left set is the reason a screen lies to you; a sort cannot.
 // ---------------------------------------------------------------------------
 
-function equityValue(id, fallback) {
-    const el = document.getElementById(id);
-    if (!el) { return fallback; }
-    const raw = (el.value || '').trim();
-    return raw === '' ? fallback : raw;
+// What each sortable column holds. Anything not listed here cannot be sorted:
+// Sl is the position in the order you are already looking at, and Order is a
+// button.
+const EQUITY_SORT_COLUMNS = {
+    executed_at: 'text',
+    symbol: 'text',
+    exchange: 'text',
+    side: 'text',
+    order_type: 'text',
+    account_name: 'text',
+    executed_quantity: 'number',
+    execution_price: 'number',
+    trade_value: 'number',
+    stop_loss: 'number',
+    target: 'number',
+    trade_nature: 'text'
+};
+
+// Columns whose first click sorts DESCENDING. A name reads best A to Z; a
+// size, a price or a value reads best largest first, and time newest first,
+// which is the order the book already arrives in.
+const EQUITY_SORT_DESC_FIRST = {
+    executed_at: true, executed_quantity: true, execution_price: true,
+    trade_value: true, stop_loss: true, target: true
+};
+
+let equitySortKey = '';
+let equitySortDir = 'asc';
+
+/**
+ * Cycle the sort on one column: ascending, then descending, then back to the
+ * order the server sent.
+ */
+function equitySortBy(key) {
+    if (!Object.prototype.hasOwnProperty.call(EQUITY_SORT_COLUMNS, key)) { return; }
+
+    const first = EQUITY_SORT_DESC_FIRST[key] ? 'desc' : 'asc';
+    const second = first === 'asc' ? 'desc' : 'asc';
+
+    if (equitySortKey !== key) {
+        equitySortKey = key;
+        equitySortDir = first;
+    } else if (equitySortDir === first) {
+        equitySortDir = second;
+    } else {
+        equitySortKey = '';
+        equitySortDir = 'asc';
+    }
+
+    equityRenderFromLast();
 }
 
-function equityFilterQuery() {
-    const params = new URLSearchParams();
-    params.set('account', equityValue('equity-filter-account', 'all'));
-    params.set('side', equityValue('equity-filter-side', 'all'));
-    params.set('status', equityValue('equity-filter-status', 'all'));
-    params.set('order_type', equityValue('equity-filter-type', 'all'));
-    params.set('trade_nature', equityValue('equity-filter-nature', 'all'));
-
-    const symbol = equityValue('equity-filter-symbol', '');
-    if (symbol) { params.set('symbol', symbol.toUpperCase()); }
-
-    const from = equityValue('equity-filter-from', '');
-    if (from) { params.set('from', from); }
-
-    const to = equityValue('equity-filter-to', '');
-    if (to) { params.set('to', to); }
-
-    return params.toString();
+function equityUpdateSortMarks() {
+    Object.keys(EQUITY_SORT_COLUMNS).forEach(function (key) {
+        const mark = document.getElementById('equity-sort-mark-' + key);
+        if (!mark) { return; }
+        if (equitySortKey === key) {
+            mark.textContent = equitySortDir === 'asc' ? '↑' : '↓';
+            mark.className = 'equity-sort-mark is-active';
+        } else {
+            mark.textContent = '↕';
+            mark.className = 'equity-sort-mark';
+        }
+    });
 }
 
-function equityClearFilters() {
-    ['equity-filter-symbol', 'equity-filter-from', 'equity-filter-to'].forEach(function (id) {
-        const el = document.getElementById(id);
-        if (el) { el.value = ''; }
-    });
-    ['equity-filter-account', 'equity-filter-side', 'equity-filter-status',
-     'equity-filter-type', 'equity-filter-nature'].forEach(function (id) {
-        const el = document.getElementById(id);
-        if (el) { el.value = 'all'; }
-    });
-    equityLoadTradeBook();
+/**
+ * What one row is worth in the column being sorted.
+ *
+ * Returned with a missing flag rather than as a bare value, because a row with
+ * nothing in the column is not the same as a row holding zero. A fill from an
+ * order that carried no stop loss has nothing to compare, so it is reported as
+ * missing and sinks to the bottom whichever way the sort runs.
+ */
+function equitySortValue(row, key) {
+    const numeric = EQUITY_SORT_COLUMNS[key] === 'number';
+    const blank = { missing: true, value: numeric ? 0 : '' };
+
+    const raw = row[key];
+    if (raw === null || raw === undefined || raw === '') { return blank; }
+
+    if (numeric) {
+        const num = Number(raw);
+        return isFinite(num) ? { missing: false, value: num } : blank;
+    }
+    return { missing: false, value: String(raw).toUpperCase() };
 }
 
-// The account filter is built from the payload rather than from the page
-// context, because a fill can reference an account that has since been
-// deactivated and that history has to stay reachable.
-function equityRenderAccountOptions(options) {
-    if (equityAccountsRendered) { return; }
-    const select = document.getElementById('equity-filter-account');
-    if (!select) { return; }
+function equitySortRows(rows) {
+    if (!equitySortKey || !EQUITY_SORT_COLUMNS[equitySortKey]) { return rows.slice(); }
 
-    const chosen = select.value;
-    select.textContent = '';
+    const key = equitySortKey;
+    const factor = equitySortDir === 'desc' ? -1 : 1;
 
-    const all = document.createElement('option');
-    all.value = 'all';
-    all.textContent = 'All Accounts';
-    select.appendChild(all);
+    return rows.slice().sort(function (first, second) {
+        const left = equitySortValue(first, key);
+        const right = equitySortValue(second, key);
 
-    (options.accounts || []).forEach(function (account) {
-        const option = document.createElement('option');
-        option.value = String(account.account_id);
-        option.textContent = account.account_name + (account.is_active ? '' : ' (inactive)');
-        select.appendChild(option);
+        if (left.missing !== right.missing) { return left.missing ? 1 : -1; }
+        if (left.value < right.value) { return -factor; }
+        if (left.value > right.value) { return factor; }
+
+        const a = String(first.symbol || '');
+        const b = String(second.symbol || '');
+        return a < b ? -1 : (a > b ? 1 : 0);
     });
-
-    select.value = chosen || 'all';
-    equityAccountsRendered = true;
 }
 
 // ---------------------------------------------------------------------------
@@ -413,6 +513,31 @@ function equityRenderAccountOptions(options) {
 // Every cell is written with textContent, so a broker supplied symbol or an
 // admin supplied account name can never be treated as markup.
 // ---------------------------------------------------------------------------
+
+function equityOrderTypeCell(row) {
+    /*
+     * The order type, with the product under it when it is not delivery.
+     *
+     * Everything here is CNC, so saying so on every line would be noise. MIS
+     * is the exception: an MIS fill is either an intraday short or the
+     * buy-back that closes one, and neither survives the day.
+     */
+    const cell = document.createElement('td');
+
+    const type = document.createElement('div');
+    type.textContent = row.order_type || '';
+    cell.appendChild(type);
+
+    if ((row.product || 'CNC') !== 'CNC') {
+        const badge = document.createElement('div');
+        badge.className = 'badge badge-sm badge-error mt-1';
+        badge.title = 'Intraday. A short, or the buy-back that closes one.';
+        badge.textContent = row.product;
+        cell.appendChild(badge);
+    }
+
+    return cell;
+}
 
 function equitySideCell(side) {
     const td = document.createElement('td');
@@ -426,35 +551,141 @@ function equitySideCell(side) {
 function equityAccountCell(trade) {
     const td = document.createElement('td');
 
-    const name = document.createElement('div');
-    name.textContent = trade.account_name || ('Account ' + trade.account_id);
-    td.appendChild(name);
+    // One action, one row. The exit monitor sells each account separately, so
+    // a single exit arrives as one fill per account; those are folded together
+    // upstream and the accounts behind the row travel with it.
+    //
+    // Read as FILLED over the number of accounts the parent order covers, the
+    // same way the Order Book reads. "1 of 2" is a real and useful state - one
+    // account has traded and the other has not - and naming a single account
+    // here used to hide it.
+    const accounts = trade.accounts || [];
+    const filled = trade.accounts_count || accounts.length || 1;
 
-    const broker = document.createElement('div');
-    broker.className = 'text-xs text-base-content/50';
-    broker.textContent = trade.broker_name || 'Broker not detected';
-    td.appendChild(broker);
+    // A fill from an order AlgoMirror never placed has no parent, so there is
+    // no "of how many" to state. It is named instead.
+    if (!trade.order_id) {
+        const only = accounts.length === 1 ? accounts[0] : trade;
+        const name = document.createElement('div');
+        name.textContent = only.account_name || ('Account ' + only.account_id);
+        td.appendChild(name);
+
+        const broker = document.createElement('div');
+        broker.className = 'text-xs text-base-content/50';
+        broker.textContent = only.broker_name || 'Broker not detected';
+        td.appendChild(broker);
+        return td;
+    }
+
+    const total = trade.order_accounts || filled;
+    const label = document.createElement('div');
+    label.className = 'equity-num font-semibold';
+    label.textContent = filled + '/' + total;
+    td.appendChild(label);
 
     return td;
+}
+
+function equityOpenFillSplit(index) {
+    const trade = equityTradeRows[index];
+    if (!trade) { return; }
+
+    const body = document.getElementById('equity-fill-body');
+    const modal = document.getElementById('equity-fill-modal');
+    if (!body || !modal) { return; }
+
+    equitySetText(
+        'equity-fill-title',
+        'Account-Wise Fill: ' + trade.symbol + ' ' + trade.side + ' ' +
+        EquityFormat.integer(trade.executed_quantity)
+    );
+    equitySetText(
+        'equity-fill-subtitle',
+        trade.order_type + ' on ' + trade.exchange + ', filled ' +
+        EquityFormat.dateTime(trade.executed_at) +
+        '. The price on the row is the weighted average of the accounts below.'
+    );
+
+    body.textContent = '';
+    (trade.accounts || []).forEach(function (entry) {
+        const tr = document.createElement('tr');
+        tr.className = 'hover';
+
+        tr.appendChild(equityAccountCell(entry));
+        tr.appendChild(equityCell(
+            EquityFormat.integer(entry.executed_quantity), 'text-right equity-num'
+        ));
+        tr.appendChild(equityCell(
+            EquityFormat.rupees(entry.execution_price), 'text-right equity-num'
+        ));
+        tr.appendChild(equityCell(
+            EquityFormat.rupees(
+                (entry.execution_price || 0) * (entry.executed_quantity || 0)
+            ),
+            'text-right equity-num'
+        ));
+
+        const reference = document.createElement('td');
+        reference.className = 'text-xs equity-num';
+        reference.textContent = entry.broker_order_id
+            ? 'Order ' + entry.broker_order_id
+            : 'No broker reference';
+        if (!entry.broker_order_id) {
+            reference.className = 'text-xs text-base-content/50';
+        }
+        tr.appendChild(reference);
+
+        body.appendChild(tr);
+    });
+
+    modal.showModal();
 }
 
 function equityOrderLinkCell(trade) {
     const td = document.createElement('td');
 
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'btn btn-xs btn-outline';
-    button.textContent = 'Order ' + trade.order_id;
-    button.title = 'Open the parent order and its per-account split';
-    button.onclick = function () { equityOpenParentOrder(trade.order_id); };
-    td.appendChild(button);
+    // A fill from an order AlgoMirror never placed has no parent order to
+    // open. There is nothing behind the button, so there is no button - and
+    // certainly not one reading "Order null".
+    if (!trade.order_id) {
+        const none = document.createElement('div');
+        none.className = 'text-xs text-base-content/50';
+        none.textContent = 'No AlgoMirror order';
+        td.appendChild(none);
 
-    const status = document.createElement('div');
-    status.className = 'text-xs text-base-content/50';
-    status.textContent = trade.order_status || '';
-    td.appendChild(status);
+        if (trade.broker_order_id) {
+            const reference = document.createElement('div');
+            reference.className = 'text-xs text-base-content/50 equity-num';
+            reference.textContent = 'Broker ' + trade.broker_order_id;
+            td.appendChild(reference);
+        }
+        return td;
+    }
 
-    if (trade.broker_trade_id) {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'flex items-center gap-1 flex-wrap';
+
+    // View Split moved here from the Account column, which now carries the
+    // count. One column says how many accounts; this one opens them.
+    const split = document.createElement('button');
+    split.type = 'button';
+    split.className = 'btn btn-xs btn-outline';
+    split.textContent = 'View Split';
+    split.title = 'The quantity and price filled on each account';
+    split.onclick = function () { equityOpenFillSplit(trade._row_index); };
+    wrapper.appendChild(split);
+
+    td.appendChild(wrapper);
+
+    // The parent order button and the order's status used to sit here. Both
+    // are gone at the owner's request: this screen is a list of what actually
+    // executed, and a fill that exists IS complete - restating that on every
+    // row said nothing, and the order id was a number nobody reads.
+
+    // On a merged row the broker's trade id belongs to only one of the
+    // accounts behind it, so it is left to the split panel rather than shown
+    // here as though it covered the whole fill.
+    if (trade.broker_trade_id && (trade.accounts_count || 1) === 1) {
         const reference = document.createElement('div');
         reference.className = 'text-xs text-base-content/50 equity-num';
         reference.textContent = 'Trade ' + trade.broker_trade_id;
@@ -464,45 +695,96 @@ function equityOrderLinkCell(trade) {
     return td;
 }
 
-function equityTradeRow(trade) {
+function equityLevelCell(value) {
+    // Blank, never zero. Zero on a stop loss column reads as "sell at any
+    // price", which is the opposite of nothing being set.
+    if (value === null || value === undefined || value === '') {
+        return equityCell('\u2014', 'text-right opacity-40');
+    }
+    return equityCell(EquityFormat.rupees(value), 'text-right equity-num');
+}
+
+function equityTradeRow(trade, serial) {
     const tr = document.createElement('tr');
     tr.className = 'hover';
 
+    // Where this row sits in the order on screen. It renumbers when you sort,
+    // which is what a serial number on a sorted table means.
+    tr.appendChild(equityCell(
+        serial === undefined ? '' : String(serial),
+        'text-right equity-num text-base-content/60'
+    ));
+
     tr.appendChild(equityCell(EquityFormat.clockTime(trade.executed_at), 'equity-num'));
-    tr.appendChild(equityCell(trade.symbol, 'font-semibold'));
+
+    // A fill the broker reports against an order AlgoMirror never placed. It
+    // is real and it moved your position, so it belongs here; it is marked
+    // because the trade nature beside it will read Unassigned and that is a
+    // fact about the fill, not a gap in the data.
+    const stock = document.createElement('td');
+    const symbol = document.createElement('div');
+    symbol.className = 'font-semibold';
+    symbol.textContent = trade.symbol;
+    stock.appendChild(symbol);
+    if (trade.placed_outside) {
+        const outside = document.createElement('div');
+        outside.className = 'badge badge-sm badge-outline mt-1';
+        outside.title = 'Filled at your broker, not through AlgoMirror';
+        outside.textContent = 'Outside AlgoMirror';
+        stock.appendChild(outside);
+    }
+    tr.appendChild(stock);
+
     tr.appendChild(equityCell(trade.exchange));
     tr.appendChild(equitySideCell(trade.side));
-    tr.appendChild(equityCell(trade.order_type));
+    tr.appendChild(equityOrderTypeCell(trade));
     tr.appendChild(equityAccountCell(trade));
     tr.appendChild(equityCell(EquityFormat.integer(trade.executed_quantity), 'text-right equity-num'));
     tr.appendChild(equityCell(EquityFormat.rupees(trade.execution_price), 'text-right equity-num'));
     tr.appendChild(equityCell(EquityFormat.rupees(trade.trade_value), 'text-right equity-num'));
+    // The levels the order carried. A fill placed outside AlgoMirror has no
+    // order of ours behind it and shows neither.
+    tr.appendChild(equityLevelCell(trade.stop_loss));
+    tr.appendChild(equityLevelCell(trade.target));
     tr.appendChild(equityCell(trade.trade_nature || 'Unassigned'));
     tr.appendChild(equityOrderLinkCell(trade));
 
     return tr;
 }
 
-function equityRenderTrades(trades, filtered) {
+function equityRenderTrades(trades) {
     const body = document.getElementById('equity-trades-body');
     if (!body) { return; }
 
     body.textContent = '';
+    equityUpdateSortMarks();
 
     if (!trades.length) {
         body.appendChild(equityMessageRow(
-            filtered
-                ? 'No fills for the selected filters. Widen the date range or clear the filters to see more.'
-                : 'No fills recorded yet. A fill is written when order status reconciliation reads it back from '
-                  + 'the broker, which is not part of this increment, so this table stays empty until that lands. '
-                  + 'Placed orders and their per-account splits are on the Order Book.'
+            'No fills today. A fill is written when order status reconciliation reads it back from the broker, '
+            + 'so a screen that stays empty on a day you traded means that read has not landed yet. Placed orders '
+            + 'and their per-account splits are on the Order Book.'
         ));
         return;
     }
 
-    trades.forEach(function (trade) {
-        body.appendChild(equityTradeRow(trade));
+    const sorted = equitySortRows(trades);
+    equityTradeRows = sorted;
+    sorted.forEach(function (trade, index) {
+        trade._row_index = index;
+        body.appendChild(equityTradeRow(trade, index + 1));
     });
+}
+
+/**
+ * Repaint from the payload already in hand.
+ *
+ * Sorting must not cost a broker read. The rows are the same rows; only their
+ * order changes.
+ */
+function equityRenderFromLast() {
+    if (!equityLastPayload) { return; }
+    equityRenderTrades(equityLastPayload.trades || []);
 }
 
 // ---------------------------------------------------------------------------
@@ -520,7 +802,7 @@ function equitySplitStatusBadgeClass(status) {
     return 'badge badge-outline badge-sm';
 }
 
-function equityMemberCell(split) {
+function equityAccountCell(split) {
     const td = document.createElement('td');
 
     const name = document.createElement('div');
@@ -575,6 +857,14 @@ function equityBrokerReferenceCell(split) {
     return td;
 }
 
+/**
+ * Open the parent order behind a fill.
+ *
+ * CURRENTLY UNREACHABLE. The button that called it was removed from the
+ * Actions column at the owner's request. Kept, with its dialog, because the
+ * link is a reasonable thing to want back and rebuilding it later is more
+ * work than leaving a function nobody calls.
+ */
 async function equityOpenParentOrder(orderId) {
     const modal = document.getElementById('equity-split-modal');
     const body = document.getElementById('equity-split-body');
@@ -621,7 +911,7 @@ async function equityOpenParentOrder(orderId) {
             const tr = document.createElement('tr');
             tr.className = 'hover';
 
-            tr.appendChild(equityMemberCell(split));
+            tr.appendChild(equityAccountCell(split));
             tr.appendChild(equityCell(EquityFormat.percent(split.qty_ratio), 'text-right equity-num'));
             tr.appendChild(equityCell(EquityFormat.integer(split.quantity), 'text-right equity-num'));
             tr.appendChild(equityCell(
@@ -651,33 +941,47 @@ async function equityOpenParentOrder(orderId) {
 // Load
 // ---------------------------------------------------------------------------
 
-function equityRenderTotals(payload) {
-    const totals = payload.totals || {};
-    equitySetText('equity-total-trades', EquityFormat.integer(totals.trades));
-    equitySetText('equity-total-quantity', EquityFormat.integer(totals.quantity));
-    equitySetText('equity-total-value', EquityFormat.compact(totals.value));
+function equityRenderUnverified(payload) {
+    const banner = document.getElementById('equity-unverified-banner');
+    const text = document.getElementById('equity-unverified-text');
+    if (!banner || !text) { return; }
 
-    const viewWindow = payload.window || {};
-    equitySetText(
-        'equity-window-note',
-        viewWindow.today_only
-            ? 'Showing today\'s fills. Set a date range to look further back.'
-            : 'Showing the selected date range exactly.'
-    );
+    const ids = ((payload.window || {}).unverified_accounts) || [];
+    if (!ids.length) {
+        banner.classList.add('hidden');
+        return;
+    }
+
+    // Named, not numbered. "Account 2" means nothing at a glance, and the whole
+    // point of this line is that it registers immediately.
+    const names = {};
+    ((payload.options || {}).accounts || []).forEach(function (account) {
+        names[String(account.account_id)] = account.account_name;
+    });
+    const listed = ids.map(function (id) {
+        return names[String(id)] || ('Account ' + id);
+    });
+
+    text.textContent = listed.join(', ')
+        + (listed.length === 1 ? ' could not be read.' : ' could not be read.')
+        + ' Anything placed there is missing from the rows below. Nothing here is'
+        + ' marked as absent from the broker because of it - an account that did'
+        + ' not answer is not an account with nothing in it.';
+    banner.classList.remove('hidden');
 }
 
-function equityFiltersApplied(payload) {
-    const filters = payload.filters || {};
-    return Boolean(
-        (filters.account && filters.account !== 'all') ||
-        filters.symbol ||
-        (filters.side && filters.side !== 'all') ||
-        (filters.status && filters.status !== 'all') ||
-        (filters.order_type && filters.order_type !== 'all') ||
-        (filters.trade_nature && filters.trade_nature !== 'all') ||
-        filters.from ||
-        filters.to
-    );
+function equityRenderTotals(payload) {
+    equityRenderUnverified(payload);
+
+    const totals = payload.totals || {};
+    equitySetText('equity-total-accounts', EquityFormat.integer(totals.accounts));
+    equitySetText('equity-total-buy', EquityFormat.integer(totals.buy_fills));
+    equitySetText('equity-total-sell', EquityFormat.integer(totals.sell_fills));
+    // The lakh suffix travels WITH the figure - Rs 20.64L - rather than
+    // sitting in the column label, and it stays there BELOW a lakh too, so two
+    // days can be compared at a glance without first reading which unit each
+    // of them is in.
+    equitySetText('equity-total-value', EquityFormat.lakhs(totals.value));
 }
 
 async function equityLoadTradeBook() {
@@ -689,7 +993,8 @@ async function equityLoadTradeBook() {
 
     try {
         const response = await fetch(
-            '/equity/api/trade-book?' + equityFilterQuery() + '&_t=' + Date.now(),
+            // No filters: this screen shows one day, whole.
+            '/equity/api/trade-book?_t=' + Date.now(),
             { signal: AbortSignal.timeout(EQUITY_FETCH_TIMEOUT_MS) }
         );
         const data = await response.json();
@@ -699,11 +1004,13 @@ async function equityLoadTradeBook() {
             return;
         }
 
-        equityRenderAccountOptions(data.options || {});
+        equityLastPayload = data;
         equityRenderTotals(data);
-        equityRenderTrades(data.trades || [], equityFiltersApplied(data));
+        equityRenderTrades(data.trades || []);
         equityShowStale('');
-        equitySetText('equity-last-updated', 'Updated ' + EquityFormat.clockTime(data.generated_at));
+        if (window.EquityUpdated) {
+        window.EquityUpdated.write('equity-last-updated', data.generated_at);
+    }
     } catch (error) {
         // Degrade to a visible stale marker, never blank the page.
         equityShowStale('The trade book could not be loaded, showing the last values loaded. Retrying shortly.');
@@ -726,4 +1033,5 @@ window.addEventListener('beforeunload', function () {
     }
 });
 </script>
+
 {% endblock %}

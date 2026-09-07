@@ -2,11 +2,231 @@
 
 {% block layout %}
 {% set equity_module_active = request.path.startswith('/equity') %}
+    <style>
+        /*
+            The equity tint, written out rather than borrowed from a utility
+            class. bg-primary/10 was tried first and measured identical to the
+            untinted panel - 250,250,250 on both - so the dependency is gone:
+            an id selector outranks every utility, and the alpha is set here
+            where it can be seen and changed.
+
+            oklch(var(--p)) is the theme's own primary, so this follows a theme
+            switch instead of freezing one theme's colour into the markup. The
+            dark theme gets a stronger alpha because a wash that reads clearly
+            on white disappears on near-black.
+        */
+        #module-sidebar { transition: background-color .15s ease; }
+        #module-sidebar.module-equity {
+            background-color: oklch(var(--p) / 0.10);
+        }
+        [data-theme="dark"] #module-sidebar.module-equity {
+            background-color: oklch(var(--p) / 0.16);
+        }
+
+        /*
+            The selected equity menu item: bold, green.
+
+            Scoped to #nav-equity and keyed on the bg-base-300 the template
+            already puts on the active link, so NOT ONE LINE OF MARKUP CHANGES
+            and the F&O menu keeps its grey highlight exactly as it is. The
+            equity Trading Hours item shares an endpoint with F&O's, so a
+            template-side condition could not have told them apart anyway -
+            the CSS scope can.
+
+            --su, not --p: the primary is green in the light theme and BLUE in
+            the dark one, so "green" would quietly stop being green the moment
+            the theme was switched. Success is green in both.
+
+            The id and element in the selector outrank the utility class, so
+            the background overrides without !important.
+        */
+        #nav-equity a.bg-base-300 {
+            font-weight: 700;
+            color: oklch(var(--su));
+            /*
+                Transparent, not merely unset: the template puts bg-base-300 on
+                the active link and that grey has to be cancelled, or the item
+                keeps a block of colour behind it. The weight and the green are
+                the whole signal.
+            */
+            background-color: transparent;
+        }
+        #nav-equity a.bg-base-300:hover {
+            background-color: oklch(var(--su) / 0.12);
+        }
+
+        /*
+            Column headings, one appearance on every equity screen.
+
+            Scoped to .module-equity, which the page content div carries only
+            when the blueprint is equity - so the F&O tables are untouched.
+            That scoping is the whole reason this can live in the shared layout
+            at all.
+
+            The violet is written out rather than taken from a theme variable,
+            because no theme variable IS violet: --p is green in the light
+            theme and blue in the dark one, so borrowing it would have made the
+            heading change colour with the theme. Two values instead, one per
+            theme, chosen for contrast on their own background - a violet dark
+            enough to read on white is unreadable on near-black, so the dark
+            theme gets a lighter, less saturated one.
+        */
+        /*
+            The gap above the first thing on the page.
+
+            Every equity screen lost its big in-page heading, so what is left
+            at the top of the content is a row of controls pushed to the right
+            - and 1.5rem of padding above an apparently empty line read as a
+            band of white between the title bar and the data. The padding comes
+            from p-6 on this same div, so it is cut here rather than by editing
+            ten templates. F&O keeps its own spacing: the class is only on the
+            content div when the blueprint is equity.
+        */
+        .module-equity { padding-top: 0.5rem; }
+
+        .module-equity .table thead th,
+        .module-equity .table thead td {
+            color: oklch(42% 0.20 295);
+            font-weight: 700;
+            /*
+                One step up from the 0.75rem DaisyUI gives a table heading, to
+                the same 0.875rem the rows themselves use. Bold was already
+                there and could not go further; size was the axis left. The
+                line height moves with it, or the heading row would sit
+                cramped against its own border.
+            */
+            font-size: 0.875rem;
+            line-height: 1.25rem;
+        }
+        [data-theme="dark"] .module-equity .table thead th,
+        [data-theme="dark"] .module-equity .table thead td {
+            color: oklch(80% 0.13 295);
+        }
+        /*
+            A rule under the column headings, matching the one under the top
+            bar. Shown on the Order Book first and moved here once the owner
+            had seen it, so every equity table reads the same way.
+
+            The colour is the token .border-base-300 itself resolves to, taken
+            from compiled.css rather than guessed, so the two lines are the
+            same grey and the same weight in both themes - and it does not
+            depend on a Tailwind class being present in the compiled sheet.
+
+            SHARED FILE. Scoped to .module-equity, which sits only on the
+            equity content wrapper, so no F&O screen can match it. The sidebar
+            also carries that class and contains no table at all.
+        */
+        .module-equity .table thead th,
+        .module-equity .table thead td {
+            border-bottom: 1px solid var(--fallback-b3, oklch(var(--b3) / 1));
+        }
+        /*
+            A money figure on a summary tile, in the module's own violet - the
+            same colour as the column headings above, so the two accents on an
+            equity screen are one colour rather than two.
+
+            Not text-primary: this theme's primary is GREEN, which on these
+            screens means "this commits something". A total is not a button.
+
+            SHARED FILE, same scoping as the rule above: .module-equity sits
+            only on the equity content wrapper.
+        */
+        .module-equity .equity-accent { color: oklch(42% 0.20 295); }
+        [data-theme="dark"] .module-equity .equity-accent { color: oklch(80% 0.13 295); }
+        /*
+            The sortable headings are real buttons and inherit from the th, but
+            the sort mark is dimmed on purpose and has to stay that way.
+        */
+        .module-equity .table thead th .equity-sort { color: inherit; }
+
+        /*
+            A sortable column heading is a real button, so it answers the
+            keyboard as well as the mouse, but it is stripped back to look
+            exactly like the heading it replaces. Moved here from the Watch
+            List's own stylesheet when Holdings became sortable too: two copies
+            of one appearance is how two screens come to disagree about it.
+        */
+        .module-equity .equity-sort {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.25rem;
+            background: none;
+            border: 0;
+            padding: 0;
+            margin: 0;
+            font: inherit;
+            color: inherit;
+            cursor: pointer;
+        }
+        .module-equity .equity-sort:hover { text-decoration: underline; }
+        .module-equity .equity-sort-mark { font-size: 0.75em; opacity: 0.35; }
+        .module-equity .equity-sort-mark.is-active { opacity: 1; }
+
+        /*
+            One button convention, every equity screen. Scoped the same way as
+            the headings above, so F&O keeps the buttons it has.
+
+            Colour carries meaning and nothing else does:
+
+              green  = this commits something, or this toggle is ON
+              red    = this commits a SELL
+              hollow = this does not commit anything
+
+            The lettering on green is BLACK. The theme sets --pc to white,
+            which is what a filled primary button uses, and on this particular
+            green white is the weaker of the two. Red keeps white lettering -
+            black on that red is unreadable, and the two are never adjacent so
+            the inconsistency is invisible.
+
+            Written for :hover and :focus as well as the resting state, because
+            daisyUI re-asserts its own colour on both and would take the black
+            back the moment a pointer crossed the button.
+        */
+        .module-equity .btn-primary,
+        .module-equity .btn-primary:hover,
+        .module-equity .btn-primary:focus,
+        .module-equity .btn-primary:active,
+        .module-equity .btn-success,
+        .module-equity .btn-success:hover,
+        .module-equity .btn-success:focus,
+        .module-equity .btn-success:active {
+            color: #0f172a;
+        }
+        [data-theme="dark"] .module-equity .btn-primary,
+        [data-theme="dark"] .module-equity .btn-primary:hover,
+        [data-theme="dark"] .module-equity .btn-success,
+        [data-theme="dark"] .module-equity .btn-success:hover {
+            color: #0f172a;
+            text-shadow: none;
+        }
+
+        /*
+            One width for every button on an action row, set by the longest
+            label any of them carries. Stated here rather than per screen,
+            because the point of it is that the rows match each other.
+        */
+        .module-equity .equity-btn { min-width: 9.5rem; }
+    </style>
     {% if current_user.is_authenticated %}
     <!-- Main Layout with Sidebar -->
     <div class="flex h-screen overflow-hidden">
         <!-- Sidebar -->
-        <aside class="w-64 bg-base-200 border-r border-base-300 flex flex-col">
+        <!--
+            The sidebar carries a tint on equity pages. F&O pages are left
+            byte for byte as they were, so the untinted look IS "F&O" without a
+            line of it being touched.
+
+            The tint follows the PAGE, not the menu toggle. The toggle can swap
+            the menu without navigating anywhere, and what matters is which
+            module's data is on the screen, not which menu is showing.
+
+            bg-primary/10 because the stylesheet is COMPILED and only the
+            utilities already used somewhere exist in it. bg-primary/5 and
+            border-r-primary/30 are not in the build and would render as
+            nothing at all - a change that silently does nothing is worse than
+            no change. A wider palette needs the CSS rebuilding first.
+        -->
+        <aside id="module-sidebar" class="w-64 bg-base-200 border-r border-base-300 flex flex-col{{ ' module-equity' if equity_module_active else '' }}">
             <!-- Logo -->
             <div class="h-16 flex items-center px-6 border-b border-base-300">
                 <a href="{{ url_for('main.dashboard') }}" class="flex items-center space-x-3">
@@ -141,6 +361,10 @@
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path>
                                 </svg>
                                 <span>Watch List</span>
+                                <!-- Filled by static/js/equity_alerts.js with the number of
+                                     alerts that have fired and are still sitting fired,
+                                     across every watch list. Hidden while that is zero. -->
+                                <span class="badge badge-sm badge-warning hidden" id="equity-watchlist-nav-badge"></span>
                             </a>
 
                             <a href="{{ url_for('equity.place_order') }}" class="flex items-center space-x-3 px-3 py-2 rounded-lg hover:bg-base-300 transition-colors {{ 'bg-base-300' if request.endpoint == 'equity.place_order' }}">
@@ -164,11 +388,37 @@
                                 <span>Trade Book</span>
                             </a>
 
+                            <a href="{{ url_for('equity.positions') }}" class="flex items-center space-x-3 px-3 py-2 rounded-lg hover:bg-base-300 transition-colors {{ 'bg-base-300' if request.endpoint == 'equity.positions' }}">
+                                <svg class="w-5 h-5 text-base-content/70" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"></path>
+                                </svg>
+                                <span>Positions</span>
+                            </a>
+
                             <a href="{{ url_for('equity.holdings') }}" class="flex items-center space-x-3 px-3 py-2 rounded-lg hover:bg-base-300 transition-colors {{ 'bg-base-300' if request.endpoint == 'equity.holdings' }}">
                                 <svg class="w-5 h-5 text-base-content/70" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-4m-5 0H3m2 0h4"></path>
                                 </svg>
                                 <span>Holdings</span>
+                                <!-- Two counts, both filled by
+                                     static/js/equity_alerts.js and both hidden while they
+                                     are zero: stocks whose STOP LOSS has been breached, and
+                                     stocks whose TARGET has been reached. Red and green,
+                                     the owner's pairing, the same one the levels wear on
+                                     every equity screen.
+
+                                     They replaced a single red badge counting holdings
+                                     waiting for a confirm decision. Nothing was lost: such
+                                     a holding has had a level breached, so it is still in
+                                     the red count - it is only no longer counted on its
+                                     own, and the red badge's hover text says how many are
+                                     waiting.
+
+                                     Red first. A stop loss is the one that means something
+                                     has gone wrong, and it is read before the good news
+                                     beside it. -->
+                                <span class="badge badge-sm badge-error hidden" id="equity-sl-nav-badge"></span>
+                                <span class="badge badge-sm badge-success hidden" id="equity-tp-nav-badge"></span>
                             </a>
                         </div>
                     </div>
@@ -191,6 +441,11 @@
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
                                 </svg>
                                 <span>Settings</span>
+                                <!-- Unread entries in the notification log, which now
+                                     lives under Settings. Same id as before, because it is
+                                     the same count from the same poll - only its home
+                                     changed. Hidden while it is zero. -->
+                                <span class="badge badge-sm badge-warning hidden" id="equity-alert-nav-badge"></span>
                             </a>
                         </div>
                     </div>
@@ -246,10 +501,24 @@
                         }
                         setToggleState(document.getElementById('module-toggle-fno'), !isEquity);
                         setToggleState(document.getElementById('module-toggle-equity'), isEquity);
+
+                        // The shade follows the MENU, not the URL. The toggle can swap the
+                        // menu without navigating, and a tinted panel over an F&O menu
+                        // would be worse than no tint at all - it would say Equity while
+                        // showing F&O. Set here so it moves the instant the toggle moves.
+                        var sidebar = document.getElementById('module-sidebar');
+                        if (sidebar) {
+                            sidebar.classList.toggle('module-equity', isEquity);
+                        }
                     }
 
                     // Which module does the page we are actually on belong to?
-                    var fnoPrefixes = ['/trading', '/strategy', '/margin', '/tradingview'];
+                    // '/dashboard' and '/accounts' were missing, and that was the whole
+                    // fault: the F&O dashboard matched neither list, so the stored
+                    // preference decided - and anyone who had once opened Equity saw the
+                    // EQUITY menu sitting on an F&O page. The page must win.
+                    var fnoPrefixes = ['/dashboard', '/accounts', '/trading', '/strategy',
+                                       '/margin', '/tradingview'];
                     var currentPath = (window.location && window.location.pathname) || '';
                     var pathIsFno = false;
                     for (var p = 0; p < fnoPrefixes.length; p++) {
@@ -318,8 +587,15 @@
                         </svg>
                     </button>
                     
-                    <!-- Page Title -->
-                    <h1 class="text-lg font-semibold">{% block page_title %}Dashboard{% endblock %}</h1>
+                    <!-- Page Title.
+
+                         On an equity screen this is now the ONLY heading, so it
+                         carries the weight the in-page heading used to. It is
+                         sized from the blueprint rather than from a CSS class,
+                         because .module-equity sits on the content div below and
+                         cannot reach up into this header - and the F&O side must
+                         look exactly as it did. -->
+                    <h1 class="{{ 'text-3xl font-bold' if request.blueprint == 'equity' else 'text-lg font-semibold' }}">{% block page_title %}Dashboard{% endblock %}</h1>
                 </div>
                 
                 <div class="flex items-center space-x-3">
@@ -422,8 +698,13 @@
                     {% endif %}
                 {% endwith %}
                 
-                <!-- Page Content -->
-                <div class="p-6">
+                <!-- Page Content
+                     The module class is set from the blueprint, not from the
+                     menu, because the menu is chosen by the visitor and the
+                     blueprint is a fact about the page. Everything scoped to
+                     .module-equity below is therefore unreachable from an F&O
+                     screen. -->
+                <div class="p-6 {{ 'module-equity' if request.blueprint == 'equity' }}">
                     {% block content %}{% endblock %}
                 </div>
 
@@ -532,4 +813,29 @@
             return colors[colorIndex];
         }
     </script>
+
+    <!--
+        PRICE ALERTS AND THE MENU COUNTS - loaded here, once, for the whole
+        equity module.
+
+        It used to be a script tag pasted at the bottom of each equity screen,
+        and THREE of them never got it: Holdings, Dashboard and Accounts. On
+        those three the alert popup could not appear and the counts in the menu
+        were never painted at all - which is exactly what the owner saw on
+        6 September, the Watch List count vanishing the moment he opened
+        Holdings and coming back when he left it. It had been that way since
+        the counts were built.
+
+        A thing that has to be remembered on every new screen will be forgotten
+        on some new screen. Here it cannot be: the module gets it by being the
+        module.
+
+        Guarded on equity_module_active, which is set at the top of this file
+        from the request path, so an F&O page never loads it and never calls an
+        equity endpoint. Last in the layout, so anything a screen defines for
+        itself is already defined.
+    -->
+    {% if equity_module_active %}
+    <script src="{{ url_for('static', filename='js/equity_alerts.js') }}"></script>
+    {% endif %}
 {% endblock %}

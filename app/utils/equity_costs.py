@@ -24,7 +24,7 @@ Cost formula (PRD sections 9.1 to 9.3):
               + exchange_txn on turnover
               + sebi         on turnover
               + stamp_duty   on BUY turnover only
-              + gst          gst_pct of (brokerage + exchange transaction charge)
+              + gst          gst_pct of (brokerage + exchange txn + SEBI + DP)
               + dp_amc       on SELL only, per scrip
     gross_pnl = (ltp - avg_cost) * quantity
     net_pnl   = gross_pnl - est_costs
@@ -100,7 +100,8 @@ class BrokerageRates:
             0.00297, or 0.00325 for brokers on the higher slab.
         sebi_pct: SEBI turnover fee, for example 0.0001.
         stamp_duty_pct: stamp duty on BUY turnover only, for example 0.015.
-        gst_pct: GST on (brokerage + exchange transaction charge) only, for
+        gst_pct: GST on the service charges (brokerage + exchange transaction
+            charge + SEBI turnover fee + DP charge), for
             example 18.0.
     """
 
@@ -175,8 +176,9 @@ def estimate_costs(
 
     Rules, applied exactly as specified:
         - stamp duty applies to BUY turnover only.
-        - GST applies to (brokerage + exchange transaction charge) only, never to
-          STT, SEBI fee or stamp duty.
+        - GST applies to the service charges - brokerage, exchange transaction
+          charge, SEBI turnover fee and DP charge - and never to STT or stamp
+          duty, which are taxes in their own right.
         - DP and AMC applies on SELL only, once per scrip.
     """
     order_side = normalise_side(side)
@@ -188,8 +190,18 @@ def estimate_costs(
     exchange_txn = _percent_of(amount, rates.exchange_txn_pct)
     sebi = _percent_of(amount, rates.sebi_pct)
     stamp_duty = _percent_of(amount, rates.stamp_duty_pct) if order_side == SIDE_BUY else 0.0
-    gst = _percent_of(brokerage + exchange_txn, rates.gst_pct)
     dp_amc = _as_non_negative(rates.dp_amc_charge) * scrips if order_side == SIDE_SELL else 0.0
+
+    # GST falls on the SERVICE charges: brokerage, the exchange transaction
+    # charge, the SEBI turnover fee and the DP charge. It does not fall on STT
+    # or on stamp duty, which are taxes in their own right.
+    #
+    # The DP charge is the one that shows. The rate is entered net of GST, so
+    # 13.50 becomes 15.93 on the contract note; leaving it out of the base put
+    # Est. Costs about 2.43 under the real figure on every sell, per scrip -
+    # small, but wrong in the same direction every time, which is the kind of
+    # error that quietly accumulates.
+    gst = _percent_of(brokerage + exchange_txn + sebi + dp_amc, rates.gst_pct)
 
     total = brokerage + stt + exchange_txn + sebi + stamp_duty + gst + dp_amc
 

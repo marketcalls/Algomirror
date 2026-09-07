@@ -6,20 +6,52 @@
 
 {% block content %}
 <style>
+    /*
+        Five tabs across, from one breakpoint up.
+        Written here rather than as sm:grid-cols-5, because the compiled
+        stylesheet is built from the classes these screens already use and
+        carries no five column grid at all - the utility would have rendered as
+        nothing and left five tabs stacked two abreast.
+    */
+    @media (min-width: 640px) {
+        .equity-settings-tabs { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+    }
+
+    /* An entry nobody has read yet. */
+    .equity-unread { background-color: oklch(var(--wa) / 0.10); }
+
     /* Tabular numerals for every column of aligned digits on this screen. The
        compiled stylesheet only carries a dark-theme monospace helper, so the
        rule is stated here so it applies in both themes. */
     .equity-num { font-variant-numeric: tabular-nums; }
+
+    /* Number boxes carry no spinner arrows. A price box steps by five paise,
+       which is too small a movement to be worth the width the arrows take, and
+       leaving them off also stops a stray scroll wheel from changing a price. */
+    input[type="number"]::-webkit-outer-spin-button,
+    input[type="number"]::-webkit-inner-spin-button {
+        -webkit-appearance: none;
+        margin: 0;
+    }
+    input[type="number"] {
+        -moz-appearance: textfield;
+        appearance: textfield;
+    }
 </style>
 
-<div class="space-y-6">
-    <!-- Header -->
+<div class="space-y-4">
+    <!--
+        Header.
+
+        No big heading here. The top bar already names the page and, unlike
+        anything in this content area, it does not scroll away - so a second
+        title below it was saying the same thing twice, and the copy that
+        survived scrolling was the one nobody had chosen.
+    -->
     <div class="flex justify-between items-center flex-wrap gap-3">
         <div>
-            <h1 class="text-3xl font-bold">Equity Settings</h1>
-            <p class="text-base-content/70 mt-1">
-                Module preferences, trade natures and brokerage rates. Rates are versioned by effective date, so
-                saving never rewrites a past cost figure.
+            <p class="text-base-content/70">
+                Watch lists, trade natures, charges and module preferences.
             </p>
         </div>
         <div class="flex gap-3 items-center flex-wrap">
@@ -28,10 +60,94 @@
     </div>
 
     <!-- Load or save result -->
-    <div class="alert hidden" id="equity-result-banner">
-        <span id="equity-result-text"></span>
+    <div class="flex justify-center">
+        <div class="alert w-auto max-w-2xl shadow-lg hidden" id="equity-result-banner">
+            <span id="equity-result-text"></span>
+        </div>
     </div>
 
+    <!--
+        SECTION SELECTOR.
+
+        These four sections were one long scroll and are unrelated to each
+        other, so only one shows at a time. Built like the F&O / Equity module
+        toggle in the sidebar, so it reads as the same kind of control.
+    -->
+    <div class="equity-settings-tabs grid grid-cols-2 gap-1 p-1 bg-base-300 rounded-lg"
+         role="group" aria-label="Settings section">
+        <button type="button" data-settings-tab="watchlists"
+                class="equity-settings-tab text-sm font-semibold py-2 rounded-lg transition-colors">
+            Watch Lists
+        </button>
+        <button type="button" data-settings-tab="natures"
+                class="equity-settings-tab text-sm font-semibold py-2 rounded-lg transition-colors">
+            Trade Natures
+        </button>
+        <button type="button" data-settings-tab="charges"
+                class="equity-settings-tab text-sm font-semibold py-2 rounded-lg transition-colors">
+            Charges
+        </button>
+        <button type="button" data-settings-tab="preferences"
+                class="equity-settings-tab text-sm font-semibold py-2 rounded-lg transition-colors">
+            Preferences
+        </button>
+        <button type="button" data-settings-tab="notifications"
+                class="equity-settings-tab text-sm font-semibold py-2 rounded-lg transition-colors">
+            <span>Notifications</span><span class="badge badge-sm badge-warning ml-2 hidden" id="equity-log-badge"></span>
+        </button>
+    </div>
+
+    <!-- SECTION: Notifications
+         The record of what happened while nobody was looking.
+
+         It lived on an Alerts menu of its own, which was the older idea
+         showing through: it began as "alerts that fired", a watch list matter.
+         Two of its three sources are now about HOLDINGS - shares arriving or
+         leaving without an order from here, and holdings opening or closing -
+         and none of them belong to a watch list row.
+
+         It is here rather than on a screen you watch, because it answers a
+         question asked AFTER the fact: what moved, when, and did AlgoMirror
+         do it. The alerts you have set are on the Watch List; stop losses and
+         targets are managed from Holdings. This is the durable record none of
+         those keep once you have acted on them. -->
+    <div class="equity-settings-section hidden" data-settings-section="notifications">
+    <div class="card bg-base-100 shadow-xl">
+        <div class="card-body">
+            <div class="flex justify-between items-center flex-wrap gap-3">
+                <h2 class="card-title">Notifications</h2>
+                <button onclick="equityMarkLogSeen()" class="btn btn-outline btn-sm"
+                        id="equity-log-seen-btn">Mark All Read</button>
+            </div>
+            <p class="text-sm text-base-content/60" id="equity-log-note">
+                Shares that moved without an order from AlgoMirror, holdings opening and
+                closing, and price alerts that fired. Newest first.
+            </p>
+
+            <div class="overflow-x-auto">
+                <table class="table table-sm">
+                    <thead>
+                        <tr>
+                            <th>When</th>
+                            <th>Stock</th>
+                            <th>What Happened</th>
+                        </tr>
+                    </thead>
+                    <tbody id="equity-log-body">
+                        <tr>
+                            <td colspan="3" class="text-center py-8 text-base-content/60">
+                                Loading.
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    </div>
+
+    <!-- SECTION: Preferences -->
+    <div class="equity-settings-section hidden" data-settings-section="preferences">
     <!--
         MODULE PREFERENCES.
 
@@ -87,6 +203,24 @@
                     </label>
                 </div>
 
+                <div class="form-control">
+                    <label class="label" for="equity-prefs-order-timeout">
+                        <span class="label-text">Order timeout, seconds</span>
+                    </label>
+                    <input type="number" id="equity-prefs-order-timeout" class="input input-bordered input-sm equity-num"
+                           min="10" max="180" step="1" value="30">
+                    <label class="label">
+                        <span class="label-text-alt" id="equity-prefs-order-timeout-hint">Between 10 and 180 seconds.</span>
+                    </label>
+                    <label class="label">
+                        <span class="label-text-alt">
+                            How long to wait for a broker to answer an order. A live broker answers in a second or
+                            two, so 30 is right there. A sandbox can take a minute, and an order that is still
+                            working when the wait runs out is reported as unconfirmed even though it went through.
+                        </span>
+                    </label>
+                </div>
+
                 <div class="form-control gap-2 justify-center">
                     <label class="label cursor-pointer justify-start gap-3">
                         <input type="checkbox" id="equity-prefs-monitor" class="toggle toggle-sm toggle-primary">
@@ -111,6 +245,148 @@
         </div>
     </div>
 
+
+    <!--
+        INTRADAY SHORT SELLING.
+
+        Its own card, because these are the only settings on this page that
+        decide when a position CLOSES rather than how one is opened. A short is
+        the one thing in this module that must be acted on: left past the close
+        it is an unlimited loss above the entry, a forced buy-back by the broker
+        at whatever price is there, and a penalty.
+    -->
+    <div class="card bg-base-100 shadow-xl mt-6">
+        <div class="card-body">
+            <div class="flex justify-between items-center gap-3 flex-wrap">
+                <h2 class="card-title">Intraday Short Selling</h2>
+                <button onclick="equitySavePreferences()" class="btn btn-primary btn-sm">Save Preferences</button>
+            </div>
+
+            <p class="text-sm text-base-content/60">
+                Selling shares you do not own. AlgoMirror splits such an order by itself: what the account
+                holds goes out as delivery, and only the rest goes short. A stop loss is compulsory on the
+                short part and is placed at your broker, so it works even when this machine is switched off.
+            </p>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div class="form-control">
+                    <label class="label" for="equity-prefs-short-cutoff">
+                        <span class="label-text">Last time a short may be opened</span>
+                    </label>
+                    <input type="time" id="equity-prefs-short-cutoff"
+                           class="input input-bordered input-sm equity-num" value="15:00">
+                    <label class="label">
+                        <span class="label-text-alt">
+                            After this, a sell of shares you do not own is refused rather than shorted.
+                            It leaves enough of the session to buy back sensibly.
+                        </span>
+                    </label>
+                </div>
+
+                <div class="form-control">
+                    <label class="label" for="equity-prefs-short-squareoff">
+                        <span class="label-text">Buy every open short back at</span>
+                    </label>
+                    <input type="time" id="equity-prefs-short-squareoff"
+                           class="input input-bordered input-sm equity-num" value="15:12">
+                    <label class="label">
+                        <span class="label-text-alt" id="equity-prefs-short-times-hint">
+                            Must be before 15:15, which is when OpenAlgo squares MIS off itself. Behind that,
+                            this would never get to run.
+                        </span>
+                    </label>
+                </div>
+
+                <div class="form-control gap-2 justify-center">
+                    <label class="label cursor-pointer justify-start gap-3">
+                        <input type="checkbox" id="equity-prefs-short-monitor" class="toggle toggle-sm toggle-primary">
+                        <span class="label-text">Square-off monitor enabled</span>
+                    </label>
+                    <label class="label">
+                        <span class="label-text-alt">
+                            Switched off, no NEW short can be opened. Anything already open is still bought
+                            back: an open short is not something a setting gets to leave alone.
+                        </span>
+                    </label>
+                </div>
+
+                <div class="form-control justify-center">
+                    <div class="alert" id="equity-short-open-banner">
+                        <span id="equity-short-open-text">Not loaded yet.</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- The heartbeat, same as the stop loss monitor above: proof it runs
+                 with every tab closed. -->
+            <div class="alert mt-2" id="equity-short-monitor-banner">
+                <span id="equity-short-monitor-text">Square-off status not loaded yet.</span>
+            </div>
+        </div>
+    </div>
+
+    </div>
+
+    <!-- SECTION: Watch Lists -->
+    <div class="equity-settings-section hidden" data-settings-section="watchlists">
+    <!--
+        WATCH LISTS.
+
+        Named lists, maintained here rather than on the Watch List screen so
+        that screen stays about the stocks. A stock may sit in several lists at
+        once, each entry with its own target price and its own alert.
+    -->
+    <div class="card bg-base-100 shadow-xl">
+        <div class="card-body">
+            <h2 class="card-title">Watch Lists</h2>
+            <p class="text-sm text-base-content/60">
+                The lists offered by the selector on the Watch List screen. The same stock can sit in more than
+                one list, each with its own target price and alert.
+            </p>
+
+            <div class="flex items-end gap-3 flex-wrap">
+                <div class="form-control">
+                    <label class="label" for="equity-watchlist-name">
+                        <span class="label-text">New Watch List</span>
+                    </label>
+                    <input type="text" id="equity-watchlist-name" class="input input-bordered input-sm w-64"
+                           maxlength="60" placeholder="For example: My Holdings">
+                </div>
+                <button onclick="equityCreateWatchlist()" class="btn btn-primary btn-sm" id="equity-watchlist-add-btn">Add</button>
+            </div>
+
+            <div class="overflow-x-auto mt-2">
+                <table class="table table-sm">
+                    <thead>
+                        <tr>
+                            <th class="text-right">Order</th>
+                            <th>Name</th>
+                            <th class="text-right">Stocks</th>
+                            <th>Default</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="equity-watchlists-body">
+                        <tr>
+                            <td colspan="5" class="text-center py-8 text-base-content/60">
+                                Loading watch lists.
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <p class="text-xs text-base-content/60">
+                Renaming a list is safe at any time and disturbs nothing in it. A list can only be deleted once it
+                is empty, and the default list cannot be deleted at all, so a stock always has somewhere to go.
+            </p>
+        </div>
+    </div>
+
+    </div>
+
+    <!-- SECTION: Trade Natures -->
+    <div class="equity-settings-section hidden" data-settings-section="natures">
     <!--
         TRADE NATURES.
 
@@ -164,10 +440,14 @@
         </div>
     </div>
 
+    </div>
+
+    <!-- SECTION: Charges -->
+    <div class="equity-settings-section hidden" data-settings-section="charges">
     <!-- Brokerage rates -->
     <div class="flex justify-between items-center flex-wrap gap-3">
         <div>
-            <h2 class="text-2xl font-bold">Brokerage &amp; Charges</h2>
+            <h2 class="text-2xl font-bold">Charges</h2>
             <p class="text-base-content/70 mt-1">
                 Rates per account and broker. Saving inserts a new effective-dated version, it never rewrites history.
             </p>
@@ -212,7 +492,7 @@
                 <table class="table table-sm">
                     <thead>
                         <tr>
-                            <th>Member</th>
+                            <th>Account</th>
                             <th>Broker</th>
                             <th>Version in Effect</th>
                             <th class="text-right">Brokerage (Rs per order)</th>
@@ -315,12 +595,18 @@
                 Add and connect a trading account before configuring brokerage and charges.
             </p>
             <div class="mt-6">
-                <a href="{{ url_for('accounts.add') }}" class="btn btn-primary">Add Account</a>
+                <a href="{{ url_for('accounts.add') }}" class="btn btn-primary btn-sm">Add Account</a>
             </div>
         </div>
     </div>
     {% endif %}
+    </div>
 </div>
+
+<!-- The "Updated" line, shared by every equity screen so one thing is
+     said one way: date and time, green while the market is open and
+     amber while it is closed. -->
+<script src="{{ url_for('static', filename='js/equity_updated.js') }}"></script>
 
 <script>
 // ---------------------------------------------------------------------------
@@ -334,18 +620,30 @@
 const EquityFormat = {
     clockTime: function (isoText) {
         if (!isoText) { return ''; }
-        const parsed = new Date(isoText);
+        // The server sends UTC with no timezone marker. A marker-less value is
+        // read by the browser as LOCAL time, which put every clock on this screen
+        // 5h30m behind. Mark it as UTC, then render explicitly in IST so the
+        // screen agrees with the market whatever the machine thinks the time is.
+        let text = String(isoText);
+        if (!/(Z|[+-]\d{2}:?\d{2})$/.test(text)) { text += 'Z'; }
+        const parsed = new Date(text);
         if (isNaN(parsed.getTime())) { return ''; }
-        return parsed.toLocaleTimeString('en-IN', { hour12: false });
+        return parsed.toLocaleTimeString('en-IN', { hour12: false, timeZone: 'Asia/Kolkata' });
     },
 
     // The monitor heartbeat needs a date as well as a clock: a last run from
     // yesterday reading as a plain time would look current.
     dateTime: function (isoText) {
         if (!isoText) { return ''; }
-        const parsed = new Date(isoText);
+        // The server sends UTC with no timezone marker. A marker-less value is
+        // read by the browser as LOCAL time, which put every clock on this screen
+        // 5h30m behind. Mark it as UTC, then render explicitly in IST so the
+        // screen agrees with the market whatever the machine thinks the time is.
+        let text = String(isoText);
+        if (!/(Z|[+-]\d{2}:?\d{2})$/.test(text)) { text += 'Z'; }
+        const parsed = new Date(text);
         if (isNaN(parsed.getTime())) { return ''; }
-        return parsed.toLocaleString('en-IN', { hour12: false });
+        return parsed.toLocaleString('en-IN', { hour12: false, timeZone: 'Asia/Kolkata' });
     }
 };
 
@@ -370,6 +668,12 @@ function equitySetText(id, text, className) {
     }
 }
 
+// Every page level status message on this screen wears the same shape: a pill
+// only as wide as its text, centred, rather than a bar stretched across the
+// page. Rewriting className replaces the whole list, so the sizing has to be
+// restated wherever a banner's colour is set.
+const EQUITY_BANNER_CLASS = 'alert w-auto max-w-2xl shadow-lg';
+
 function equityShowResult(message, kind) {
     const banner = document.getElementById('equity-result-banner');
     const text = document.getElementById('equity-result-text');
@@ -379,7 +683,7 @@ function equityShowResult(message, kind) {
         return;
     }
     text.textContent = message;
-    banner.className = 'alert ' + (kind === 'error' ? 'alert-error' : 'alert-success');
+    banner.className = EQUITY_BANNER_CLASS + ' ' + (kind === 'error' ? 'alert-error' : 'alert-success');
 }
 
 function equityRateInput(accountId, field) {
@@ -434,7 +738,9 @@ function equityApplyRates(payload) {
         }
     });
 
-    equitySetText('equity-last-updated', 'Updated ' + EquityFormat.clockTime(payload.generated_at));
+    if (window.EquityUpdated) {
+        window.EquityUpdated.write('equity-last-updated', payload.generated_at);
+    }
 }
 
 async function equityLoadRates() {
@@ -589,14 +895,101 @@ function equityApplyPreferences(payload) {
         );
     }
 
+    const orderTimeout = document.getElementById('equity-prefs-order-timeout');
+    const timeoutBounds = options.order_timeout_seconds || {};
+    if (orderTimeout) {
+        if (timeoutBounds.minimum !== undefined) { orderTimeout.min = String(timeoutBounds.minimum); }
+        if (timeoutBounds.maximum !== undefined) { orderTimeout.max = String(timeoutBounds.maximum); }
+        if (document.activeElement !== orderTimeout) {
+            orderTimeout.value = settings.order_timeout_seconds;
+        }
+    }
+    if (timeoutBounds.minimum !== undefined && timeoutBounds.maximum !== undefined) {
+        equitySetText(
+            'equity-prefs-order-timeout-hint',
+            'Between ' + timeoutBounds.minimum + ' and ' + timeoutBounds.maximum + ' seconds.',
+            'label-text-alt'
+        );
+    }
+
     const monitorToggle = document.getElementById('equity-prefs-monitor');
     if (monitorToggle) { monitorToggle.checked = Boolean(settings.sl_monitor_enabled); }
 
     const alertsToggle = document.getElementById('equity-prefs-alerts');
     if (alertsToggle) { alertsToggle.checked = Boolean(settings.price_alerts_enabled); }
 
+    const shortCutoff = document.getElementById('equity-prefs-short-cutoff');
+    if (shortCutoff && settings.intraday_cutoff_at) {
+        shortCutoff.value = settings.intraday_cutoff_at;
+    }
+    const shortSquareoff = document.getElementById('equity-prefs-short-squareoff');
+    if (shortSquareoff && settings.intraday_squareoff_at) {
+        shortSquareoff.value = settings.intraday_squareoff_at;
+    }
+    const shortToggle = document.getElementById('equity-prefs-short-monitor');
+    if (shortToggle) { shortToggle.checked = Boolean(settings.intraday_monitor_enabled); }
+
     equityApplyMonitorStatus(payload);
-    equitySetText('equity-last-updated', 'Updated ' + EquityFormat.clockTime(payload.generated_at));
+    equityApplyShortStatus(payload);
+    if (window.EquityUpdated) {
+        window.EquityUpdated.write('equity-last-updated', payload.generated_at);
+    }
+}
+
+function equityApplyShortStatus(payload) {
+    /*
+     * The square-off monitor's heartbeat, and how many shorts are open.
+     *
+     * Both on this card because this is where the monitor is turned off, and
+     * turning it off is a different decision with three shorts open than with
+     * none. The count is stated rather than left to be looked up.
+     */
+    const settings = payload.settings || {};
+    const monitor = payload.intraday_monitor || {};
+    const open = Number(payload.open_shorts) || 0;
+
+    const openBanner = document.getElementById('equity-short-open-banner');
+    if (openBanner) {
+        openBanner.className = 'alert ' + (open ? 'alert-error' : 'alert-success');
+        equitySetText('equity-short-open-text', open
+            ? open + ' short position(s) are OPEN and must be bought back today.'
+            : 'No shorts are open. Nothing is owed.');
+    }
+
+    const banner = document.getElementById('equity-short-monitor-banner');
+    const parts = [];
+    let kind = 'alert-success';
+
+    if (!settings.intraday_monitor_enabled) {
+        parts.push('The square-off is switched OFF, so no new short can be opened.');
+        kind = open ? 'alert-error' : 'alert-warning';
+        if (open) {
+            parts.push('Anything already open is still bought back regardless.');
+        }
+    } else if (monitor.available === false) {
+        parts.push('The square-off module could not be read, so its state is unknown.');
+        kind = 'alert-warning';
+    } else if (monitor.ready) {
+        parts.push('The square-off is running in the background scheduler, every '
+            + (monitor.interval_seconds || 15) + ' seconds.');
+    } else {
+        parts.push('The square-off is enabled but is NOT reporting as ready. Restart '
+            + 'the application before opening any short.');
+        kind = 'alert-error';
+    }
+
+    if (settings.intraday_last_run_at) {
+        parts.push('Last run ' + EquityFormat.dateTime(settings.intraday_last_run_at) + '.');
+    } else {
+        parts.push('It has not recorded a run yet.');
+    }
+    if (settings.intraday_last_error) {
+        parts.push('Last error: ' + settings.intraday_last_error);
+        kind = 'alert-error';
+    }
+
+    if (banner) { banner.className = 'alert mt-2 ' + kind; }
+    equitySetText('equity-short-monitor-text', parts.join(' '));
 }
 
 function equityApplyMonitorStatus(payload) {
@@ -678,12 +1071,47 @@ async function equitySavePreferences() {
         return;
     }
 
+    const timeoutRaw = (document.getElementById('equity-prefs-order-timeout') || {}).value || '';
+    const orderTimeoutValue = parseInt(String(timeoutRaw).trim(), 10);
+    if (!isFinite(orderTimeoutValue) || orderTimeoutValue < 10 || orderTimeoutValue > 180) {
+        equityShowResult('The order timeout must be a whole number of seconds between 10 and 180.', 'error');
+        if (button) { button.disabled = false; }
+        return;
+    }
+
+    // The two intraday times. Checked here as well as on the server, because
+    // a cut-off at or after the square-off would let a short be opened that
+    // nothing would ever close, and that is worth saying before the round trip.
+    const shortCutoff = String(((document.getElementById('equity-prefs-short-cutoff') || {}).value) || '').trim();
+    const shortSquareoff = String(((document.getElementById('equity-prefs-short-squareoff') || {}).value) || '').trim();
+    if (!shortCutoff || !shortSquareoff) {
+        equityShowResult('Both intraday short times are required, as HH:MM.', 'error');
+        if (button) { button.disabled = false; }
+        return;
+    }
+    if (shortCutoff >= shortSquareoff) {
+        equityShowResult('The last time a short may be opened (' + shortCutoff + ') has to be before the '
+            + 'time they are all bought back (' + shortSquareoff + ').', 'error');
+        if (button) { button.disabled = false; }
+        return;
+    }
+    if (shortSquareoff > '15:14') {
+        equityShowResult('The square-off has to be before 15:15, which is when OpenAlgo squares MIS off '
+            + 'itself. Behind that, this would never get to run.', 'error');
+        if (button) { button.disabled = false; }
+        return;
+    }
+
     const body = {
         insufficient_funds_action: (document.getElementById('equity-prefs-funds') || {}).value,
         default_exit_mode: (document.getElementById('equity-prefs-exit-mode') || {}).value,
         sl_monitor_interval_seconds: interval,
+        order_timeout_seconds: orderTimeoutValue,
         sl_monitor_enabled: Boolean((document.getElementById('equity-prefs-monitor') || {}).checked),
-        price_alerts_enabled: Boolean((document.getElementById('equity-prefs-alerts') || {}).checked)
+        price_alerts_enabled: Boolean((document.getElementById('equity-prefs-alerts') || {}).checked),
+        intraday_monitor_enabled: Boolean((document.getElementById('equity-prefs-short-monitor') || {}).checked),
+        intraday_cutoff_at: shortCutoff,
+        intraday_squareoff_at: shortSquareoff
     };
 
     try {
@@ -923,6 +1351,259 @@ async function equityToggleNature(nature, button) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Watch lists. Same shape as the trade natures above: the list is rebuilt from
+// whatever the server returns after every write, so the screen can never drift
+// from what was actually saved.
+// ---------------------------------------------------------------------------
+
+let equityWatchlists = [];
+
+function equityWatchlistRow(entry, index, total) {
+    const tr = document.createElement('tr');
+    tr.className = 'hover';
+
+    const order = document.createElement('td');
+    order.className = 'text-right';
+    const wrapper = document.createElement('div');
+    wrapper.className = 'flex items-center justify-end gap-1';
+
+    const up = document.createElement('button');
+    up.type = 'button';
+    up.className = 'btn btn-xs btn-ghost';
+    up.textContent = 'Up';
+    up.disabled = index === 0;
+    up.onclick = function () { equityMoveWatchlist(entry.id, -1); };
+    wrapper.appendChild(up);
+
+    const down = document.createElement('button');
+    down.type = 'button';
+    down.className = 'btn btn-xs btn-ghost';
+    down.textContent = 'Down';
+    down.disabled = index === total - 1;
+    down.onclick = function () { equityMoveWatchlist(entry.id, 1); };
+    wrapper.appendChild(down);
+
+    order.appendChild(wrapper);
+    tr.appendChild(order);
+
+    const name = document.createElement('td');
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'input input-bordered input-sm w-64';
+    input.maxLength = 60;
+    input.value = entry.name;
+    input.setAttribute('aria-label', 'Name of watch list ' + entry.name);
+    input.onchange = function () { equityRenameWatchlist(entry, input); };
+    name.appendChild(input);
+    tr.appendChild(name);
+
+    const count = document.createElement('td');
+    count.className = 'text-right equity-num';
+    count.textContent = entry.item_count;
+    tr.appendChild(count);
+
+    const flag = document.createElement('td');
+    if (entry.is_default) {
+        const badge = document.createElement('span');
+        badge.className = 'badge badge-success badge-sm';
+        badge.textContent = 'Default';
+        flag.appendChild(badge);
+    } else {
+        const make = document.createElement('button');
+        make.type = 'button';
+        make.className = 'btn btn-xs btn-outline';
+        make.textContent = 'Make Default';
+        make.title = 'The list the Watch List screen opens on, and where a stock goes when no list is named.';
+        make.onclick = function () { equityMakeWatchlistDefault(entry, make); };
+        flag.appendChild(make);
+    }
+    tr.appendChild(flag);
+
+    const actions = document.createElement('td');
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'btn btn-xs btn-error btn-outline';
+    remove.textContent = 'Delete';
+    // Say why it is refusing rather than presenting a button that does nothing.
+    if (entry.is_default) {
+        remove.disabled = true;
+        remove.title = 'The default list cannot be deleted. Make another list the default first.';
+    } else if (entry.item_count > 0) {
+        remove.disabled = true;
+        remove.title = 'This list holds ' + entry.item_count +
+            (entry.item_count === 1 ? ' stock' : ' stocks') +
+            '. Remove them on the Watch List screen first.';
+    } else {
+        remove.title = 'Delete this empty watch list.';
+        remove.onclick = function () { equityDeleteWatchlist(entry, remove); };
+    }
+    actions.appendChild(remove);
+    tr.appendChild(actions);
+
+    return tr;
+}
+
+function equityRenderWatchlists(payload, force) {
+    equityWatchlists = payload.watchlists || [];
+
+    const body = document.getElementById('equity-watchlists-body');
+    if (!body) { return; }
+
+    // A background rebuild would discard a rename part way through typing.
+    const active = document.activeElement;
+    if (!force && active && body.contains(active) && active.tagName === 'INPUT') { return; }
+
+    body.innerHTML = '';
+
+    if (!equityWatchlists.length) {
+        const tr = document.createElement('tr');
+        const cell = document.createElement('td');
+        cell.colSpan = 5;
+        cell.className = 'text-center py-8 text-base-content/60';
+        cell.textContent = 'No watch lists yet. Add one above.';
+        tr.appendChild(cell);
+        body.appendChild(tr);
+        return;
+    }
+
+    equityWatchlists.forEach(function (entry, index) {
+        body.appendChild(equityWatchlistRow(entry, index, equityWatchlists.length));
+    });
+}
+
+async function equityWatchlistRequest(url, options, successMessage) {
+    try {
+        const response = await fetchWithCSRF(url, Object.assign({
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            signal: AbortSignal.timeout(EQUITY_FETCH_TIMEOUT_MS)
+        }, options));
+        const data = await response.json();
+
+        if (data.status !== 'success') {
+            equityShowResult(data.message || 'The watch list could not be saved.', 'error');
+            equityLoadWatchlists();
+            return null;
+        }
+
+        equityRenderWatchlists(data, true);
+        equityShowResult(successMessage || data.message || 'Saved.', 'success');
+        return data;
+    } catch (error) {
+        equityShowResult('The watch list could not be saved. Check the connection and try again.', 'error');
+        console.error('Equity watch list request failed:', error);
+        equityLoadWatchlists();
+        return null;
+    }
+}
+
+async function equityLoadWatchlists() {
+    try {
+        const response = await fetch('/equity/api/watchlists?_t=' + Date.now(), {
+            signal: AbortSignal.timeout(EQUITY_FETCH_TIMEOUT_MS)
+        });
+        const data = await response.json();
+
+        if (data.status !== 'success') {
+            equityShowResult(data.message || 'The watch lists could not be loaded.', 'error');
+            return;
+        }
+
+        equityRenderWatchlists(data);
+    } catch (error) {
+        equityShowResult('The watch lists could not be loaded. The table shows the last values loaded.', 'error');
+        console.error('Equity watch lists load failed:', error);
+    }
+}
+
+async function equityCreateWatchlist() {
+    const input = document.getElementById('equity-watchlist-name');
+    const name = input ? (input.value || '').trim() : '';
+    if (!name) {
+        equityShowResult('Enter a name for the new watch list.', 'error');
+        return;
+    }
+
+    const button = document.getElementById('equity-watchlist-add-btn');
+    if (button) { button.disabled = true; }
+
+    try {
+        const data = await equityWatchlistRequest(
+            '/equity/api/watchlists',
+            { method: 'POST', body: JSON.stringify({ name: name }) },
+            'Watch list ' + name + ' created.'
+        );
+        if (data && input) { input.value = ''; }
+    } finally {
+        if (button) { button.disabled = false; }
+    }
+}
+
+function equityRenameWatchlist(entry, input) {
+    const name = (input.value || '').trim();
+    if (!name) {
+        equityShowResult('A watch list needs a name. The old name has been put back.', 'error');
+        input.value = entry.name;
+        return;
+    }
+    if (name === entry.name) { return; }
+
+    equityWatchlistRequest(
+        '/equity/api/watchlists/' + entry.id,
+        { method: 'POST', body: JSON.stringify({ name: name }) },
+        'Renamed to ' + name + '. Nothing in the list was disturbed.'
+    );
+}
+
+async function equityMakeWatchlistDefault(entry, button) {
+    if (button) {
+        if (button.disabled) { return; }
+        button.disabled = true;
+    }
+    try {
+        await equityWatchlistRequest(
+            '/equity/api/watchlists/' + entry.id,
+            { method: 'POST', body: JSON.stringify({ is_default: true }) },
+            entry.name + ' is now the default watch list.'
+        );
+    } finally {
+        if (button) { button.disabled = false; }
+    }
+}
+
+async function equityDeleteWatchlist(entry, button) {
+    if (button) {
+        if (button.disabled) { return; }
+        button.disabled = true;
+    }
+    try {
+        await equityWatchlistRequest(
+            '/equity/api/watchlists/' + entry.id,
+            { method: 'DELETE' },
+            'Watch list ' + entry.name + ' deleted.'
+        );
+    } finally {
+        if (button) { button.disabled = false; }
+    }
+}
+
+function equityMoveWatchlist(watchlistId, offset) {
+    const order = equityWatchlists.map(function (entry) { return entry.id; });
+    const index = order.indexOf(watchlistId);
+    const target = index + offset;
+    if (index === -1 || target < 0 || target >= order.length) { return; }
+
+    order[index] = order[target];
+    order[target] = watchlistId;
+
+    equityWatchlistRequest(
+        '/equity/api/watchlists/reorder',
+        { method: 'POST', body: JSON.stringify({ order: order }) },
+        'Watch list order saved.'
+    );
+}
+
 function equityMoveNature(natureId, offset) {
     const order = equityNatures.map(function (nature) { return nature.id; });
     const index = order.indexOf(natureId);
@@ -939,12 +1620,201 @@ function equityMoveNature(natureId, offset) {
     );
 }
 
+// ---------------------------------------------------------------------------
+// Section selector. Only one section is on screen at a time. Every section is
+// still loaded in the background, so switching is instant and a save result
+// from one section is not lost by looking at another.
+// ---------------------------------------------------------------------------
+
+const EQUITY_SETTINGS_DEFAULT_TAB = 'watchlists';
+
+
+// ---------------------------------------------------------------------------
+// Notifications
+//
+// The Log, moved here from the Alerts menu. Written fresh rather than ported,
+// because the ported version rendered five columns built around a price alert
+// - alert price, condition, traded at - and three of those are empty for the
+// entries this section actually exists for. A share that left the account has
+// a sentence, not a price. Three columns, and the sentence gets the room.
+// ---------------------------------------------------------------------------
+
+const EQUITY_LOG_URL = '/equity/api/alerts/log';
+const EQUITY_LOG_SEEN_URL = '/equity/api/alerts/log/seen';
+
+const EQUITY_NOTICE_LABELS = {
+    SHARES_LEFT: 'Shares left',
+    SHARES_ARRIVED: 'Shares arrived',
+    HOLDING_NEW: 'New holding',
+    HOLDING_CLOSED: 'Holding closed',
+    STOP_LOSS_HIT: 'Stop loss hit',
+    TARGET_HIT: 'Target hit'
+};
+
+function equityLogDateTime(isoText) {
+    if (!isoText) { return ''; }
+    // The server sends UTC unmarked. Without the Z the browser reads it as
+    // local time, which is how every clock on these screens once ran 5h30m
+    // behind.
+    let text = String(isoText);
+    if (!/(Z|[+-]\d{2}:?\d{2})$/.test(text)) { text += 'Z'; }
+    const parsed = new Date(text);
+    if (isNaN(parsed.getTime())) { return ''; }
+    return parsed.toLocaleString('en-IN', {
+        day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit',
+        second: '2-digit', hour12: false, timeZone: 'Asia/Kolkata'
+    });
+}
+
+function equityLogSentence(entry) {
+    if (entry.message) { return entry.message; }
+    // A fired price alert carries no sentence of its own, so one is made from
+    // the figures it does carry.
+    const where = entry.alert_direction === 'ABOVE' ? 'at or above'
+        : (entry.alert_direction === 'BELOW' ? 'at or below' : 'through');
+    const level = entry.alert_price === null || entry.alert_price === undefined
+        ? '' : ' Rs ' + entry.alert_price;
+    const traded = entry.ltp === null || entry.ltp === undefined
+        ? '' : ', traded at Rs ' + entry.ltp;
+    return 'Price alert fired ' + where + level + traded + '.';
+}
+
+function equityRenderLog(payload) {
+    const body = document.getElementById('equity-log-body');
+    if (!body) { return; }
+
+    const entries = (payload && payload.entries) || [];
+    body.textContent = '';
+
+    const unread = entries.filter(function (entry) { return entry.unread; }).length;
+    const badge = document.getElementById('equity-log-badge');
+    if (badge) {
+        badge.textContent = unread ? String(unread) : '';
+        badge.classList.toggle('hidden', unread === 0);
+    }
+
+    if (!entries.length) {
+        const empty = document.createElement('tr');
+        const cell = document.createElement('td');
+        cell.colSpan = 3;
+        cell.className = 'text-center py-8 text-base-content/60';
+        cell.textContent = 'Nothing recorded yet.';
+        empty.appendChild(cell);
+        body.appendChild(empty);
+        return;
+    }
+
+    entries.forEach(function (entry) {
+        const tr = document.createElement('tr');
+        tr.className = 'hover' + (entry.unread ? ' equity-unread' : '');
+
+        const when = document.createElement('td');
+        when.className = 'equity-num text-sm whitespace-nowrap';
+        when.textContent = equityLogDateTime(entry.created_at);
+        tr.appendChild(when);
+
+        const stock = document.createElement('td');
+        const symbol = document.createElement('div');
+        symbol.className = 'font-semibold';
+        symbol.textContent = entry.symbol || '';
+        stock.appendChild(symbol);
+        const exchange = document.createElement('div');
+        exchange.className = 'text-xs text-base-content/50';
+        exchange.textContent = entry.exchange || '';
+        stock.appendChild(exchange);
+        tr.appendChild(stock);
+
+        const said = document.createElement('td');
+        said.className = 'text-sm';
+        if (entry.source === 'holding') {
+            const label = document.createElement('span');
+            label.className = 'badge badge-sm badge-warning mr-2';
+            label.textContent = EQUITY_NOTICE_LABELS[entry.kind] || 'Holding';
+            said.appendChild(label);
+        }
+        const words = document.createElement('span');
+        words.textContent = equityLogSentence(entry);
+        said.appendChild(words);
+        tr.appendChild(said);
+
+        body.appendChild(tr);
+    });
+}
+
+async function equityLoadLog() {
+    try {
+        const response = await fetch(EQUITY_LOG_URL + '?_t=' + Date.now(),
+            { credentials: 'same-origin' });
+        const data = await response.json();
+        if (data.status !== 'success') { return; }
+        equityRenderLog(data);
+    } catch (error) {
+        console.error('Equity notification log failed to load:', error);
+    }
+}
+
+async function equityMarkLogSeen() {
+    const button = document.getElementById('equity-log-seen-btn');
+    if (button) { button.disabled = true; }
+    try {
+        const response = await fetchWithCSRF(EQUITY_LOG_SEEN_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({})
+        });
+        const data = await response.json();
+        if (data.status === 'success') { equityRenderLog(data); }
+    } catch (error) {
+        console.error('Could not mark the notification log read:', error);
+    } finally {
+        if (button) { button.disabled = false; }
+    }
+}
+
+function equityShowSettingsSection(name) {
+    // Opening the tab reads the log again. It is a record of things that
+    // happen while nobody is looking, so what it showed when the page loaded
+    // is not what it should show when somebody finally looks.
+    if (name === 'notifications') { equityLoadLog(); }
+
+    document.querySelectorAll('[data-settings-section]').forEach(function (section) {
+        section.classList.toggle(
+            'hidden', section.getAttribute('data-settings-section') !== name
+        );
+    });
+
+    document.querySelectorAll('.equity-settings-tab').forEach(function (button) {
+        const selected = button.getAttribute('data-settings-tab') === name;
+        button.className = 'equity-settings-tab text-sm font-semibold py-2 rounded-lg transition-colors'
+            + (selected
+                ? ' bg-primary text-primary-content'
+                : ' text-base-content/70 hover:bg-base-200');
+        button.setAttribute('aria-pressed', selected ? 'true' : 'false');
+    });
+}
+
+function equityInitSettingsTabs() {
+    document.querySelectorAll('.equity-settings-tab').forEach(function (button) {
+        button.onclick = function () {
+            equityShowSettingsSection(button.getAttribute('data-settings-tab'));
+        };
+    });
+    equityShowSettingsSection(EQUITY_SETTINGS_DEFAULT_TAB);
+    // Once at start, whichever tab is showing, so the unread count on the tab
+    // is right before anybody clicks it.
+    equityLoadLog();
+}
+
 document.addEventListener('DOMContentLoaded', function () {
+    equityInitSettingsTabs();
     equityLoadPreferences();
+    equityLoadWatchlists();
     equityLoadNatures();
     {% if accounts %}
     equityLoadRates();
     {% endif %}
 });
 </script>
+
 {% endblock %}
