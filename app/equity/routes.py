@@ -6919,6 +6919,121 @@ def api_acknowledge_external_activity(trade_id):
 # and so a client that has gone away is noticed.
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# CSV exports
+#
+# Pure reads: each one serialises exactly what the screen is already showing,
+# through the same builder the screen's own endpoint uses, so a download can
+# never disagree with the table above it. Nothing is written, so these are GET
+# links rather than posted forms.
+#
+# The import counterpart was deliberately not adopted: it cleared fields on a
+# blank column, reverted to a stale file and carried no version on the levels,
+# on the one screen that holds stop losses.
+# ---------------------------------------------------------------------------
+
+def _csv_response(filename, header, rows):
+    """A CSV download built in memory, with the columns stated explicitly."""
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(header)
+    for row in rows:
+        writer.writerow(row)
+
+    return Response(
+        buffer.getvalue(),
+        mimetype='text/csv',
+        headers={
+            'Content-Disposition': 'attachment; filename="%s-%s.csv"' % (
+                filename, datetime.utcnow().strftime('%Y%m%d-%H%M%S')
+            ),
+            'Cache-Control': 'no-store',
+        },
+    )
+
+
+@equity_bp.route('/api/watchlist/export')
+@login_required
+@api_rate_limit()
+def api_watchlist_export():
+    """Download the watch list exactly as the screen shows it."""
+    payload = _build_watchlist_payload(with_prices=True)
+    rows = [
+        [
+            item.get('symbol'), item.get('exchange'), item.get('trade_nature'),
+            item.get('target_price'), item.get('ltp'), item.get('variance_pct'),
+            item.get('alert_enabled'), item.get('note'),
+        ]
+        for item in (payload.get('items') or [])
+    ]
+    return _csv_response(
+        'equity-watchlist',
+        ['Symbol', 'Exchange', 'Trade Nature', 'Target Price', 'LTP',
+         'Variance %', 'Alert', 'Note'],
+        rows,
+    )
+
+
+@equity_bp.route('/api/order-book/export')
+@login_required
+@api_rate_limit()
+def api_order_book_export():
+    """Download the order book for the window currently in view."""
+    filters, error = _read_book_filters()
+    if error:
+        return _json_error(error, 400)
+
+    payload = _build_order_book(filters, carry_open_gtt=True, include_splits=False)
+    rows = [
+        [
+            order.get('placed_at'), order.get('symbol'), order.get('exchange'),
+            order.get('side'), order.get('order_type'), order.get('product'),
+            order.get('total_quantity'), order.get('filled_quantity'),
+            order.get('price'), order.get('trigger_price'),
+            order.get('status'), order.get('status_reason'),
+            order.get('accounts_label'), order.get('trade_nature'),
+        ]
+        for order in (payload.get('orders') or [])
+    ]
+    return _csv_response(
+        'equity-order-book',
+        ['Placed At', 'Symbol', 'Exchange', 'Side', 'Order Type', 'Product',
+         'Quantity', 'Filled', 'Price', 'Trigger Price', 'Status', 'Reason',
+         'Accounts', 'Trade Nature'],
+        rows,
+    )
+
+
+@equity_bp.route('/api/trade-book/export')
+@login_required
+@api_rate_limit()
+def api_trade_book_export():
+    """Download every fill for the window currently in view."""
+    filters, error = _read_book_filters()
+    if error:
+        return _json_error(error, 400)
+
+    payload = _build_trade_book(filters)
+    rows = [
+        [
+            trade.get('executed_at'), trade.get('symbol'), trade.get('exchange'),
+            trade.get('side'), trade.get('account_name'), trade.get('broker_name'),
+            trade.get('executed_quantity'), trade.get('execution_price'),
+            trade.get('trade_value'), trade.get('est_costs'), trade.get('net_value'),
+            trade.get('trade_nature'), trade.get('broker_trade_id'),
+            trade.get('broker_order_id'),
+        ]
+        for trade in (payload.get('trades') or [])
+    ]
+    return _csv_response(
+        'equity-trade-book',
+        ['Executed At', 'Symbol', 'Exchange', 'Side', 'Account', 'Broker',
+         'Quantity', 'Execution Price', 'Value', 'Est. Costs', 'Net Value',
+         'Trade Nature', 'Broker Trade ID', 'Broker Order ID'],
+        rows,
+    )
+
+
 @equity_bp.route('/api/stream')
 @login_required
 def api_stream():
