@@ -395,3 +395,58 @@ def test_analyze_mode_is_shown_and_absence_is_not():
         "equityRenderAnalyzeBadge(false); return { cls, txt };"
     )
     assert hidden['cls'] == 'hidden'
+
+
+# ---------------------------------------------------------------------------
+# The built stylesheet has to cover the markup.
+#
+# Adopting the client's screens brought his Tailwind classes with them, and the
+# stylesheet is a BUILD ARTIFACT: Tailwind only emits a class it has seen while
+# scanning. Taking his templates without rebuilding left 13 classes with no
+# rule at all, so his accounts-card redesign lost its padding and gaps and the
+# modals lost their width constraints. Nothing errors; it just renders wrong.
+# ---------------------------------------------------------------------------
+
+COMPILED_CSS = REPO_ROOT / 'app' / 'static' / 'css' / 'compiled.css'
+BACKSLASH = chr(92)
+
+
+def _built_class_names():
+    css = COMPILED_CSS.read_text(encoding='utf-8')
+    pattern = (r'\.([a-zA-Z0-9_-]+(?:' + re.escape(BACKSLASH)
+               + r'[:/.\[\]%]+[a-zA-Z0-9_.\[\]%-]+)*)')
+    return {c.replace(BACKSLASH, '') for c in re.findall(pattern, css)}
+
+
+def test_every_class_the_equity_screens_use_is_in_the_built_css():
+    """Fails when a template gains a class and nobody ran npm run build-css."""
+    built = _built_class_names()
+
+    missing = {}
+    for path in templates():
+        for match in re.finditer(r'class="([^"{}]+)"', path.read_text(encoding='utf-8')):
+            for cls in match.group(1).split():
+                # equity-* are the page-local styles each template defines inline.
+                if cls.startswith('equity') or cls in built:
+                    continue
+                missing.setdefault(cls, set()).add(path.name)
+
+    assert not missing, (
+        'These classes have no rule in compiled.css, so they render as nothing. '
+        'Run "npm run build-css". Missing: '
+        + ', '.join(f'{c} ({", ".join(sorted(f))})' for c, f in sorted(missing.items()))
+    )
+
+
+def test_no_equity_template_uses_a_daisyui_v3_colour_token():
+    """
+    primary-focus and its siblings were removed in DaisyUI v4, which this
+    project is on. Tailwind cannot emit them, so they are silently inert.
+    """
+    dead = ('primary-focus', 'secondary-focus', 'accent-focus', 'neutral-focus')
+    for path in templates():
+        text = path.read_text(encoding='utf-8')
+        for token in dead:
+            assert token not in text, (
+                f'{path.name} uses {token}, removed in DaisyUI v4, so it does nothing'
+            )
