@@ -409,6 +409,43 @@ class EquityGttReconciler:
 equity_gtt_reconciler = EquityGttReconciler()
 
 
+def reconcile_account_gtts(account_id):
+    """
+    Read one account's GTT book once, on demand.
+
+    No longer driven by a clock. A GTT that fires now announces itself: the
+    broker releases a real order and that order arrives on the push stream,
+    where equity_order_stream matches it back to the resting trigger.
+
+    What a stream cannot tell us is a trigger that was CANCELLED or EXPIRED at
+    the broker, because no order is ever created and so no event is ever sent.
+    That is what this pass is for, and the stream runs it on connect and on
+    every reconnect.
+
+    Runs inside the caller's app context.
+    """
+    reconciler = equity_gtt_reconciler
+    tick = {
+        'accounts_read': 0, 'books_unavailable': 0, 'splits_examined': 0,
+        'splits_settled': 0, 'splits_triggered': 0,
+        'child_orders_matched': 0, 'child_orders_unresolved': 0,
+    }
+    splits = reconciler._pending_by_account().get(account_id) or []
+    if not splits:
+        return tick
+
+    reconciler._reconcile_account(account_id, splits, tick)
+    logger.info(
+        '[EQUITY_GTT] Catch-up for account %s: %d trigger(s) examined, %d settled',
+        account_id, tick['splits_examined'], tick['splits_settled']
+    )
+    return tick
+
+
 def run_equity_gtt_reconciliation():
-    """Scheduler entry point, mirroring run_equity_exit_checks."""
+    """
+    Kept for a manual sweep across every account.
+
+    No scheduler drives this any more.
+    """
     equity_gtt_reconciler.run_checks()

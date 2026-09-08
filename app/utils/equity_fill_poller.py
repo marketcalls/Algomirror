@@ -566,6 +566,44 @@ class EquityFillPoller:
 equity_fill_poller = EquityFillPoller()
 
 
+def reconcile_account(account_id):
+    """
+    One reconciliation pass for a single account, on demand.
+
+    This is no longer driven by a clock. Order state arrives on the push stream
+    (app/utils/equity_order_stream.py), and this exists only to close the gap a
+    stream cannot cover: whatever changed while it was disconnected. The stream
+    calls it when it connects and again on every reconnect.
+
+    Runs inside the caller's app context.
+    """
+    poller = equity_fill_poller
+    tick = {
+        'accounts_polled': 0, 'splits_examined': 0, 'splits_settled': 0,
+        'fills_booked': 0, 'reads_failed': 0, 'external_trades': 0,
+    }
+    from flask import current_app
+    app = current_app._get_current_object()
+
+    splits = [
+        split for split in poller._open_by_account().get(account_id, [])
+    ]
+    if not splits:
+        return tick
+
+    poller._poll_account(app, account_id, [s.id for s in splits], tick)
+    logger.info(
+        '[EQUITY_FILL] Catch-up for account %s: %d split(s) examined, %d settled',
+        account_id, tick['splits_examined'], tick['splits_settled']
+    )
+    return tick
+
+
 def run_equity_fill_poll():
-    """Scheduler entry point, mirroring run_equity_exit_checks."""
+    """
+    Kept for a manual sweep across every account.
+
+    No scheduler drives this any more. It is here for an operator or a route
+    that wants to force a full reconciliation.
+    """
     equity_fill_poller.run_checks()

@@ -387,92 +387,44 @@ def create_app(config_name=None):
         except Exception as e:
             app.logger.error(f'Failed to start equity exit monitor: {e}', exc_info=True)
 
-        # Initialize the equity GTT reconciler
-        # Same shape as the exit monitor above: a plain callable driven from the
-        # shared scheduler, armed before the job is registered, and guarded so a
-        # failure here cannot stop the application from booting.
+
+        # Initialize the equity order stream (event driven, no polling)
         #
-        # It runs far less often than the exit monitor on purpose. A resting GTT
-        # can sit for days, reading a GTT book is a list call on OpenAlgo's
-        # 50/sec bucket rather than the 10/sec order one, and settling a trigger
-        # a minute late costs nothing. The exit monitor is the thing that has to
-        # be quick.
-        try:
-            from app.utils.equity_gtt_reconciler import (
-                equity_gtt_reconciler,
-                run_equity_gtt_reconciliation,
-            )
-
-            EQUITY_GTT_INTERVAL_SECONDS = 60
-
-            def run_equity_gtt_job(flask_app):
-                """Scheduler entry point: one GTT sweep inside a Flask app context."""
-                try:
-                    with flask_app.app_context():
-                        run_equity_gtt_reconciliation()
-                except Exception as job_error:
-                    flask_app.logger.error(f'Error running equity GTT reconciliation: {job_error}')
-
-            equity_gtt_reconciler.start()
-            option_chain_service.scheduler.add_job(
-                func=run_equity_gtt_job,
-                args=[app],
-                trigger='interval',
-                seconds=EQUITY_GTT_INTERVAL_SECONDS,
-                id='equity_gtt_reconciler',
-                replace_existing=True,
-                max_instances=1,  # Skip a sweep rather than overlap two
-                misfire_grace_time=30
-            )
-            app.logger.debug(
-                f'Equity GTT reconciler started ({EQUITY_GTT_INTERVAL_SECONDS}-second interval)',
-                extra={'event': 'equity_gtt_reconciler_init'}
-            )
-        except Exception as e:
-            app.logger.error(f'Failed to start equity GTT reconciler: {e}', exc_info=True)
-
-        # Initialize the equity fill poller
-        # Books EquityTrade rows from the broker's trade book and settles each
-        # split's fill status. Nothing wrote a fill before this, which is why
-        # Trade Book was structurally empty and Holdings had no Avg Cost source.
+        # OpenAlgo pushes order updates, so nothing here asks repeatedly for
+        # something the broker will tell us. This replaces the fill poller and
+        # GTT reconciler timer jobs that used to sit here: both are now plain
+        # callables the stream invokes on connect, to catch up on whatever
+        # changed while it was down, and never on a clock.
         #
-        # Ten seconds rather than the F&O poller's one: equity here is delivery,
-        # the Order Status screen polls at fifteen, and a fill recorded ten
-        # seconds late changes no decision. It also keeps the per-account read
-        # well inside OpenAlgo's 50/sec bucket.
+        # Order updates are account scoped, unlike market data, so this opens
+        # one connection per active account. The SDK reconnects on its own with
+        # backoff and replays the subscription, so there is no retry loop here.
         try:
+            from app.utils.equity_order_stream import equity_order_stream
             from app.utils.equity_fill_poller import (
-                equity_fill_poller,
-                run_equity_fill_poll,
+                equity_fill_poller, reconcile_account,
+            )
+            from app.utils.equity_gtt_reconciler import (
+                equity_gtt_reconciler, reconcile_account_gtts,
             )
 
-            EQUITY_FILL_INTERVAL_SECONDS = 10
-
-            def run_equity_fill_job(flask_app):
-                """Scheduler entry point: one fill sweep inside a Flask app context."""
-                try:
-                    with flask_app.app_context():
-                        run_equity_fill_poll()
-                except Exception as job_error:
-                    flask_app.logger.error(f'Error running equity fill poll: {job_error}')
-
+            # Armed so a manual full sweep still works. Nothing schedules them.
             equity_fill_poller.start()
-            option_chain_service.scheduler.add_job(
-                func=run_equity_fill_job,
-                args=[app],
-                trigger='interval',
-                seconds=EQUITY_FILL_INTERVAL_SECONDS,
-                id='equity_fill_poller',
-                replace_existing=True,
-                max_instances=1,  # Skip a sweep rather than overlap two
-                misfire_grace_time=15
-            )
+            equity_gtt_reconciler.start()
+
+            def catch_up(account_id):
+                """One reconciliation pass, triggered by a stream connecting."""
+                reconcile_account(account_id)
+                reconcile_account_gtts(account_id)
+
+            equity_order_stream.reconciler = catch_up
+            equity_order_stream.start(app)
             app.logger.debug(
-                f'Equity fill poller started ({EQUITY_FILL_INTERVAL_SECONDS}-second interval)',
-                extra={'event': 'equity_fill_poller_init'}
+                'Equity order stream started (event driven)',
+                extra={'event': 'equity_order_stream_init'}
             )
         except Exception as e:
-            app.logger.error(f'Failed to start equity fill poller: {e}', exc_info=True)
+            app.logger.error(f'Failed to start equity order stream: {e}', exc_info=True)
 
         # Load existing primary and backup accounts within app context
         with app.app_context():

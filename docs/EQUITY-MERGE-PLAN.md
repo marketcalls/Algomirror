@@ -324,7 +324,7 @@ connection per broker account, unlike market data which is shared.
 | # | Item | Status | Note |
 | --- | --- | --- | --- |
 | 2.1 | Equity fill poller, modelled on the F&O poller | DONE | New `app/utils/equity_fill_poller.py`, 10s from the shared scheduler. Scheduler-callable rather than its own thread, matching the equity house style |
-| 2.2 | `subscribe_orders` consumer per account | TODO | Needs one websocket connection per broker account. The poller covers the same ground first |
+| 2.2 | `subscribe_orders` consumer per account | DONE | `app/utils/equity_order_stream.py`. One connection per active account, a worker that BLOCKS on a queue, no interval anywhere. Replaced the fill poller and GTT reconciler timers; both are now catch-up callables the stream invokes on connect and reconnect |
 | 2.3 | Write `EquityTrade` rows on fill | DONE | Trade Book is no longer structurally empty. De-duplicated by the unique index, with a quantity/price fallback for brokers that return no trade id |
 | 2.4 | Drive `recompute_parent_status` from real fills | DONE | Parent status now rolls up from booked fills |
 | 2.5 | Fix `accounts_label` to filled-over-selected | DONE | `app/equity/routes.py:3018`, per PRD 7.1 and 7.6. `accounts_placed` still carries "reached the broker" |
