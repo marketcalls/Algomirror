@@ -1018,6 +1018,45 @@ EQUITY_SPLIT_STATUSES_SAFE_TO_RETRY = (
     EQUITY_SPLIT_STATUS_REJECTED,
 )
 
+# ---------------------------------------------------------------------------
+# GTT lifecycle
+#
+# The state a resting trigger is in at the broker, normalised by OpenAlgo's
+# per-broker gtt_data mappers to this vocabulary. Read from gttorderbook with
+# status="all"; the default of "active" hides every terminal state and is what
+# made a fired GTT look like it simply vanished.
+# ---------------------------------------------------------------------------
+EQUITY_GTT_STATUS_ACTIVE = 'active'
+EQUITY_GTT_STATUS_TRANSIT = 'transit'      # Fyers: accepted, not yet armed
+EQUITY_GTT_STATUS_TRIGGERED = 'triggered'
+EQUITY_GTT_STATUS_CANCELLED = 'cancelled'
+EQUITY_GTT_STATUS_EXPIRED = 'expired'
+EQUITY_GTT_STATUS_REJECTED = 'rejected'
+EQUITY_GTT_STATUS_UNKNOWN = 'unknown'
+
+# Still able to fire, so keep watching.
+EQUITY_GTT_STATUSES_RESTING = (
+    EQUITY_GTT_STATUS_ACTIVE,
+    EQUITY_GTT_STATUS_TRANSIT,
+)
+
+# Will never fire again. Nothing more to reconcile once the split is settled.
+EQUITY_GTT_STATUSES_TERMINAL = (
+    EQUITY_GTT_STATUS_TRIGGERED,
+    EQUITY_GTT_STATUS_CANCELLED,
+    EQUITY_GTT_STATUS_EXPIRED,
+    EQUITY_GTT_STATUS_REJECTED,
+)
+
+# How a terminal GTT state settles the split that carries it. TRIGGERED is
+# absent on purpose: a fired trigger releases a real order, so the split stays
+# open and the order pipeline takes it from there.
+EQUITY_GTT_TERMINAL_TO_SPLIT_STATUS = {
+    EQUITY_GTT_STATUS_CANCELLED: EQUITY_SPLIT_STATUS_CANCELLED,
+    EQUITY_GTT_STATUS_EXPIRED: EQUITY_SPLIT_STATUS_CANCELLED,
+    EQUITY_GTT_STATUS_REJECTED: EQUITY_SPLIT_STATUS_REJECTED,
+}
+
 # Error types that represent a DEFINITE refusal: the request reached OpenAlgo,
 # OpenAlgo answered, and the answer was no. Only these are safe to re-send.
 #
@@ -1396,6 +1435,13 @@ class EquityOrderSplit(db.Model):
     # issues a fresh order id for the real order, and overwriting the GTT id
     # with it would lose the link back to the trigger that caused the trade.
     broker_gtt_id = db.Column(db.String(100), index=True)
+    # What the broker says became of that trigger: active, triggered, cancelled,
+    # expired or rejected. Without this a resting GTT sits at PENDING for ever,
+    # because placement is the only part of the lifecycle we used to observe.
+    gtt_status = db.Column(db.String(20), index=True)
+    gtt_synced_at = db.Column(db.DateTime)
+    # Bounds the window searched for the child order a fired trigger released.
+    gtt_triggered_at = db.Column(db.DateTime)
     fill_status = db.Column(db.String(20), nullable=False, default=EQUITY_SPLIT_STATUS_PENDING, index=True)
     filled_quantity = db.Column(db.Integer, default=0)
     avg_fill_price = db.Column(db.Float)

@@ -177,11 +177,15 @@ DEFAULT_RETRY_DELAY_SECONDS = 0.5
 MAX_ORDER_WORKERS = 10
 
 # OpenAlgo answers a GTT request with HTTP 501 when the broker ships no
-# gtt_api module. Only Dhan and Zerodha currently do.
+# gtt_api module. Five brokers currently do: angel, dhan, fyers, upstox and
+# zerodha. The other nineteen supported brokers refuse every GTT call, which is
+# the first thing to check when a user reports "GTT is not working".
 GTT_UNSUPPORTED_HTTP_STATUS = 501
 
-# OpenAlgo GTT endpoints. The installed SDK exposes no GTT methods, so these
-# are posted through the client's _make_request.
+# OpenAlgo GTT endpoints, posted through the client's _make_request. openalgo
+# 2.0.4 added native GTT methods, but they are not used here: the raw post
+# keeps GTT on AlgoMirror's own error envelope, which is what every retry and
+# indeterminacy rule in this module reads.
 GTT_PLACE_ENDPOINT = 'placegttorder'
 GTT_MODIFY_ENDPOINT = 'modifygttorder'
 GTT_CANCEL_ENDPOINT = 'cancelgttorder'
@@ -189,6 +193,16 @@ GTT_CANCEL_ENDPOINT = 'cancelgttorder'
 # A SINGLE GTT carries its trigger in exactly one of two slots. The slots are
 # labels for what the trigger means, not different behaviours: OpenAlgo
 # resolves whichever one is positive into the trigger price it sends on.
+#
+# Two broker traps are avoided by construction rather than by a guard, so they
+# are recorded here instead:
+#
+#   OCO is never placed. On Upstox an OCO does not bracket an existing holding,
+#   it opens a position at market on the inverse of `action` before arming the
+#   legs, and discards the per-leg limit prices. Every GTT here is SINGLE.
+#
+#   MIS is never sent. GTT accepts CNC and NRML only and rejects MIS outright,
+#   because a trigger can rest for days. _gtt_payload hardcodes CNC.
 GTT_TRIGGER_TYPE_SINGLE = 'SINGLE'
 GTT_LEG_STOP_LOSS = 'SL'
 GTT_LEG_TARGET = 'TG'

@@ -387,6 +387,50 @@ def create_app(config_name=None):
         except Exception as e:
             app.logger.error(f'Failed to start equity exit monitor: {e}', exc_info=True)
 
+        # Initialize the equity GTT reconciler
+        # Same shape as the exit monitor above: a plain callable driven from the
+        # shared scheduler, armed before the job is registered, and guarded so a
+        # failure here cannot stop the application from booting.
+        #
+        # It runs far less often than the exit monitor on purpose. A resting GTT
+        # can sit for days, reading a GTT book is a list call on OpenAlgo's
+        # 50/sec bucket rather than the 10/sec order one, and settling a trigger
+        # a minute late costs nothing. The exit monitor is the thing that has to
+        # be quick.
+        try:
+            from app.utils.equity_gtt_reconciler import (
+                equity_gtt_reconciler,
+                run_equity_gtt_reconciliation,
+            )
+
+            EQUITY_GTT_INTERVAL_SECONDS = 60
+
+            def run_equity_gtt_job(flask_app):
+                """Scheduler entry point: one GTT sweep inside a Flask app context."""
+                try:
+                    with flask_app.app_context():
+                        run_equity_gtt_reconciliation()
+                except Exception as job_error:
+                    flask_app.logger.error(f'Error running equity GTT reconciliation: {job_error}')
+
+            equity_gtt_reconciler.start()
+            option_chain_service.scheduler.add_job(
+                func=run_equity_gtt_job,
+                args=[app],
+                trigger='interval',
+                seconds=EQUITY_GTT_INTERVAL_SECONDS,
+                id='equity_gtt_reconciler',
+                replace_existing=True,
+                max_instances=1,  # Skip a sweep rather than overlap two
+                misfire_grace_time=30
+            )
+            app.logger.debug(
+                f'Equity GTT reconciler started ({EQUITY_GTT_INTERVAL_SECONDS}-second interval)',
+                extra={'event': 'equity_gtt_reconciler_init'}
+            )
+        except Exception as e:
+            app.logger.error(f'Failed to start equity GTT reconciler: {e}', exc_info=True)
+
         # Load existing primary and backup accounts within app context
         with app.app_context():
             from app.models import TradingAccount

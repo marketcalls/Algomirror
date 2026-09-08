@@ -3,7 +3,7 @@
 How Saravanan's equity commit gets folded into AlgoMirror: what is adopted, what is
 rewritten, what is discarded, and what has to be fixed first.
 
-Status: Phase 0 implemented and tested. Phases 1 to 5 not started.
+Status: Phases 0 and 1 implemented and tested. Phases 2 to 5 not started.
 Prepared: 8 September 2026.
 
 ## 0. Provenance
@@ -267,25 +267,36 @@ native methods. Two things to verify at that point:
    matcher looking for bare `"pending"` silently never fires, and a fired GTT lands in exactly
    this state.
 
-### The structural difficulty
+### The structural difficulty, mostly dissolved
 
-`gttorderbook` returns **active triggers only**. Triggered, cancelled, expired and rejected are
-filtered out at the broker layer, and no field links a fired trigger to the child order it
-created. So a `trigger_id` that disappears fired, was cancelled, or expired, and the API cannot
-tell you which.
+`gttorderbook` returns active triggers only **by default**, but that is not the ceiling. It
+accepts a `status` field (`restx_api/gtt_orderbook.py:28`), and `status="all"` sets
+`include_history` all the way down to the broker mappers, which normalise the terminal states to
+`triggered`, `cancelled`, `expired` and `rejected` (plus `transit` on Fyers). SDK 2.0.4's
+`gttorderbook(**kwargs)` passes the field straight through. This is undocumented:
+`gttorderbook.md` says status is "Always active" and never mentions the parameter.
+
+So the hard half, distinguishing "fired" from "cancelled" when a trigger stops resting, needs no
+heuristic at all. What remains is the last hop: a fired trigger still yields no order id, because
+no broker links a trigger to the order it released. That stays a bounded search over the account's
+order book, and it refuses to answer when two rows fit rather than attaching the wrong fill.
+
+Caveat: Upstox's mapper reports every row as `active`, so terminal states may never appear there.
+A trigger that is absent from the book entirely is therefore recorded as `unknown` and kept under
+watch, never assumed dead.
 
 ### Work items
 
-| # | Item |
-| --- | --- |
-| 1.1 | DONE in the repo: `openalgo==2.0.4` pinned and locked. Remaining: upgrade the server venv from 1.0.50, then switch to the native GTT methods and delete the hand-rolled `_call_endpoint` calls |
-| 1.2 | Persist `trigger_id` per split as the lifecycle key (stored as `broker_gtt_id`, needs to become authoritative) |
-| 1.3 | Poll `gttorderbook` per account, diff against locally-known active triggers |
-| 1.4 | On disappearance, reconcile against `orderbook`/`tradebook` to find the child order. Match on symbol, side, quantity and a time window. Record the resolution explicitly: FIRED, CANCELLED or EXPIRED |
-| 1.5 | Per-account GTT capability detection. Cache the 501, surface it in the UI before submit rather than after |
-| 1.6 | Reject `MIS` for GTT at validation time. GTT accepts CNC and NRML only |
-| 1.7 | Guard Upstox OCO. On Upstox, OCO opens a position at market (inverse of `action`) before arming the legs, and discards the `stoploss`/`target` limit prices. Block it or require explicit confirmation, and steer to SINGLE |
-| 1.8 | Surface resting GTTs as a first-class view. Baseline already carries an older resting GTT into the books via `_order_window(carry_open_gtt=True)` (`app/equity/routes.py:4292-4322`); it needs somewhere to be seen and cancelled |
+| # | Item | Status | Note |
+| --- | --- | --- | --- |
+| 1.1 | Native GTT methods / SDK 2.0.4 | DONE (repo) | Pinned and audited. Placement deliberately stays on the raw post so GTT keeps AlgoMirror's own error envelope, which every retry and indeterminacy rule reads. Server venv upgrade still pending (0.8) |
+| 1.2 | Persist `trigger_id` as the lifecycle key | DONE | `broker_gtt_id` is now authoritative, joined by `gtt_status`, `gtt_synced_at`, `gtt_triggered_at` (migration 016) |
+| 1.3 | Poll `gttorderbook` per account | DONE | New `app/utils/equity_gtt_reconciler.py`, swept every 60s from the shared scheduler. Reads with `status="all"` |
+| 1.4 | Resolve the terminal state | DONE | Read directly from the book rather than inferred. Child-order match is the only heuristic and refuses to guess between two candidates |
+| 1.5 | Per-account GTT capability detection | DONE (existing) | `_is_gtt_unsupported` already maps 501 to UNSUPPORTED per account. The reconciler treats an unreadable book as "settles nothing" |
+| 1.6 | Reject MIS for GTT | DONE (by construction) | `_gtt_payload` hardcodes CNC. Documented at the constant rather than adding a guard for an unreachable case |
+| 1.7 | Guard Upstox OCO | DONE (by construction) | Every GTT placed is SINGLE. The Upstox OCO trap is documented where the trigger type is defined |
+| 1.8 | Surface resting GTTs as a first-class view | TODO | Deferred to the Phase 5 template work |
 
 If a future OpenAlgo release echoes the originating `trigger_id` on the child order in
 `orderbook` and `orderstatus`, item 1.4 collapses from a heuristic to an exact lookup.
