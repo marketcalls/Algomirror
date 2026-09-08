@@ -389,7 +389,7 @@ order writes share one 10/sec bucket, and there is no `Retry-After` to tell us.
 | 4.1 | DONE. `_run_jobs` groups by `host_url` and serialises within a host while keeping hosts parallel. Production is one instance per account, so behaviour is unchanged today; two accounts on one instance now degrade to sequential instead of colliding on one 10/sec bucket |
 | 4.2 | DONE (already correct, now pinned by a fan-out crash test). Preserve the indeterminate rule. A timeout or connection error means the order may be live at the broker, so it is never retried. Our F&O executor gets this right (`app/utils/strategy_executor.py:911-932`, commit `32c5d4d`) and so does our equity engine (`EQUITY_SPLIT_STATUSES_SAFE_TO_RETRY` at `app/models.py:1016` deliberately excludes `INDETERMINATE`). Any new path inherits it |
 | 4.3 | Check `response.ok` on every write. Module-wide it is checked zero times, so a 429 or 403 currently reads as "may have reached the broker" when nothing was sent. Our baseline shares this gap; his commit multiplies the endpoints it applies to |
-| 4.4 | Decide D5, the ratio denominator |
+| 4.4 | DONE. Both ratios exist and both are surfaced: `qty_ratio` is what this order applied over the participating accounts, `standing_qty_ratio` is the PRD 9.1 figure over all active accounts that M2 shows. See D5 |
 | 4.5 | Add Product to Place Order. His M4 removed the control entirely; the PRD lists it as an order field |
 | 4.6 | Add the brokerage and statutory cost estimate to Place Order. His commit message claims "estimated costs" but the screen shows only Est. Value (quantity times price) |
 

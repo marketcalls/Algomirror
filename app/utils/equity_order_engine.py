@@ -820,6 +820,31 @@ def _allocation_amounts(user_id, accounts):
     return amounts
 
 
+def _standing_qty_ratios(user_id):
+    """
+    Each account's Order Qty Ratio over EVERY active allocation, per PRD 9.1.
+
+    This is the standing figure the M2 Accounts screen shows: a member's share
+    of the family corpus, independent of which accounts a given order happens to
+    tick. The split itself deliberately uses a different denominator (see
+    _build_split_plan), because read literally PRD 9.1 would leave most of the
+    quantity unallocated whenever a subset is selected. Both numbers are real
+    and they answer different questions, so both are surfaced rather than one
+    being quietly substituted for the other.
+
+    Returns {account_id: percent}, empty when nothing is allocated.
+    """
+    rows = EquityAccountAllocation.query.filter(
+        EquityAccountAllocation.user_id == user_id,
+        EquityAccountAllocation.is_active.is_(True),
+    ).all()
+    amounts = OrderedDict(
+        (row.account_id, _to_float(row.equity_fund_allocation, 0.0) or 0.0)
+        for row in rows
+    )
+    return compute_order_qty_ratios(amounts)
+
+
 def _normalise_price_fields(order_type, price, trigger_price):
     """
     Validate the order type and the prices that go with it.
@@ -971,6 +996,14 @@ def _build_split_plan(user_id, accounts, total_quantity, quantity_overrides,
     ratios = compute_order_qty_ratios(allocations)
     split = split_quantity_by_ratio(total_quantity, ratios)
 
+    # The standing ratio, over every ACTIVE account rather than the ticked ones.
+    # This is the number PRD 9.1 defines and the M2 Accounts screen shows, and
+    # it differs from the applied ratio above whenever a subset is ticked. Both
+    # are surfaced so the split table can show a member's standing share next to
+    # what this particular order actually used, instead of quietly showing one
+    # and calling it the other.
+    standing_ratios = _standing_qty_ratios(user_id)
+
     overrides = {}
     for raw_account_id, raw_quantity in (quantity_overrides or {}).items():
         account_id = _to_int(raw_account_id, 0)
@@ -1041,7 +1074,13 @@ def _build_split_plan(user_id, accounts, total_quantity, quantity_overrides,
         rows.append({
             'account_id': account.id,
             'account_name': account.account_name,
+            # qty_ratio is what THIS order used, over the participating
+            # accounts, and is what gets recorded as qty_ratio_at_order.
+            # standing_qty_ratio is the PRD 9.1 figure over all active accounts,
+            # the same number M2 shows. They are equal when every account is
+            # ticked and diverge when a subset is.
             'qty_ratio': ratios.get(account.id, 0.0),
+            'standing_qty_ratio': standing_ratios.get(account.id, 0.0),
             'ratio_quantity': ratio_quantity,
             'quantity': quantity,
             'qty_overridden': account.id in overrides and overrides[account.id] != ratio_quantity,
