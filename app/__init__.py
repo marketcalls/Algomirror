@@ -152,7 +152,10 @@ def create_app(config_name=None):
     
     app = Flask(__name__)
     app.config.from_object(config[config_name])
-    
+    # Per-environment validation. Production refuses to boot on SQLite because
+    # the row locks that prevent duplicate exits are a no-op there.
+    config[config_name].init_app(app)
+
     # Initialize extensions
     db.init_app(app)
     login_manager.init_app(app)
@@ -308,143 +311,151 @@ def create_app(config_name=None):
         db.create_all()
         app.logger.debug('Database tables created', extra={'event': 'db_init'})
 
-    # Initialize ping monitor
-    from app.utils.ping_monitor import ping_monitor
-    ping_monitor.init_app(app)
+    # Background services (monitors, pollers, feeds) must run in exactly one
+    # process. Everything below starts unconditionally, so on more than one
+    # gunicorn worker each monitor would run once per worker and a single
+    # stop-loss breach could be acted on twice. Production pins -w 1; this
+    # guard makes that a property of the code rather than of the deploy script.
+    from app.utils.service_lock import acquire as acquire_service_lock
 
-    # Initialize option chain background service
-    from app.utils.background_service import option_chain_service
-    option_chain_service.start_service()
+    if acquire_service_lock(app, db):
+        # Initialize ping monitor
+        from app.utils.ping_monitor import ping_monitor
+        ping_monitor.init_app(app)
 
-    # Initialize order status poller (Phase 2)
-    from app.utils.order_status_poller import order_status_poller
-    order_status_poller.set_flask_app(app)  # Set app reference to avoid creating new app in thread
-    order_status_poller.start()
-    app.logger.debug('Order status poller started', extra={'event': 'poller_init'})
+        # Initialize option chain background service
+        from app.utils.background_service import option_chain_service
+        option_chain_service.start_service()
 
-    # Recover any pending orders from database (handles app restarts)
-    with app.app_context():
-        recovered = order_status_poller.recover_pending_orders()
-        if recovered > 0:
-            app.logger.debug(f'Recovered {recovered} pending orders to polling queue', extra={'event': 'poller_recovery'})
+        # Initialize order status poller (Phase 2)
+        from app.utils.order_status_poller import order_status_poller
+        order_status_poller.set_flask_app(app)  # Set app reference to avoid creating new app in thread
+        order_status_poller.start()
+        app.logger.debug('Order status poller started', extra={'event': 'poller_init'})
 
-    # Initialize Supertrend exit monitoring service
-    from app.utils.supertrend_exit_service import supertrend_exit_service
-    supertrend_exit_service.set_flask_app(app)
-    supertrend_exit_service.start_service()
-    app.logger.debug('Supertrend exit monitoring service started', extra={'event': 'supertrend_exit_init'})
+        # Recover any pending orders from database (handles app restarts)
+        with app.app_context():
+            recovered = order_status_poller.recover_pending_orders()
+            if recovered > 0:
+                app.logger.debug(f'Recovered {recovered} pending orders to polling queue', extra={'event': 'poller_recovery'})
 
-    # Initialize equity stop loss and target monitor
-    # The monitor deliberately does not schedule itself: it exposes a plain
-    # callable that the app factory drives from the existing background
-    # scheduler, the same way risk_manager.run_risk_checks is driven. It must
-    # be armed with start() before the first tick, otherwise run_checks()
-    # returns immediately. Guarded so a failure here can never stop the
-    # application from booting, and armed before the job is registered so a
-    # failed add_job leaves the monitor idle rather than half wired.
-    try:
-        from app.utils.equity_exit_monitor import (
-            equity_exit_monitor,
-            run_equity_exit_checks,
-            SCHEDULER_JOB_ID as EQUITY_EXIT_JOB_ID,
-            SCHEDULER_INTERVAL_SECONDS as EQUITY_EXIT_INTERVAL_SECONDS
-        )
+        # Initialize Supertrend exit monitoring service
+        from app.utils.supertrend_exit_service import supertrend_exit_service
+        supertrend_exit_service.set_flask_app(app)
+        supertrend_exit_service.start_service()
+        app.logger.debug('Supertrend exit monitoring service started', extra={'event': 'supertrend_exit_init'})
 
-        def run_equity_exit_monitor_job(flask_app):
-            """Scheduler entry point: one monitor tick inside a Flask app context."""
-            try:
-                with flask_app.app_context():
-                    run_equity_exit_checks()
-            except Exception as job_error:
-                flask_app.logger.error(f'Error running equity exit checks: {job_error}')
+        # Initialize equity stop loss and target monitor
+        # The monitor deliberately does not schedule itself: it exposes a plain
+        # callable that the app factory drives from the existing background
+        # scheduler, the same way risk_manager.run_risk_checks is driven. It must
+        # be armed with start() before the first tick, otherwise run_checks()
+        # returns immediately. Guarded so a failure here can never stop the
+        # application from booting, and armed before the job is registered so a
+        # failed add_job leaves the monitor idle rather than half wired.
+        try:
+            from app.utils.equity_exit_monitor import (
+                equity_exit_monitor,
+                run_equity_exit_checks,
+                SCHEDULER_JOB_ID as EQUITY_EXIT_JOB_ID,
+                SCHEDULER_INTERVAL_SECONDS as EQUITY_EXIT_INTERVAL_SECONDS
+            )
 
-        equity_exit_monitor.start()
-        option_chain_service.scheduler.add_job(
-            func=run_equity_exit_monitor_job,
-            args=[app],
-            trigger='interval',
-            seconds=EQUITY_EXIT_INTERVAL_SECONDS,
-            id=EQUITY_EXIT_JOB_ID,
-            replace_existing=True,
-            max_instances=1,  # Skip a tick rather than overlap two
-            misfire_grace_time=10  # Allow 10s grace for misfired jobs
-        )
-        app.logger.debug(
-            f'Equity exit monitor started ({EQUITY_EXIT_INTERVAL_SECONDS}-second interval)',
-            extra={'event': 'equity_exit_monitor_init'}
-        )
-    except Exception as e:
-        app.logger.error(f'Failed to start equity exit monitor: {e}', exc_info=True)
-
-    # Load existing primary and backup accounts within app context
-    with app.app_context():
-        from app.models import TradingAccount
-        primary = TradingAccount.query.filter_by(
-            is_primary=True,
-            is_active=True
-        ).first()
-        
-        backup_accounts = TradingAccount.query.filter_by(
-            is_active=True,
-            is_primary=False
-        ).order_by(TradingAccount.created_at).all()
-        
-        if primary:
-            app.logger.debug(f'Found primary account: {primary.account_name}')
-            if backup_accounts:
-                app.logger.debug(f'Found {len(backup_accounts)} backup accounts')
-
-            # Register Flask app with background service
-            option_chain_service.set_flask_app(app)
-
-            # Set primary and backup accounts
-            option_chain_service.primary_account = primary
-            option_chain_service.backup_accounts = backup_accounts.copy()
-
-            # Check if within trading hours and trigger option chains
-            if primary.connection_status == 'connected':
-                app.logger.debug(f"Testing authentication for primary account: {primary.account_name}")
+            def run_equity_exit_monitor_job(flask_app):
+                """Scheduler entry point: one monitor tick inside a Flask app context."""
                 try:
-                    # Test API connection before starting option chains
-                    from app.utils.openalgo_client import ExtendedOpenAlgoAPI
-                    test_client = ExtendedOpenAlgoAPI(
-                        api_key=primary.get_api_key(),
-                        host=primary.host_url
-                    )
-                    # Quick ping test
-                    app.logger.debug(f"Sending ping to {primary.host_url}")
-                    ping_response = test_client.ping()
-                    app.logger.debug(f"Ping response: {ping_response}")
+                    with flask_app.app_context():
+                        run_equity_exit_checks()
+                except Exception as job_error:
+                    flask_app.logger.error(f'Error running equity exit checks: {job_error}')
 
-                    if ping_response.get('status') == 'success':
-                        app.logger.debug(f"Authentication successful, starting essential services in background")
-                        # Start position monitor and risk manager (NOT option chains)
-                        # Option chains load on-demand only when user visits the page
-                        import threading
-                        def delayed_start(flask_app, primary_acct):
-                            import time
-                            time.sleep(2)  # Wait for app to fully initialize
-                            try:
-                                with flask_app.app_context():
-                                    option_chain_service.on_primary_account_connected(primary_acct)
-                            except Exception as e:
-                                flask_app.logger.error(f"Error starting services: {e}")
-                        threading.Thread(target=delayed_start, args=(app, primary), daemon=True).start()
-                    else:
-                        # Authentication failed - update connection status
-                        app.logger.warning(f"Primary account {primary.account_name} authentication failed: {ping_response.get('message', 'Unknown error')}")
-                        app.logger.warning(f"Marking {primary.account_name} as disconnected")
+            equity_exit_monitor.start()
+            option_chain_service.scheduler.add_job(
+                func=run_equity_exit_monitor_job,
+                args=[app],
+                trigger='interval',
+                seconds=EQUITY_EXIT_INTERVAL_SECONDS,
+                id=EQUITY_EXIT_JOB_ID,
+                replace_existing=True,
+                max_instances=1,  # Skip a tick rather than overlap two
+                misfire_grace_time=10  # Allow 10s grace for misfired jobs
+            )
+            app.logger.debug(
+                f'Equity exit monitor started ({EQUITY_EXIT_INTERVAL_SECONDS}-second interval)',
+                extra={'event': 'equity_exit_monitor_init'}
+            )
+        except Exception as e:
+            app.logger.error(f'Failed to start equity exit monitor: {e}', exc_info=True)
+
+        # Load existing primary and backup accounts within app context
+        with app.app_context():
+            from app.models import TradingAccount
+            primary = TradingAccount.query.filter_by(
+                is_primary=True,
+                is_active=True
+            ).first()
+        
+            backup_accounts = TradingAccount.query.filter_by(
+                is_active=True,
+                is_primary=False
+            ).order_by(TradingAccount.created_at).all()
+        
+            if primary:
+                app.logger.debug(f'Found primary account: {primary.account_name}')
+                if backup_accounts:
+                    app.logger.debug(f'Found {len(backup_accounts)} backup accounts')
+
+                # Register Flask app with background service
+                option_chain_service.set_flask_app(app)
+
+                # Set primary and backup accounts
+                option_chain_service.primary_account = primary
+                option_chain_service.backup_accounts = backup_accounts.copy()
+
+                # Check if within trading hours and trigger option chains
+                if primary.connection_status == 'connected':
+                    app.logger.debug(f"Testing authentication for primary account: {primary.account_name}")
+                    try:
+                        # Test API connection before starting option chains
+                        from app.utils.openalgo_client import ExtendedOpenAlgoAPI
+                        test_client = ExtendedOpenAlgoAPI(
+                            api_key=primary.get_api_key(),
+                            host=primary.host_url
+                        )
+                        # Quick ping test
+                        app.logger.debug(f"Sending ping to {primary.host_url}")
+                        ping_response = test_client.ping()
+                        app.logger.debug(f"Ping response: {ping_response}")
+
+                        if ping_response.get('status') == 'success':
+                            app.logger.debug(f"Authentication successful, starting essential services in background")
+                            # Start position monitor and risk manager (NOT option chains)
+                            # Option chains load on-demand only when user visits the page
+                            import threading
+                            def delayed_start(flask_app, primary_acct):
+                                import time
+                                time.sleep(2)  # Wait for app to fully initialize
+                                try:
+                                    with flask_app.app_context():
+                                        option_chain_service.on_primary_account_connected(primary_acct)
+                                except Exception as e:
+                                    flask_app.logger.error(f"Error starting services: {e}")
+                            threading.Thread(target=delayed_start, args=(app, primary), daemon=True).start()
+                        else:
+                            # Authentication failed - update connection status
+                            app.logger.warning(f"Primary account {primary.account_name} authentication failed: {ping_response.get('message', 'Unknown error')}")
+                            app.logger.warning(f"Marking {primary.account_name} as disconnected")
+                            primary.connection_status = 'disconnected'
+                            db.session.commit()
+                            app.logger.debug(f"Account {primary.account_name} marked as disconnected")
+                    except Exception as e:
+                        app.logger.error(f"Error testing primary account connection: {e}", exc_info=True)
+                        app.logger.warning(f"Marking {primary.account_name} as disconnected due to error")
                         primary.connection_status = 'disconnected'
                         db.session.commit()
-                        app.logger.debug(f"Account {primary.account_name} marked as disconnected")
-                except Exception as e:
-                    app.logger.error(f"Error testing primary account connection: {e}", exc_info=True)
-                    app.logger.warning(f"Marking {primary.account_name} as disconnected due to error")
-                    primary.connection_status = 'disconnected'
-                    db.session.commit()
-            else:
-                app.logger.debug(f"Primary account {primary.account_name} status is '{primary.connection_status}', not starting services")
+                else:
+                    app.logger.debug(f"Primary account {primary.account_name} status is '{primary.connection_status}', not starting services")
 
-    app.logger.debug('Background service initialized (option chains load on-demand)', extra={'event': 'service_init'})
+        app.logger.debug('Background service initialized (option chains load on-demand)', extra={'event': 'service_init'})
     
     return app

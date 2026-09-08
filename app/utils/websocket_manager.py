@@ -22,21 +22,12 @@ from app.utils.compat import sleep, spawn, create_lock
 logger = logging.getLogger(__name__)
 
 
-class ExponentialBackoff:
-    """Exponential backoff strategy for reconnection"""
-
-    def __init__(self, base=2, max_delay=60):
-        self.base = base
-        self.max_delay = max_delay
-        self.attempt = 0
-
-    def get_next_delay(self):
-        delay = min(self.base ** self.attempt, self.max_delay)
-        self.attempt += 1
-        return delay
-
-    def reset(self):
-        self.attempt = 0
+# Reconnection is owned by the OpenAlgo SDK from 2.0 onwards: the feed client
+# defaults to auto_reconnect=True, backs off 1/2/5/10/30/60s, replays every
+# active subscription once re-authenticated, and runs ping_interval=20 /
+# ping_timeout=10 so a zombie socket is detected rather than sitting open.
+# The ExponentialBackoff class that used to live here was never actually driven
+# (get_next_delay was never called), so it was removed rather than finished.
 
 
 class WebSocketDataProcessor:
@@ -127,8 +118,6 @@ class ProfessionalWebSocketManager:
         self.connection_pool = {}
         self.max_connections = 10
         self.heartbeat_interval = 30
-        self.reconnect_attempts = 3
-        self.backoff_strategy = ExponentialBackoff(base=2, max_delay=60)
         self.account_failover_enabled = True
         self.data_processor = WebSocketDataProcessor()
         self.subscriptions = {}  # {mode: [instruments]}
@@ -205,8 +194,20 @@ class ProfessionalWebSocketManager:
                 ws_url=ws_url
             )
 
-            # Connect to WebSocket
-            self.client.connect()
+            # connect() returns True only when the socket opened AND the api key
+            # authenticated. Trust that answer instead of assuming success: every
+            # readiness gate in the app keys off self.authenticated, so setting it
+            # unconditionally let callers believe ticks were coming when the feed
+            # had in fact refused the key.
+            if not self.client.connect():
+                logger.error(
+                    "OpenAlgo WebSocket connect/authenticate failed for %s", ws_url
+                )
+                self.active = False
+                self.authenticated = False
+                self.handle_connection_failure()
+                return False
+
             self.active = True
             self.authenticated = True
 
@@ -217,7 +218,6 @@ class ProfessionalWebSocketManager:
             if any(self.subscriptions.values()):
                 self.resubscribe_all()
 
-            self.backoff_strategy.reset()
             logger.debug("OpenAlgo WebSocket connection established")
             return True
 
@@ -256,6 +256,30 @@ class ProfessionalWebSocketManager:
         except Exception as e:
             logger.error(f"Error in Depth data handler: {e}")
 
+    def _track_subscriptions(self, mode: str, instruments: List[Dict]):
+        """Record instruments for replay, skipping ones already tracked.
+
+        This list is replayed on reconnect and is also what /api/websocket-status
+        reports. Extending it blindly meant a symbol subscribed by two callers
+        (say the option chain and the equity price feed) was stored twice and
+        replayed twice, and the list grew for the life of the process. Symbols
+        are refcounted server side, so duplicates cost capacity rather than
+        correctness, but the unbounded growth is real.
+
+        Returns the instruments that were newly tracked.
+        """
+        existing = self.subscriptions.setdefault(mode, [])
+        seen = {(i.get('exchange'), i.get('symbol')) for i in existing}
+        added = []
+        for inst in instruments:
+            key = (inst.get('exchange'), inst.get('symbol'))
+            if key in seen:
+                continue
+            seen.add(key)
+            existing.append(inst)
+            added.append(inst)
+        return added
+
     def subscribe_batch(self, instruments: List[Dict], mode: str = 'ltp'):
         """
         Subscribe to multiple instruments using OpenAlgo SDK
@@ -269,27 +293,33 @@ class ProfessionalWebSocketManager:
 
             if not self.client or not self.active:
                 logger.warning("[WS_BATCH] Not connected, queuing batch subscription")
-                if mode not in self.subscriptions:
-                    self.subscriptions[mode] = []
-                self.subscriptions[mode].extend(instruments)
+                self._track_subscriptions(mode, instruments)
                 return False
 
             logger.debug(f"[WS_BATCH] Subscribing to {len(instruments)} instruments in {mode} mode")
 
-            # Store subscriptions for reconnection
-            if mode not in self.subscriptions:
-                self.subscriptions[mode] = []
-            self.subscriptions[mode].extend(instruments)
+            # Store subscriptions for reconnection, ignoring ones already tracked.
+            self._track_subscriptions(mode, instruments)
 
-            # Subscribe using OpenAlgo SDK based on mode
+            # Subscribe using OpenAlgo SDK based on mode. Each subscribe_* returns
+            # False when the feed rejected the request, so surface that instead of
+            # reporting success and leaving the caller waiting for ticks that will
+            # never arrive.
             if mode == 'ltp':
-                self.client.subscribe_ltp(instruments, on_data_received=self._on_ltp_data)
+                ok = self.client.subscribe_ltp(instruments, on_data_received=self._on_ltp_data)
             elif mode == 'quote':
-                self.client.subscribe_quote(instruments, on_data_received=self._on_quote_data)
+                ok = self.client.subscribe_quote(instruments, on_data_received=self._on_quote_data)
             elif mode == 'depth':
-                self.client.subscribe_depth(instruments, on_data_received=self._on_depth_data)
+                ok = self.client.subscribe_depth(instruments, on_data_received=self._on_depth_data)
             else:
                 logger.error(f"[WS_BATCH] Unknown mode: {mode}")
+                return False
+
+            if ok is False:
+                logger.error(
+                    "[WS_BATCH] Feed rejected subscription for %d instruments in %s mode",
+                    len(instruments), mode
+                )
                 return False
 
             logger.debug(f"[WS_BATCH] Successfully subscribed to {len(instruments)} instruments")

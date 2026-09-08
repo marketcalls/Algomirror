@@ -29,10 +29,13 @@ fi
 echo "[3/3] Starting Gunicorn server on port 8000..."
 echo "=========================================="
 
+# workers MUST stay at 1: background monitors (risk manager, pollers, exit monitors)
+# start inside create_app() with no cross-worker singleton guard, so a second
+# worker duplicates every monitor and can place duplicate exit orders.
 exec gunicorn \
     --bind 0.0.0.0:8000 \
-    --workers 2 \
-    --threads 4 \
+    --workers 1 \
+    --threads 16 \
     --worker-class gthread \
     --timeout 120 \
     --keep-alive 5 \

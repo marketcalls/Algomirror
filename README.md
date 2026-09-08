@@ -1017,7 +1017,7 @@ LOG_LEVEL=WARNING
 ### Gunicorn Configuration
 
 ```bash
-gunicorn -w 4 -k gthread --threads 2 -b 0.0.0.0:8000 app:app
+gunicorn -w 1 -k gthread --threads 16 -b 0.0.0.0:8000 wsgi:app
 ```
 
 ### Nginx Configuration

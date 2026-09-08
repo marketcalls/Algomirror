@@ -12,8 +12,10 @@ def on_starting(server):
 
 # Worker configuration - use sync workers (gthread for better threading support)
 worker_class = 'gthread'
+# workers MUST stay at 1: background monitors start inside create_app() with no
+# cross-worker singleton guard. A second worker duplicates every monitor.
 workers = 1
-threads = 4  # Number of threads per worker
+threads = 16  # Matches production (algomirror.service)
 timeout = 120  # Request timeout in seconds
 
 # Binding

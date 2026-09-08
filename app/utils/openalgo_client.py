@@ -25,10 +25,22 @@ class ExtendedOpenAlgoAPI(api):
         )
 
     def _make_request(self, endpoint, payload):
-        """Override to guarantee timeout is applied regardless of SDK version"""
+        """Override to guarantee timeout is applied regardless of SDK version.
+
+        openalgo>=2.0 keeps a single connection-pooled httpx.Client on the
+        instance. Reuse it when present: the module-level httpx.post opens and
+        tears down a fresh TCP connection per call, which leaves thousands of
+        sockets in TIME_WAIT over a trading session and eventually exhausts
+        ephemeral ports. Falls back to httpx.post on older SDKs so the app still
+        runs if the code deploys before the venv is upgraded.
+        """
         url = self.base_url + endpoint
+        pooled = getattr(self, 'client', None)
         try:
-            response = httpx.post(url, json=payload, headers=self.headers, timeout=self.timeout)
+            if pooled is not None:
+                response = pooled.post(url, json=payload, headers=self.headers, timeout=self.timeout)
+            else:
+                response = httpx.post(url, json=payload, headers=self.headers, timeout=self.timeout)
             return self._handle_response(response)
         except httpx.TimeoutException:
             return {

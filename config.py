@@ -27,6 +27,11 @@ def get_database_uri():
     return db_url
 
 class Config:
+    @staticmethod
+    def init_app(app):
+        """Per-environment validation hook. Overridden where a check is needed."""
+        pass
+
     SECRET_KEY = os.environ.get('SECRET_KEY') or 'dev-secret-key-change-in-production'
     SQLALCHEMY_DATABASE_URI = get_database_uri()
     SQLALCHEMY_TRACK_MODIFICATIONS = False
@@ -141,7 +146,27 @@ class DevelopmentConfig(Config):
     
 class ProductionConfig(Config):
     DEBUG = False
-    
+
+    @staticmethod
+    def init_app(app):
+        """Refuse to boot production on SQLite.
+
+        Exit claims (EquityHolding), risk checks and the strategy executor all
+        guard against double execution with SELECT ... FOR UPDATE row locks.
+        SQLite has no such statement and SQLAlchemy silently emits nothing for
+        it, so every one of those locks degrades to an unlocked read and two
+        concurrent workers can both sell the same holding. Fail loudly at boot
+        rather than discover it during market hours.
+        """
+        uri = app.config.get('SQLALCHEMY_DATABASE_URI') or ''
+        if uri.startswith('sqlite'):
+            raise RuntimeError(
+                'Refusing to start in production on SQLite: row locks '
+                '(SELECT ... FOR UPDATE) are silently ignored, which allows '
+                'duplicate exit orders. Set DATABASE_URL to a PostgreSQL URI.'
+            )
+
+
 config = {
     'development': DevelopmentConfig,
     'production': ProductionConfig,
