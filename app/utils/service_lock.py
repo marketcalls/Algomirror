@@ -37,18 +37,37 @@ _pid_file_path = None
 
 
 def _acquire_postgres(app, db):
-    """Take a session-level advisory lock on a dedicated connection."""
+    """
+    Take a session-level advisory lock on a dedicated connection.
+
+    The app context is mandatory, not defensive. Flask-SQLAlchemy resolves
+    db.engine through the application context, and create_app() calls acquire()
+    outside one, so reading db.engine here raised "Working outside of
+    application context". The caller's except then did exactly what it was
+    written to do, reported that the lock could not be evaluated and returned
+    False, and every background service stayed down: the risk manager, the
+    pollers, the option chain feed and the equity stop loss monitor.
+
+    That is the failure mode of a fail-safe default when the thing it is
+    guarding against is a bug in the guard itself. The context is opened here so
+    the engine resolves.
+
+    The Connection outlives the context on purpose. Only resolving the engine
+    needs the app context; the connection object does not, and it has to stay
+    open because the advisory lock lives on that session.
+    """
     global _pg_connection
     from sqlalchemy import text
 
-    connection = db.engine.connect()
-    try:
-        acquired = connection.execute(
-            text('SELECT pg_try_advisory_lock(:key)'), {'key': _ADVISORY_LOCK_KEY}
-        ).scalar()
-    except Exception:
-        connection.close()
-        raise
+    with app.app_context():
+        connection = db.engine.connect()
+        try:
+            acquired = connection.execute(
+                text('SELECT pg_try_advisory_lock(:key)'), {'key': _ADVISORY_LOCK_KEY}
+            ).scalar()
+        except Exception:
+            connection.close()
+            raise
 
     if not acquired:
         connection.close()

@@ -184,6 +184,58 @@ def test_lock_failure_never_raises(clean_lock, tmp_path):
     assert clean_lock.acquire(app, db=_ExplodingDb()) is False
 
 
+def test_the_postgres_path_works_without_an_ambient_app_context(clean_lock, tmp_path):
+    """
+    The regression this test exists for, found in production.
+
+    create_app() calls acquire() OUTSIDE any app context. Flask-SQLAlchemy
+    resolves db.engine through the app context, so reading it there raised
+    "Working outside of application context", the guard's own except reported
+    that the lock could not be evaluated, and EVERY background service stayed
+    down: the risk manager, the pollers, the option chain feed and the equity
+    stop loss monitor.
+
+    The earlier tests all took the PID-file path with db=None, so none of them
+    ever touched the branch that actually runs in production.
+    """
+    import flask
+
+    class ContextRequiringDb:
+        """Behaves like Flask-SQLAlchemy: .engine needs an app context."""
+
+        @property
+        def engine(self):
+            if not flask.has_app_context():
+                raise RuntimeError('Working outside of application context.')
+            return _FakeEngine()
+
+    class _FakeEngine:
+        def connect(self):
+            return _FakeConnection()
+
+    class _FakeConnection:
+        closed = False
+
+        def execute(self, statement, params=None):
+            return _FakeResult()
+
+        def close(self):
+            self.closed = True
+
+    class _FakeResult:
+        @staticmethod
+        def scalar():
+            return True
+
+    app = flask.Flask(__name__)
+    app.config['SQLALCHEMY_DATABASE_URI'] = 'postgresql+psycopg://u:p@localhost/db'
+    app.logger.disabled = True
+
+    # Deliberately NOT inside `with app.app_context():`, exactly as create_app calls it.
+    assert flask.has_app_context() is False
+    assert clean_lock.acquire(app, db=ContextRequiringDb()) is True
+
+
 def test_release_is_idempotent(clean_lock, tmp_path):
     app = _LockApp(tmp_path)
     assert clean_lock.acquire(app, db=None) is True
