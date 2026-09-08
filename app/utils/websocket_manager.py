@@ -487,6 +487,37 @@ class ProfessionalWebSocketManager:
             self.data_processor.register_ltp_handler(handler)
 
     @staticmethod
+    def _flatten_nested(raw, inner_key):
+        """
+        Normalise an SDK payload of {'EXCHANGE': {'SYMBOL': {...}}} to
+        {'EXCHANGE:SYMBOL': {...}}.
+
+        The same shape, and the same trap, as _flatten_ltp documents for LTP:
+        iterating the outer mapping directly yields ('NSE', {...}), so any code
+        that reads a field off that value gets nothing and silently drops every
+        symbol. get_quotes fell into exactly this and returned an empty mapping
+        for every symbol, always.
+
+        An already-flat {'NSE:RELIANCE': {...}} shape is still accepted, so this
+        keeps working if the SDK changes back.
+        """
+        flat = {}
+        if not isinstance(raw, dict):
+            return flat
+        payload = raw.get(inner_key, raw) if inner_key in raw else raw
+        if not isinstance(payload, dict):
+            return flat
+        for outer_key, outer_value in payload.items():
+            if isinstance(outer_value, dict) and ':' not in str(outer_key) and all(
+                isinstance(v, dict) for v in outer_value.values()
+            ) and outer_value:
+                for symbol, entry in outer_value.items():
+                    flat['%s:%s' % (outer_key, symbol)] = entry
+            else:
+                flat[outer_key] = outer_value
+        return flat
+
+    @staticmethod
     def _flatten_ltp(raw_ltp):
         """
         Normalise the SDK's LTP payload to {'EXCHANGE:SYMBOL': price}.
@@ -569,7 +600,10 @@ class ProfessionalWebSocketManager:
         if self.client:
             try:
                 raw_data = self.client.get_quotes()
-                raw_quotes = raw_data.get('quote', {})
+                # Flatten first. The SDK nests by exchange, so iterating the
+                # raw mapping hands this loop ('NSE', {'RELIANCE': {...}}) and
+                # every ltp read below comes back empty.
+                raw_quotes = self._flatten_nested(raw_data, 'quote')
 
                 # Validate and cache quotes with non-zero LTP
                 validated_quotes = {}
@@ -602,10 +636,55 @@ class ProfessionalWebSocketManager:
         return {'quote': {}}
 
     def get_depth(self):
-        """Get cached Depth data from OpenAlgo SDK"""
+        """
+        Cached depth from the SDK, in the shape the rest of the app expects.
+
+        The SDK publishes a THIRD naming for depth, matching neither the wire
+        protocol nor the REST response: nested by exchange, with buyBook and
+        sellBook keyed by the string ordinals "1" to "5", and qty rather than
+        quantity. Passing that through unchanged meant every consumer had to
+        know about a shape nothing else in the codebase uses, so it is
+        normalised here to the wire shape (buy/sell lists, quantity), which is
+        what _normalise_depth and the depth handler already read.
+        """
         if self.client:
             try:
-                return self.client.get_depth()
+                flat = self._flatten_nested(self.client.get_depth(), 'depth')
+                return {'depth': {
+                    key: self._normalise_book(entry) for key, entry in flat.items()
+                }}
             except Exception as e:
                 logger.error(f"Error getting depth: {e}")
         return {'depth': {}}
+
+    @staticmethod
+    def _normalise_book(entry):
+        """Turn buyBook/sellBook ordinal maps into ordered buy/sell lists."""
+        if not isinstance(entry, dict):
+            return entry
+
+        def side(book):
+            if isinstance(book, list):
+                return book
+            if not isinstance(book, dict):
+                return []
+            levels = []
+            for ordinal in sorted(book, key=lambda k: int(k) if str(k).isdigit() else 0):
+                level = book.get(ordinal)
+                if not isinstance(level, dict):
+                    continue
+                levels.append({
+                    'price': level.get('price'),
+                    # The SDK says qty; everything else in this codebase says
+                    # quantity, including the wire protocol and _normalise_depth.
+                    'quantity': level.get('quantity', level.get('qty')),
+                    'orders': level.get('orders'),
+                })
+            return levels
+
+        out = dict(entry)
+        out['buy'] = side(entry.get('buy', entry.get('buyBook')))
+        out['sell'] = side(entry.get('sell', entry.get('sellBook')))
+        out.pop('buyBook', None)
+        out.pop('sellBook', None)
+        return out
