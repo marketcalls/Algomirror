@@ -5335,6 +5335,30 @@ def api_depth():
     if error:
         return _json_error(error, 404 if error == 'Account not found' else 400)
 
+    # WebSocket depth first. It updates continuously and carries a per level
+    # order count that the REST snapshot does not, and OpenAlgo's own docs say
+    # to use the stream for continuous updates. Subscribing is idempotent, so
+    # calling this on every poll simply keeps the one book alive.
+    #
+    # REST stays as the cold start: the first frame has not arrived when the
+    # panel opens, and a book older than MAX_DEPTH_AGE_SECONDS is reported as
+    # absent rather than served, because a stale order book on the Place Order
+    # screen is worse than none.
+    try:
+        equity_price_feed.ensure_depth((symbol, exchange))
+        pushed = equity_price_feed.get_depth((symbol, exchange))
+    except Exception as exc:
+        current_app.logger.debug(f'Equity depth feed unavailable for {symbol}: {exc}')
+        pushed = None
+
+    if pushed is not None:
+        return _ok({
+            'depth': _normalise_depth(pushed, symbol, exchange),
+            'account_id': credential.get('account_id'),
+            'source': 'websocket',
+            'generated_at': _iso(datetime.utcnow()),
+        })
+
     try:
         client = ExtendedOpenAlgoAPI(
             api_key=credential['api_key'],
@@ -5353,6 +5377,7 @@ def api_depth():
     return _ok({
         'depth': _normalise_depth(response.get('data'), symbol, exchange),
         'account_id': credential.get('account_id'),
+        'source': 'rest',
         'generated_at': _iso(datetime.utcnow()),
     })
 

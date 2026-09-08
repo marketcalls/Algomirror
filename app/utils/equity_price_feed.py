@@ -70,6 +70,18 @@ MAX_SUBSCRIBE_BATCH = 100
 # cannot leave a frozen number looking live.
 MAX_PRICE_AGE_SECONDS = 90.0
 
+# Market depth is subscribed separately, in its own mode, for ONE symbol at a
+# time: the Place Order panel shows one instrument and depth is the highest
+# bandwidth mode the proxy offers. Holding a book open for every watched symbol
+# would spend the connection's capacity on screens nobody is looking at.
+DEPTH_MODE = 'depth'
+
+# Depth goes stale far faster than a last traded price. A 90 second old LTP is
+# a number that has not moved; a 90 second old order book is fiction, and the
+# Place Order screen is exactly where someone acts on it. Past this the panel
+# is told there is no depth and falls back to a REST snapshot.
+MAX_DEPTH_AGE_SECONDS = 15.0
+
 
 def _to_price(value) -> float:
     """Coerce a pushed or cached price to a float. Returns 0.0 when unusable."""
@@ -217,6 +229,12 @@ class EquityPriceFeed:
         # Previous close per symbol, pushed on every Quote tick. Kept apart
         # from _prices so a previous close can never be served as a live price.
         self._prev_closes: Dict[SymbolKey, float] = {}
+
+        # Market depth for the single symbol a Place Order panel is showing.
+        # One at a time by design, see DEPTH_MODE.
+        self._depth_key: Optional[SymbolKey] = None
+        self._depth: Optional[Dict] = None
+        self._depth_at: Optional[datetime] = None
 
         # Diagnostics.
         self._tick_count = 0
@@ -603,6 +621,155 @@ class EquityPriceFeed:
             except Exception:
                 pass
 
+    def _on_depth_tick(self, payload):
+        """
+        Depth handler, called on the WebSocket reader thread.
+
+        Only the one symbol the Place Order panel is showing is subscribed, but
+        a tick for anything else is still ignored explicitly rather than
+        trusted: an unsubscribe that has not taken effect yet would otherwise
+        put another instrument's order book on screen under this symbol's name.
+
+        Every failure is swallowed. An exception here would propagate into the
+        reader thread and take the whole feed down with it.
+        """
+        try:
+            if not isinstance(payload, dict):
+                return
+
+            nested = payload.get('data')
+            data = nested if isinstance(nested, dict) else payload
+
+            symbol = str(payload.get('symbol') or data.get('symbol') or '').strip().upper()
+            exchange = str(payload.get('exchange') or data.get('exchange') or '').strip().upper()
+            if not symbol:
+                return
+            key = (symbol, exchange or DEFAULT_EXCHANGE)
+
+            book = data.get('depth')
+            if not isinstance(book, dict):
+                return
+
+            now = datetime.now(timezone.utc)
+            with self._lock:
+                self._last_feed_tick_at = now
+                if self._depth_key != key:
+                    return
+                self._depth = {
+                    'symbol': symbol,
+                    'exchange': key[1],
+                    'buy': book.get('buy') or [],
+                    'sell': book.get('sell') or [],
+                    'ltp': _to_price(data.get('ltp')),
+                    'ltq': data.get('ltq'),
+                    'totalbuyqty': data.get('totalbuyqty'),
+                    'totalsellqty': data.get('totalsellqty'),
+                    'open': data.get('open'),
+                    'high': data.get('high'),
+                    'low': data.get('low'),
+                    'prev_close': _to_price(data.get('close')),
+                    'volume': data.get('volume'),
+                }
+                self._depth_at = now
+        except Exception as exc:
+            try:
+                logger.debug(f"[EQUITY_FEED] Ignored bad depth tick: {exc}")
+            except Exception:
+                pass
+
+    def ensure_depth(self, symbol_key) -> bool:
+        """
+        Subscribe depth for one instrument, replacing whatever was subscribed.
+
+        The Place Order panel shows one symbol, and depth is the heaviest mode
+        the proxy offers, so exactly one book is held open at a time and the
+        previous one is unsubscribed rather than accumulating.
+
+        Returns True when the subscription is believed to be in place. False
+        means the caller should use its REST snapshot instead.
+        """
+        key = _normalise_key(symbol_key)
+        if key is None:
+            return False
+
+        manager = _get_manager()
+        if not _is_ready(manager):
+            return False
+
+        with self._lock:
+            current = self._depth_key
+            if current == key:
+                return True
+
+        self._ensure_handler(manager)
+
+        if current is not None:
+            try:
+                manager.unsubscribe_batch(
+                    [{'symbol': current[0], 'exchange': current[1]}], mode=DEPTH_MODE
+                )
+            except Exception as exc:
+                logger.debug(f"[EQUITY_FEED] Depth unsubscribe failed for {current}: {exc}")
+
+        try:
+            ok = manager.subscribe_batch(
+                [{'symbol': key[0], 'exchange': key[1]}], mode=DEPTH_MODE
+            )
+        except Exception as exc:
+            logger.debug(f"[EQUITY_FEED] Depth subscribe failed for {key}: {exc}")
+            ok = False
+
+        with self._lock:
+            # The cached book belongs to the old symbol either way, so it goes.
+            self._depth = None
+            self._depth_at = None
+            self._depth_key = key if ok else None
+
+        return bool(ok)
+
+    def get_depth(self, symbol_key) -> Optional[Dict]:
+        """
+        The pushed order book for this instrument, or None.
+
+        None when nothing has arrived yet, when the subscribed symbol is a
+        different one, or when the book has aged past MAX_DEPTH_AGE_SECONDS. A
+        stale order book is worse than no order book, because the Place Order
+        screen is exactly where someone acts on it.
+        """
+        key = _normalise_key(symbol_key)
+        if key is None:
+            return None
+
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=MAX_DEPTH_AGE_SECONDS)
+        with self._lock:
+            if self._depth_key != key or self._depth is None:
+                return None
+            if self._depth_at is None or self._depth_at < cutoff:
+                return None
+            return dict(self._depth)
+
+    def release_depth(self) -> bool:
+        """Drop the depth subscription when the panel closes. Never raises."""
+        with self._lock:
+            current = self._depth_key
+            self._depth_key = None
+            self._depth = None
+            self._depth_at = None
+
+        if current is None:
+            return False
+
+        manager = _get_manager()
+        if manager is None:
+            return True
+        try:
+            manager.unsubscribe_batch(
+                [{'symbol': current[0], 'exchange': current[1]}], mode=DEPTH_MODE
+            )
+        except Exception as exc:
+            logger.debug(f"[EQUITY_FEED] Depth unsubscribe failed for {current}: {exc}")
+        return True
+
     def _ensure_handler(self, manager):
         """
         Register the LTP handler on the manager's data processor, exactly once
@@ -626,6 +793,8 @@ class EquityPriceFeed:
                 processor.register_ltp_handler(self._on_tick)
                 if hasattr(processor, 'register_quote_handler'):
                     processor.register_quote_handler(self._on_tick)
+                if hasattr(processor, 'register_depth_handler'):
+                    processor.register_depth_handler(self._on_depth_tick)
                 self._handler_registered = True
                 logger.debug(
                     "[EQUITY_FEED] Tick handlers registered on shared WebSocket manager "

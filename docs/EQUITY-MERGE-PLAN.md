@@ -3,7 +3,7 @@
 How Saravanan's equity commit gets folded into AlgoMirror: what is adopted, what is
 rewritten, what is discarded, and what has to be fixed first.
 
-Status: Phases 0 and 1 done. Phase 2 core done. Phase 3.1, 4.1, 4.2, 4.4 done. Phase 5 started (equity_common.js extracted). Template adoption not started.
+Status: Phase 0 and 1 done. Phase 2 core done (2.2, 2.6, 2.7 open). Phase 3 done except SSE (3.3). Phase 4 done except the Order Status cost estimate. Phase 5: equity_common.js extracted, template adoption not started.
 Prepared: 8 September 2026.
 
 ## 0. Provenance

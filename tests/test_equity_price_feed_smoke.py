@@ -225,3 +225,95 @@ class TestQuoteMode:
 
     def test_get_previous_closes_on_empty_input(self):
         assert feed_module.equity_price_feed.get_previous_closes([]) == {}
+
+
+class TestDepthMode:
+    """
+    Depth is subscribed separately, for one symbol, and ages out fast.
+
+    A 90 second old last traded price is a number that has not moved. A 90
+    second old order book is fiction, and the Place Order screen is exactly
+    where somebody acts on it, so depth has its own much shorter ceiling and is
+    reported as absent rather than served once past it.
+    """
+
+    def test_depth_is_its_own_mode(self):
+        assert feed_module.DEPTH_MODE == 'depth'
+
+    def test_depth_ages_out_far_sooner_than_a_price(self):
+        assert feed_module.MAX_DEPTH_AGE_SECONDS < feed_module.MAX_PRICE_AGE_SECONDS
+
+    def test_a_depth_tick_for_the_subscribed_symbol_is_kept(self):
+        f = feed_module.equity_price_feed
+        key = ("DEPTHSYM", "NSE")
+        with f._lock:
+            f._depth_key = key
+        try:
+            f._on_depth_tick({
+                "symbol": "DEPTHSYM", "exchange": "NSE", "mode": 3,
+                "data": {"ltp": 100.0, "close": 99.0,
+                         "depth": {"buy": [{"price": 100.0, "quantity": 5, "orders": 2}],
+                                   "sell": [{"price": 100.5, "quantity": 4, "orders": 1}]}},
+            })
+            book = f.get_depth(key)
+            assert book is not None
+            assert book["buy"][0]["orders"] == 2
+        finally:
+            f.release_depth()
+
+    def test_a_depth_tick_for_another_symbol_is_ignored(self):
+        """An unsubscribe in flight must not put another book under this name."""
+        f = feed_module.equity_price_feed
+        key = ("MINE", "NSE")
+        with f._lock:
+            f._depth_key = key
+        try:
+            f._on_depth_tick({
+                "symbol": "SOMEONEELSE", "exchange": "NSE", "mode": 3,
+                "data": {"depth": {"buy": [{"price": 1.0, "quantity": 1}], "sell": []}},
+            })
+            assert f.get_depth(key) is None
+        finally:
+            f.release_depth()
+
+    def test_a_stale_book_is_reported_as_absent(self):
+        f = feed_module.equity_price_feed
+        key = ("STALEDEPTH", "NSE")
+        old = datetime.now(timezone.utc) - timedelta(
+            seconds=feed_module.MAX_DEPTH_AGE_SECONDS + 5
+        )
+        with f._lock:
+            f._depth_key = key
+            f._depth = {"symbol": "STALEDEPTH", "exchange": "NSE", "buy": [], "sell": []}
+            f._depth_at = old
+        try:
+            assert f.get_depth(key) is None
+        finally:
+            f.release_depth()
+
+    def test_asking_for_a_symbol_that_is_not_subscribed_returns_none(self):
+        f = feed_module.equity_price_feed
+        f.release_depth()
+        assert f.get_depth(("NOTSUBSCRIBED", "NSE")) is None
+
+    def test_a_malformed_depth_tick_does_not_raise(self):
+        """This runs on the reader thread; an exception takes the feed down."""
+        f = feed_module.equity_price_feed
+        for bad in (None, "nonsense", {}, {"symbol": "X"},
+                    {"symbol": "X", "data": {"depth": "not-a-dict"}}):
+            f._on_depth_tick(bad)
+
+    def test_release_depth_is_safe_when_nothing_is_subscribed(self):
+        f = feed_module.equity_price_feed
+        f.release_depth()
+        assert f.release_depth() is False
+
+    def test_ensure_depth_without_a_feed_reports_failure(self):
+        """No manager means the caller must fall back to its REST snapshot."""
+        f = feed_module.equity_price_feed
+        assert f.ensure_depth(("ANY", "NSE")) is False
+
+    def test_ensure_depth_rejects_an_unusable_symbol(self):
+        f = feed_module.equity_price_feed
+        assert f.ensure_depth(None) is False
+        assert f.ensure_depth("") is False
