@@ -132,7 +132,7 @@ function equityStartEventStream(fn, topics) {
         }
     }
 
-    function setStreamBadge(connected) {
+    function setStreamBadge(connected, reason) {
         const el = document.getElementById('equity-stream-badge');
         if (!el) { return; }
         if (connected) {
@@ -142,7 +142,8 @@ function equityStartEventStream(fn, topics) {
         } else {
             el.className = 'badge badge-error badge-sm';
             el.textContent = 'Disconnected';
-            el.title = 'Live updates are not connected. Use Refresh for current figures.';
+            el.title = reason ||
+                'Live updates are not connected. Use Refresh for current figures.';
         }
     }
 
@@ -158,6 +159,21 @@ function equityStartEventStream(fn, topics) {
 
         source.addEventListener('change', function () {
             refresh();
+        });
+
+        source.addEventListener('busy', function (event) {
+            // The server is at its connection cap. Retrying would take a slot
+            // from a screen that has one, so this stops and says so rather than
+            // reconnecting in a loop.
+            let message = '';
+            try {
+                message = (JSON.parse(event.data) || {}).message || '';
+            } catch (error) {
+                message = '';
+            }
+            setStreamBadge(false, message);
+            close();
+            stopped = true;
         });
 
         source.onerror = function () {

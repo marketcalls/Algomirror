@@ -50,6 +50,23 @@ ALL_TOPICS = (
 _lock = threading.Lock()
 _revisions = {topic: 0 for topic in ALL_TOPICS}
 
+# How many SSE connections may be open at once, across every equity screen.
+#
+# This is a hard resource limit, not a preference. Gunicorn runs one worker with
+# gthread and 16 threads, and an SSE generator holds its thread for the life of
+# the connection. Without a cap, 16 open equity tabs consume every thread and
+# the application stops serving ANY request, F&O and login included, and it
+# deadlocks itself: a change fires, the browser tries to fetch its payload, and
+# no thread is left to answer.
+#
+# Eight leaves half the pool for real requests. A refused stream is not a broken
+# screen: it shows Disconnected and its Refresh button still works.
+MAX_CONCURRENT_STREAMS = 8
+
+_stream_slots = threading.BoundedSemaphore(MAX_CONCURRENT_STREAMS)
+_stream_count_lock = threading.Lock()
+_stream_count = 0
+
 # One Condition rather than an Event per topic: waiters are few (one per open
 # SSE connection) and a single notify_all is cheaper than tracking which topic
 # each waiter cares about at signal time. The waiter does that filtering itself.
@@ -121,3 +138,50 @@ def reset_for_tests():
         for topic in _revisions:
             _revisions[topic] = 0
         _changed.notify_all()
+
+
+class StreamSlot:
+    """
+    A concurrency slot for one SSE connection.
+
+    Used as a context manager so the slot is returned however the generator
+    ends: a normal close, a client disconnect (which surfaces as an exception
+    inside the generator), or an error. A leaked slot here permanently reduces
+    the number of screens that can ever stream again, so this must not depend on
+    the generator finishing tidily.
+
+    `acquired` is False when the cap is already reached. The caller then refuses
+    the connection rather than blocking, because blocking would hold the very
+    thread the cap exists to protect.
+    """
+
+    def __init__(self):
+        self.acquired = False
+
+    def __enter__(self):
+        global _stream_count
+        self.acquired = _stream_slots.acquire(blocking=False)
+        if self.acquired:
+            with _stream_count_lock:
+                _stream_count += 1
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        global _stream_count
+        if self.acquired:
+            self.acquired = False
+            with _stream_count_lock:
+                _stream_count = max(0, _stream_count - 1)
+            try:
+                _stream_slots.release()
+            except ValueError:
+                # Already released. Better to swallow than to raise out of a
+                # generator's cleanup path.
+                pass
+        return False
+
+
+def active_streams():
+    """How many SSE connections are currently open."""
+    with _stream_count_lock:
+        return _stream_count

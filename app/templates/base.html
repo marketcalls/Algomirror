@@ -125,12 +125,29 @@
         function showToast(message, type = 'info') {
             const toast = document.createElement('div');
             toast.className = `alert alert-${type} shadow-lg`;
-            toast.innerHTML = `
-                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-                </svg>
-                <span>${message}</span>
-            `;
+
+            // The icon is a constant, so it is the only thing built as markup.
+            // The message is NOT: callers pass server text through here, and
+            // that text includes broker responses and exception strings, which
+            // originate outside this application. Interpolating it into
+            // innerHTML made any '<' in a broker message executable.
+            const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+            icon.setAttribute('class', 'w-5 h-5');
+            icon.setAttribute('fill', 'none');
+            icon.setAttribute('stroke', 'currentColor');
+            icon.setAttribute('viewBox', '0 0 24 24');
+            const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+            path.setAttribute('stroke-linecap', 'round');
+            path.setAttribute('stroke-linejoin', 'round');
+            path.setAttribute('stroke-width', '2');
+            path.setAttribute('d', 'M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z');
+            icon.appendChild(path);
+            toast.appendChild(icon);
+
+            const text = document.createElement('span');
+            text.textContent = message == null ? '' : String(message);
+            toast.appendChild(text);
+
             document.querySelector('.toast').appendChild(toast);
             setTimeout(() => toast.remove(), 5000);
         }

@@ -89,6 +89,12 @@ QUEUE_WAIT_SECONDS = 1.0
 # newest carries the most recent state of an order.
 MAX_QUEUE_DEPTH = 5000
 
+# Marks a trade row the stream reconstructed rather than one the broker
+# reported. The stream never sees a broker trade id, only a running total, so
+# its rows are provisional and the reconciler replaces them with the real ones.
+# Shared with equity_fill_poller, which does the replacing.
+PROVISIONAL_TRADE_PREFIX = 'stream:'
+
 # Broker order statuses, as OpenAlgo normalises them. 'pending' is deliberately
 # absent: it appears in the published table but is never emitted, and the
 # two-word 'trigger pending' is what a resting or just-fired trigger reports.
@@ -498,9 +504,22 @@ class EquityOrderStream:
             return
 
         delta = filled - already
+        # PROVISIONAL. The stream reports a cumulative quantity and never a
+        # broker trade id, so this row is our own reconstruction of the fill,
+        # not the broker's record of it.
+        #
+        # The id is synthetic but deterministic, which does two things. The
+        # unique index on (split_id, broker_trade_id) de-duplicates a repeated
+        # event, where a NULL would not: both databases allow repeated NULLs in
+        # a unique index, so NULL rows accumulate silently. And the prefix makes
+        # these rows identifiable, so the reconciler can replace them with the
+        # broker's authoritative rows instead of booking the same execution
+        # twice, once with a trade id and once without.
         db.session.add(EquityTrade(
             split_id=split.id,
-            broker_trade_id=None,
+            broker_trade_id='%s%s:%d' % (PROVISIONAL_TRADE_PREFIX,
+                                         _as_text(split.broker_order_id) or split.id,
+                                         filled),
             executed_quantity=delta,
             execution_price=price,
             exchange=_as_text(message.get('exchange')) or None,

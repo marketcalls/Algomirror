@@ -6936,7 +6936,8 @@ def api_stream():
     """
     from flask import Response, stream_with_context
     from app.utils.equity_events import (
-        ALL_TOPICS, revisions, wait_for_change,
+        ALL_TOPICS, MAX_CONCURRENT_STREAMS, StreamSlot, active_streams,
+        revisions, wait_for_change,
     )
 
     requested = [t.strip() for t in (_arg('topics') or '').split(',') if t.strip()]
@@ -6946,7 +6947,8 @@ def api_stream():
     # request, and the generator outlives it.
     app = current_app._get_current_object()
 
-    def generate():
+    def frames():
+        """The stream itself. Split out so the slot wrapper below stays readable."""
         seen = revisions(topics)
         # Tell the client where it is starting, so a reconnect can resume
         # without re-reading everything.
@@ -6969,6 +6971,32 @@ def api_stream():
                 # Heartbeat. A comment frame keeps proxies from closing the
                 # connection and lets a dead client be detected on write.
                 yield ': keep-alive\n\n'
+
+    def generate():
+        # The slot is taken INSIDE the generator and released by its context
+        # manager, so it is returned however this ends: a normal close, a
+        # client disconnect (which arrives as an exception here), or an error.
+        # Taking it outside would leak a slot on any path that never starts
+        # iterating, and a leaked slot permanently reduces how many screens can
+        # ever stream again.
+        with StreamSlot() as slot:
+            if not slot.acquired:
+                # Refused rather than queued. Waiting for a slot would hold the
+                # very thread the cap exists to protect. The screen degrades
+                # honestly: it shows Disconnected and its Refresh still works.
+                app.logger.warning(
+                    'Equity stream refused, %d of %d slots in use',
+                    active_streams(), MAX_CONCURRENT_STREAMS,
+                    extra={'event': 'equity_stream_refused'}
+                )
+                yield 'event: busy\ndata: %s\n\n' % json.dumps({
+                    'message': 'Too many live connections are open. This screen '
+                               'will not update on its own; use Refresh.',
+                })
+                return
+
+            for frame in frames():
+                yield frame
 
     return Response(
         stream_with_context(generate()),

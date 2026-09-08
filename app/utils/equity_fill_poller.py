@@ -479,6 +479,29 @@ class EquityFillPoller:
         if not rows:
             return 0
 
+        # Drop anything the stream reconstructed for this split first.
+        #
+        # The stream never sees a broker trade id, only a running total, so it
+        # books provisional rows. The broker's rows carry real trade ids, so the
+        # unique index cannot tell that the two describe the same execution, and
+        # keeping both would count every filled share twice in the Trade Book,
+        # its turnover and its costs. The broker's record wins: it is the
+        # system of record, and this runs precisely when we have it.
+        from app.utils.equity_order_stream import PROVISIONAL_TRADE_PREFIX
+
+        provisional = EquityTrade.query.filter(
+            EquityTrade.split_id == split.id,
+            EquityTrade.broker_trade_id.like(PROVISIONAL_TRADE_PREFIX + '%'),
+        ).all()
+        for row in provisional:
+            db.session.delete(row)
+        if provisional:
+            db.session.flush()
+            logger.info(
+                '[EQUITY_FILL] Replaced %d provisional fill(s) on split %s with '
+                'the broker record', len(provisional), split.id
+            )
+
         existing = {
             (t.broker_trade_id, t.executed_quantity, t.execution_price)
             for t in EquityTrade.query.filter_by(split_id=split.id).all()
