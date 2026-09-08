@@ -22,6 +22,8 @@
             </p>
         </div>
         <div class="flex gap-3 items-center flex-wrap">
+            <span id="equity-feed-badge" class="hidden"></span>
+            <span id="equity-analyze-badge" class="hidden"></span>
             <span class="text-xs text-base-content/50 equity-num" id="equity-last-updated">Not loaded yet</span>
             <button onclick="equityLoadDashboard()" class="btn btn-ghost btn-sm h-9" id="equity-refresh-btn">
                 Refresh
@@ -429,6 +431,8 @@ async function equityLoadDashboard() {
         }
 
         equitySetText('equity-last-updated', 'Updated ' + EquityFormat.clockTime(data.generated_at));
+
+        equityRenderFeedBadge(data.price_feed);
     } catch (error) {
         // Degrade to a visible stale marker, never blank the page.
         equityShowStale('Live data unavailable, showing the last values loaded. Retrying shortly.');
@@ -442,13 +446,13 @@ async function equityLoadDashboard() {
 document.addEventListener('DOMContentLoaded', function () {
     {% if accounts %}
     equityLoadDashboard();
-    equityPollTimer = setInterval(equityLoadDashboard, EQUITY_POLL_MS);
+    equityPollTimer = equityStartPolling(equityLoadDashboard, EQUITY_POLL_MS);
     {% endif %}
 });
 
 window.addEventListener('beforeunload', function () {
     if (equityPollTimer) {
-        clearInterval(equityPollTimer);
+        equityPollTimer();
         equityPollTimer = null;
     }
 });

@@ -36,6 +36,8 @@
         </div>
         <div class="flex gap-3 items-center flex-wrap">
             <span class="text-xs text-base-content/50 equity-num" id="equity-feed-marker"></span>
+            <span id="equity-feed-badge" class="hidden"></span>
+            <span id="equity-analyze-badge" class="hidden"></span>
             <span class="text-xs text-base-content/50 equity-num" id="equity-last-updated">Not loaded yet</span>
             <button onclick="equityLoadWatchlist()" class="btn btn-ghost btn-sm h-9" id="equity-refresh-btn">Refresh</button>
             {% if accounts %}
@@ -1215,6 +1217,8 @@ function equityApplyPayload(payload, force) {
     );
 
     equitySetText('equity-last-updated', 'Updated ' + EquityFormat.clockTime(payload.generated_at));
+
+    equityRenderFeedBadge(payload.price_feed);
 }
 
 async function equityLoadWatchlist(force) {
@@ -1256,13 +1260,13 @@ document.addEventListener('click', function (event) {
 document.addEventListener('DOMContentLoaded', function () {
     {% if accounts %}
     equityLoadWatchlist(true);
-    equityPollTimer = setInterval(equityLoadWatchlist, EQUITY_POLL_MS);
+    equityPollTimer = equityStartPolling(equityLoadWatchlist, EQUITY_POLL_MS);
     {% endif %}
 });
 
 window.addEventListener('beforeunload', function () {
     if (equityPollTimer) {
-        clearInterval(equityPollTimer);
+        equityPollTimer();
         equityPollTimer = null;
     }
 });

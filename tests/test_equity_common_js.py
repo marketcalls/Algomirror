@@ -236,3 +236,113 @@ def test_the_servers_own_message_wins_when_it_sends_one():
     out = run_js(f"return await equityReadJson({fake_response(400, body)});")
     assert out['message'] == 'A GTT order needs a limit price'
     assert out['definite'] is True
+
+
+# ---------------------------------------------------------------------------
+# Polling and badges.
+# ---------------------------------------------------------------------------
+
+def test_no_equity_template_uses_a_bare_interval():
+    """
+    Bare setInterval kept a hidden tab asking five brokers for funds all night,
+    and showed an interval-old number for a full interval on return. Every
+    equity screen goes through equityStartPolling, which pauses on hidden and
+    refreshes before resuming.
+    """
+    for path in templates():
+        text = path.read_text(encoding='utf-8')
+        assert 'setInterval(' not in text, f'{path.name} still calls setInterval directly'
+        assert 'clearInterval(' not in text, (
+            f'{path.name} still calls clearInterval; equityStartPolling returns a stop function'
+        )
+
+
+def test_every_template_has_the_badge_slots():
+    for path in templates():
+        text = path.read_text(encoding='utf-8')
+        assert 'id="equity-feed-badge"' in text, f'{path.name} has no feed badge slot'
+        assert 'id="equity-analyze-badge"' in text, f'{path.name} has no analyze badge slot'
+
+
+def test_the_screens_with_a_price_feed_render_the_badge():
+    """
+    Every equity endpoint already returned a price_feed block and no screen ever
+    showed it, so a silently dead subscription looked exactly like a quiet
+    market. These five are the screens that display prices.
+    """
+    expected = {'dashboard.html', 'holdings.html', 'order_book.html',
+                'trade_book.html', 'watchlist.html'}
+    rendering = {
+        p.name for p in templates()
+        if 'equityRenderFeedBadge(' in p.read_text(encoding='utf-8')
+    }
+    assert expected <= rendering, f'missing the feed badge: {sorted(expected - rendering)}'
+
+
+@needs_node
+@pytest.mark.parametrize('source,authenticated,expected', [
+    ('websocket', True, 'Live'),
+    ('mixed', True, 'Mixed'),
+    ('rest', True, 'REST'),
+    ('websocket', False, 'Offline'),
+    ('rest', False, 'Offline'),
+])
+def test_the_feed_badge_says_what_the_feed_is_doing(source, authenticated, expected):
+    out = run_js(
+        "let cls = '', txt = '', title = '';"
+        "global.document.getElementById = () => ({"
+        "  set className(v) { cls = v; }, get className() { return cls; },"
+        "  set textContent(v) { txt = v; }, get textContent() { return txt; },"
+        "  set title(v) { title = v; }, removeAttribute() {} });"
+        f"equityRenderFeedBadge({{ source: '{source}', authenticated: {str(authenticated).lower()},"
+        "  symbols_requested: 4, symbols_from_feed: 2, last_tick_age_seconds: 3 });"
+        "return { cls, txt };"
+    )
+    assert out['txt'] == expected
+
+
+@needs_node
+def test_an_empty_view_hides_the_feed_badge():
+    """No symbols held is not a feed problem, so it must not show as one."""
+    out = run_js(
+        "let cls = '', txt = '';"
+        "global.document.getElementById = () => ({"
+        "  set className(v) { cls = v; }, set textContent(v) { txt = v; }, removeAttribute() {} });"
+        "equityRenderFeedBadge({ source: 'none', authenticated: true });"
+        "return { cls, txt };"
+    )
+    assert out['cls'] == 'hidden'
+    assert out['txt'] == ''
+
+
+@needs_node
+def test_a_missing_feed_block_does_not_throw():
+    """An older endpoint that sends no price_feed must not break the screen."""
+    out = run_js(
+        "let cls = '';"
+        "global.document.getElementById = () => ({"
+        "  set className(v) { cls = v; }, set textContent(v) {}, removeAttribute() {} });"
+        "equityRenderFeedBadge(undefined); return { cls };"
+    )
+    assert out['cls'] == 'hidden'
+
+
+@needs_node
+def test_analyze_mode_is_shown_and_absence_is_not():
+    shown = run_js(
+        "let cls = '', txt = '';"
+        "global.document.getElementById = () => ({"
+        "  set className(v) { cls = v; }, set textContent(v) { txt = v; },"
+        "  set title(v) {}, removeAttribute() {} });"
+        "equityRenderAnalyzeBadge(true); return { cls, txt };"
+    )
+    assert shown['txt'] == 'Analyze'
+
+    hidden = run_js(
+        "let cls = '', txt = '';"
+        "global.document.getElementById = () => ({"
+        "  set className(v) { cls = v; }, set textContent(v) { txt = v; },"
+        "  set title(v) {}, removeAttribute() {} });"
+        "equityRenderAnalyzeBadge(false); return { cls, txt };"
+    )
+    assert hidden['cls'] == 'hidden'

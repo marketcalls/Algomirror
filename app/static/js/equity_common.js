@@ -95,6 +95,155 @@ async function equityReadJson(response) {
     return { ok: false, definite: definite, status: status, data: data, message: message };
 }
 
+/* --------------------------------------------------------------- polling */
+
+/*
+ * Poll on an interval, but not while the tab is hidden.
+ *
+ * Every equity screen ran a bare setInterval, so a tab left open overnight kept
+ * asking five brokers for funds and holdings until the laptop was closed. It
+ * also meant that on returning to a tab the screen showed whatever was on it
+ * when it was hidden, for up to a full interval, with no indication the number
+ * was old.
+ *
+ * Hidden pauses the timer; visible refreshes once immediately and then resumes.
+ * Returns a stop function, so a screen that navigates away can clean up rather
+ * than leaving a timer running against a dead DOM.
+ */
+function equityStartPolling(fn, intervalMs) {
+    let timer = null;
+
+    function tick() {
+        try {
+            fn();
+        } catch (error) {
+            console.error('Equity poll failed:', error);
+        }
+    }
+
+    function start() {
+        if (timer === null) {
+            timer = setInterval(tick, intervalMs);
+        }
+    }
+
+    function stop() {
+        if (timer !== null) {
+            clearInterval(timer);
+            timer = null;
+        }
+    }
+
+    function onVisibilityChange() {
+        if (document.hidden) {
+            stop();
+        } else {
+            // Refresh before resuming: what is on screen is up to one whole
+            // interval old, and on a trading screen that reads as current.
+            tick();
+            start();
+        }
+    }
+
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    if (!document.hidden) { start(); }
+
+    return function stopPolling() {
+        stop();
+        document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
+}
+
+/* ------------------------------------------------------------ feed badge */
+
+/*
+ * Render the price feed's health into a badge.
+ *
+ * Every equity endpoint already returns a price_feed block and no screen has
+ * ever shown it, so a silently dead subscription looked exactly like a quiet
+ * market. The vocabulary matches the F&O screens on purpose: a user should not
+ * have to learn two dialects for the same fact.
+ *
+ *   Live      every symbol in view came from the push feed
+ *   Mixed     some came from the REST backstop
+ *   REST      none did, the feed is up but has no prices for these symbols
+ *   Offline   the feed is not authenticated
+ */
+function equityRenderFeedBadge(priceFeed, elementId) {
+    const el = document.getElementById(elementId || 'equity-feed-badge');
+    if (!el) { return; }
+
+    const feed = priceFeed || {};
+    const source = feed.source || 'none';
+
+    if (source === 'none') {
+        el.className = 'hidden';
+        el.textContent = '';
+        el.removeAttribute('title');
+        return;
+    }
+
+    let label = 'Offline';
+    let cls = 'badge badge-error badge-sm';
+
+    if (!feed.authenticated) {
+        label = 'Offline';
+        cls = 'badge badge-error badge-sm';
+    } else if (source === 'websocket') {
+        label = 'Live';
+        cls = 'badge badge-success badge-sm gap-1';
+    } else if (source === 'mixed') {
+        label = 'Mixed';
+        cls = 'badge badge-warning badge-sm';
+    } else {
+        label = 'REST';
+        cls = 'badge badge-warning badge-sm';
+    }
+
+    el.className = cls;
+    el.textContent = label;
+
+    // The detail belongs in a tooltip, not the badge: the badge answers "can I
+    // trust this number", the tooltip answers "why not".
+    const parts = [];
+    if (feed.symbols_requested) {
+        parts.push(feed.symbols_from_feed + ' of ' + feed.symbols_requested + ' from the live feed');
+    }
+    if (feed.last_tick_age_seconds !== null && feed.last_tick_age_seconds !== undefined) {
+        parts.push('last tick ' + Math.round(feed.last_tick_age_seconds) + 's ago');
+    }
+    if (!feed.authenticated) {
+        parts.push('the price feed is not connected');
+    }
+    el.title = parts.join(', ');
+}
+
+/* ------------------------------------------------------------ analyze mode */
+
+/*
+ * Render whether the OpenAlgo host is in Analyze mode.
+ *
+ * Analyzer mode is application-wide per OpenAlgo instance, explicitly not per
+ * API key, so this is a property of the host an account points at rather than
+ * of the account. In Analyze mode orders are simulated and never reach a
+ * broker, which a user must not discover after the fact.
+ */
+function equityRenderAnalyzeBadge(analyze, elementId) {
+    const el = document.getElementById(elementId || 'equity-analyze-badge');
+    if (!el) { return; }
+
+    if (!analyze) {
+        el.className = 'hidden';
+        el.textContent = '';
+        el.removeAttribute('title');
+        return;
+    }
+
+    el.className = 'badge badge-warning badge-sm';
+    el.textContent = 'Analyze';
+    el.title = 'This OpenAlgo host is in Analyze mode. Orders are simulated and do not reach a broker.';
+}
+
 /* ------------------------------------------------------------------ text */
 
 function equitySetText(id, text, className) {

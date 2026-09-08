@@ -22,6 +22,8 @@
             </p>
         </div>
         <div class="flex gap-3 items-center flex-wrap">
+            <span id="equity-feed-badge" class="hidden"></span>
+            <span id="equity-analyze-badge" class="hidden"></span>
             <span class="text-xs text-base-content/50 equity-num" id="equity-last-updated">Not loaded yet</span>
             <button onclick="equityLoadAccounts()" class="btn btn-ghost btn-sm h-9" id="equity-refresh-btn">Refresh</button>
             {% if accounts %}
@@ -453,13 +455,13 @@ async function equitySaveAllocation() {
 document.addEventListener('DOMContentLoaded', function () {
     {% if accounts %}
     equityLoadAccounts();
-    equityPollTimer = setInterval(equityLoadAccounts, EQUITY_POLL_MS);
+    equityPollTimer = equityStartPolling(equityLoadAccounts, EQUITY_POLL_MS);
     {% endif %}
 });
 
 window.addEventListener('beforeunload', function () {
     if (equityPollTimer) {
-        clearInterval(equityPollTimer);
+        equityPollTimer();
         equityPollTimer = null;
     }
 });

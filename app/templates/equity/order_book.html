@@ -23,6 +23,8 @@
             </p>
         </div>
         <div class="flex gap-3 items-center flex-wrap">
+            <span id="equity-feed-badge" class="hidden"></span>
+            <span id="equity-analyze-badge" class="hidden"></span>
             <span class="text-xs text-base-content/50 equity-num" id="equity-last-updated">Not loaded yet</span>
             <button onclick="equityLoadOrderBook()" class="btn btn-ghost btn-sm h-9" id="equity-refresh-btn">Refresh</button>
             <a href="{{ url_for('equity.place_order') }}#order-status" class="btn btn-primary btn-sm h-9">Order Status</a>
@@ -754,6 +756,7 @@ async function equityLoadOrderBook() {
         equityRenderOrders(data.orders || []);
         equityShowStale('');
         equitySetText('equity-last-updated', 'Updated ' + EquityFormat.clockTime(data.generated_at));
+        equityRenderFeedBadge(data.price_feed);
     } catch (error) {
         // Degrade to a visible stale marker, never blank the page.
         equityShowStale('The order book could not be loaded, showing the last values loaded. Retrying shortly.');
@@ -766,12 +769,12 @@ async function equityLoadOrderBook() {
 
 document.addEventListener('DOMContentLoaded', function () {
     equityLoadOrderBook();
-    equityPollTimer = setInterval(equityLoadOrderBook, EQUITY_POLL_MS);
+    equityPollTimer = equityStartPolling(equityLoadOrderBook, EQUITY_POLL_MS);
 });
 
 window.addEventListener('beforeunload', function () {
     if (equityPollTimer) {
-        clearInterval(equityPollTimer);
+        equityPollTimer();
         equityPollTimer = null;
     }
 });

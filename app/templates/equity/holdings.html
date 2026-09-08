@@ -23,6 +23,8 @@
             </p>
         </div>
         <div class="flex gap-3 items-center flex-wrap">
+            <span id="equity-feed-badge" class="hidden"></span>
+            <span id="equity-analyze-badge" class="hidden"></span>
             <span class="text-xs text-base-content/50 equity-num" id="equity-last-updated">Not loaded yet</span>
             {% if accounts %}
             <button onclick="equityRefreshAll()" class="btn btn-ghost btn-sm h-9" id="equity-refresh-btn">Refresh</button>
@@ -1444,6 +1446,8 @@ function equityRenderNotes(payload) {
     );
 
     equitySetText('equity-last-updated', 'Updated ' + EquityFormat.clockTime(payload.generated_at));
+
+    equityRenderFeedBadge(payload.price_feed);
 }
 
 async function equityLoadHoldings(force) {
@@ -1526,7 +1530,7 @@ document.addEventListener('DOMContentLoaded', function () {
     {% if accounts %}
     equityUpdateExportLink();
     equityRefreshAll();
-    equityPollTimer = setInterval(function () {
+    equityPollTimer = equityStartPolling(function () {
         equityLoadHoldings(false);
         equityLoadExitQueue();
     }, EQUITY_POLL_MS);
@@ -1535,7 +1539,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
 window.addEventListener('beforeunload', function () {
     if (equityPollTimer) {
-        clearInterval(equityPollTimer);
+        equityPollTimer();
         equityPollTimer = null;
     }
 });

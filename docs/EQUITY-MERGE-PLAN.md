@@ -350,9 +350,9 @@ restarts. So this phase is mostly surfacing and widening, not plumbing.
 | 3.1 | Move the price feed from LTP to Quote mode | DONE | Quote carries the previous close that LTP does not, removing a per-symbol per-day REST call. Stored separately from the traded price and not age gated, since it belongs to a finished session |
 | 3.2 | Websocket depth for Place Order | PRD M4 wants 5-level depth. Websocket depth supplies strictly more than REST (adds a per-level `orders` count). Currently REST at 15s (`app/equity/routes.py:5183`). Subscribe one symbol, only while the panel is open, keep REST as the cold-start fallback since the first frame has not arrived on open |
 | 3.3 | SSE for the live equity screens | Follow `app/trading/routes.py:1519`: capture `current_app._get_current_object()` before the generator, `with app.app_context()` plus `db.session.expire_all()` each iteration, `X-Accel-Buffering: no`. Client pattern from `strategy/builder.html:2503-2541` |
-| 3.4 | Feed freshness badge on equity screens | Endpoints already return `price_feed` and nothing renders it. Reuse the F&O badge vocabulary |
-| 3.5 | Analyze-mode badge | Analyzer mode is application-wide per OpenAlgo instance, not per API key. Detect via `POST /api/v1/analyzer`, read `data.analyze_mode`. The existing per-account F&O badge is really reporting a host-level fact |
-| 3.6 | Pause polling on `visibilitychange` | Only `equity_alerts.js` does this today; `positions.html` never clears its timer at all |
+| 3.4 | Feed freshness badge | DONE | `equityRenderFeedBadge` shows Live / Mixed / REST / Offline on the five price screens, with the detail in a tooltip. F&O vocabulary reused |
+| 3.5 | Analyze-mode badge | PARTIAL: `equityRenderAnalyzeBadge` and the slot exist on every screen; the backend still needs to report host analyze state in the payloads. | Analyzer mode is application-wide per OpenAlgo instance, not per API key. Detect via `POST /api/v1/analyzer`, read `data.analyze_mode`. The existing per-account F&O badge is really reporting a host-level fact |
+| 3.6 | Pause polling on `visibilitychange` | DONE | `equityStartPolling` replaces every bare `setInterval`. A hidden tab stops polling; returning refreshes once before resuming |
 
 Hard limit to design to: **there is no position or margin stream.** The OpenAlgo proxy explicitly
 skips private position and margin topics. Prices stream and order updates stream; positions,
