@@ -1630,12 +1630,33 @@ async function equitySubmitOrder() {
             body: JSON.stringify(body),
             signal: AbortSignal.timeout(EQUITY_PLACE_TIMEOUT_MS)
         });
-        const data = await response.json();
-        equityRenderResult(data);
+        const read = await equityReadJson(response);
+
+        if (read.ok) {
+            equityRenderResult(read.data);
+        } else if (read.definite) {
+            // AlgoMirror refused this itself (rate limit, CSRF, validation), so
+            // it never reached the order engine and no broker saw it. Saying so
+            // plainly matters: the indeterminate wording below sends the admin
+            // hunting through five broker terminals for an order nobody placed.
+            equityRenderResult({
+                status: 'error',
+                message: read.message,
+                splits: []
+            });
+        } else {
+            equityRenderResult({
+                status: 'error',
+                message: 'The answer to this submission never arrived. It may still have reached one or more brokers. '
+                       + 'Check Order Status and your broker order book before sending anything again. Nothing was '
+                       + 'resent automatically.',
+                splits: []
+            });
+        }
     } catch (error) {
-        // A submit whose answer never arrived may still have reached a broker,
-        // so this is reported as unknown rather than as a failure, and nothing
-        // is resent.
+        // No answer at all: a timeout, an aborted request or a dropped
+        // connection. The order may still have reached a broker, so this is
+        // reported as unknown rather than as a failure, and nothing is resent.
         equityRenderResult({
             status: 'error',
             message: 'The answer to this submission never arrived. It may still have reached one or more brokers. '

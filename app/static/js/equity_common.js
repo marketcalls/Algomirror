@@ -34,6 +34,67 @@
 
 'use strict';
 
+/* ---------------------------------------------------------------- fetch */
+
+/*
+ * HTTP statuses AlgoMirror itself returns before a request can reach a broker.
+ *
+ * 429 is the rate limiter, 403 a CSRF or auth refusal, 400/422 a validation
+ * refusal, 404/405 a wrong route. Every one of them is decided inside this
+ * application, so on an order submit they mean NOTHING WAS SENT. That matters:
+ * these bodies are often HTML rather than JSON, so response.json() throws and
+ * the submit lands in a catch block that reports "it may still have reached a
+ * broker". Telling an admin their order might be live when it certainly is not
+ * is the wrong direction to be wrong in, and it invites them to go hunting
+ * through five broker terminals for an order nobody placed.
+ *
+ * 5xx is deliberately absent. The server may have reached the engine and died
+ * afterwards, so that stays indeterminate.
+ */
+const EQUITY_DEFINITE_REFUSAL_STATUSES = [400, 401, 403, 404, 405, 409, 415, 422, 429];
+
+/*
+ * Read a JSON response without letting a non-JSON error body masquerade as a
+ * lost answer.
+ *
+ * Returns { ok, definite, status, data, message }:
+ *   ok        the request succeeded and the body parsed
+ *   definite  this application refused it, so no broker was contacted
+ *   data      the parsed body, or null
+ */
+async function equityReadJson(response) {
+    const status = response ? response.status : 0;
+    const definite = EQUITY_DEFINITE_REFUSAL_STATUSES.indexOf(status) !== -1;
+
+    let data = null;
+    try {
+        data = await response.json();
+    } catch (error) {
+        data = null;
+    }
+
+    if (response && response.ok && data) {
+        return { ok: true, definite: false, status: status, data: data, message: '' };
+    }
+
+    let message = (data && data.message) || '';
+    if (!message) {
+        if (status === 429) {
+            message = 'Too many requests. This was refused before it reached any broker, '
+                    + 'so nothing was sent. Wait a moment and try again.';
+        } else if (status === 403) {
+            message = 'This request was refused before it reached any broker, so nothing '
+                    + 'was sent. Reload the page and sign in again.';
+        } else if (definite) {
+            message = 'This request was refused before it reached any broker, so nothing was sent.';
+        } else {
+            message = 'The server did not answer usefully (HTTP ' + status + ').';
+        }
+    }
+
+    return { ok: false, definite: definite, status: status, data: data, message: message };
+}
+
 /* ------------------------------------------------------------------ text */
 
 function equitySetText(id, text, className) {

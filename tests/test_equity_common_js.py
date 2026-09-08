@@ -139,3 +139,100 @@ def test_duplication_across_templates_keeps_going_down():
         f'{len(duplicated)} helpers are duplicated across equity templates, up from 16. '
         f'New duplicates: {sorted(duplicated)}'
     )
+
+
+# ---------------------------------------------------------------------------
+# Behaviour tests for equityReadJson, exercised through node.
+#
+# This helper decides whether a failed order submit gets reported as "nothing
+# was sent" or as "this may be live at a broker". Getting that backwards either
+# sends the admin hunting through five broker terminals for an order nobody
+# placed, or lets a real order sit unnoticed. It is worth running rather than
+# only reading, so these drive the real file through node.
+# ---------------------------------------------------------------------------
+
+import json
+import shutil
+import subprocess
+import tempfile
+import os
+
+NODE = shutil.which('node')
+needs_node = pytest.mark.skipif(NODE is None, reason='node is not installed')
+
+
+def run_js(snippet):
+    """Load equity_common.js in node and evaluate a snippet against it."""
+    harness = (
+        "global.document = { getElementById: () => null, "
+        "querySelector: () => null, createElement: () => ({ classList: { add(){}, remove(){} } }) };\n"
+        + COMMON_JS.read_text(encoding='utf-8').replace("'use strict';", '', 1)
+        + "\n;(async () => { const out = await (async () => { " + snippet
+        + " })(); process.stdout.write(JSON.stringify(out)); })();"
+    )
+    with tempfile.NamedTemporaryFile('w', suffix='.mjs', delete=False, encoding='utf-8') as fh:
+        fh.write(harness)
+        path = fh.name
+    try:
+        result = subprocess.run([NODE, path], capture_output=True, text=True, timeout=30)
+        assert result.returncode == 0, result.stderr
+        return json.loads(result.stdout)
+    finally:
+        os.unlink(path)
+
+
+def fake_response(status, body='{}', ok=None, json_ok=True):
+    is_ok = (200 <= status < 300) if ok is None else ok
+    parse = f'JSON.parse({body!r})' if json_ok else "(() => { throw new Error('not json'); })()"
+    return f'{{ status: {status}, ok: {str(is_ok).lower()}, json: async () => {parse} }}'
+
+
+@needs_node
+def test_a_success_is_reported_as_ok():
+    out = run_js(
+        f"return await equityReadJson({fake_response(200, '{\"status\":\"success\"}')});"
+    )
+    assert out['ok'] is True
+    assert out['definite'] is False
+
+
+@needs_node
+@pytest.mark.parametrize('status', [400, 401, 403, 404, 405, 409, 415, 422, 429])
+def test_our_own_refusals_are_definite(status):
+    """These are decided inside AlgoMirror, so no broker was contacted."""
+    out = run_js(f"return await equityReadJson({fake_response(status, json_ok=False)});")
+    assert out['ok'] is False
+    assert out['definite'] is True, f'HTTP {status} should mean nothing was sent'
+
+
+@needs_node
+@pytest.mark.parametrize('status', [500, 502, 503, 504])
+def test_server_errors_stay_indeterminate(status):
+    """A 5xx may have reached the engine and died afterwards."""
+    out = run_js(f"return await equityReadJson({fake_response(status, json_ok=False)});")
+    assert out['ok'] is False
+    assert out['definite'] is False, f'HTTP {status} must not claim nothing was sent'
+
+
+@needs_node
+def test_a_rate_limit_says_nothing_was_sent():
+    """The exact case that used to read as 'it may still have reached a broker'."""
+    out = run_js(f"return await equityReadJson({fake_response(429, json_ok=False)});")
+    assert out['definite'] is True
+    assert 'nothing was sent' in out['message'].lower()
+
+
+@needs_node
+def test_a_non_json_error_body_does_not_throw():
+    """Flask returns HTML for 429 and 403, which response.json() cannot parse."""
+    out = run_js(f"return await equityReadJson({fake_response(403, json_ok=False)});")
+    assert out['data'] is None
+    assert out['message']
+
+
+@needs_node
+def test_the_servers_own_message_wins_when_it_sends_one():
+    body = '{"status":"error","message":"A GTT order needs a limit price"}'
+    out = run_js(f"return await equityReadJson({fake_response(400, body)});")
+    assert out['message'] == 'A GTT order needs a limit price'
+    assert out['definite'] is True
