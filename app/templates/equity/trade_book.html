@@ -148,6 +148,11 @@
                 <div class="stat-value text-2xl equity-num" id="equity-total-value">--</div>
                 <div class="stat-desc">Execution price times quantity</div>
             </div>
+            <div class="stat">
+                <div class="stat-title">Est. Costs</div>
+                <div class="stat-value text-2xl equity-num" id="equity-total-costs">--</div>
+                <div class="stat-desc" id="equity-costs-note">From the rates in Settings</div>
+            </div>
         </div>
     </div>
 
@@ -173,6 +178,8 @@
                             <th class="text-right">Qty</th>
                             <th class="text-right">Execution Price</th>
                             <th class="text-right">Value</th>
+                            <th class="text-right">Est. Costs</th>
+                            <th class="text-right">Net Value</th>
                             <th>Trade Nature</th>
                             <th>Order</th>
                         </tr>
@@ -295,7 +302,7 @@ const EquityFormat = {
 
 const EQUITY_POLL_MS = 30000;
 const EQUITY_FETCH_TIMEOUT_MS = 20000;
-const EQUITY_COLUMN_COUNT = 11;
+const EQUITY_COLUMN_COUNT = 13;
 
 let equityPollTimer = null;
 let equityLoading = false;
@@ -402,6 +409,8 @@ function equityTradeRow(trade) {
     tr.appendChild(equityCell(EquityFormat.integer(trade.executed_quantity), 'text-right equity-num'));
     tr.appendChild(equityCell(EquityFormat.rupees(trade.execution_price), 'text-right equity-num'));
     tr.appendChild(equityCell(EquityFormat.rupees(trade.trade_value), 'text-right equity-num'));
+    tr.appendChild(equityCell(EquityFormat.rupees(trade.est_costs), 'text-right equity-num'));
+    tr.appendChild(equityCell(EquityFormat.rupees(trade.net_value), 'text-right equity-num'));
     tr.appendChild(equityCell(trade.trade_nature || 'Unassigned'));
     tr.appendChild(equityOrderLinkCell(trade));
 
@@ -570,6 +579,17 @@ function equityRenderTotals(payload) {
     equitySetText('equity-total-trades', EquityFormat.integer(totals.trades));
     equitySetText('equity-total-quantity', EquityFormat.integer(totals.quantity));
     equitySetText('equity-total-value', EquityFormat.compact(totals.value));
+    equitySetText('equity-total-costs', EquityFormat.compact(totals.est_costs));
+
+    // An account with no rates configured contributes zero cost, which would
+    // read as "this trade was free" rather than "nobody told us the rates".
+    const unconfigured = (payload.unconfigured_rate_accounts || []).length;
+    equitySetText(
+        'equity-costs-note',
+        unconfigured
+            ? unconfigured + ' account(s) have no rates set, so costs are understated'
+            : 'From the rates in Settings'
+    );
 
     const viewWindow = payload.window || {};
     equitySetText(

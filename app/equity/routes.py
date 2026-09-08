@@ -3117,11 +3117,26 @@ def _order_payload(order, splits, directory=None, include_splits=False):
     return payload
 
 
-def _trade_payload(trade, split, order, directory=None):
-    """One fill, with the parent order it belongs to."""
+def _trade_payload(trade, split, order, directory=None, rates_by_account=None):
+    """
+    One fill, with the parent order it belongs to and what it cost.
+
+    PRD 7.8 requires Est. Costs on the Trade Book, driven by the per-account
+    rates configured in Settings. Costs are charged on the actual side of this
+    fill rather than always as a sell: STT and stamp duty differ by side, and
+    DP charges apply per scrip on a sell only, so costing a buy as a sell would
+    overstate it.
+    """
     account = (directory or {}).get(split.account_id) or {}
     quantity = _to_int(trade.executed_quantity)
     price = _to_float(trade.execution_price)
+    value = turnover(price, quantity)
+    costs = estimate_costs(
+        value,
+        order.side,
+        (rates_by_account or {}).get(split.account_id, BrokerageRates()),
+        scrip_count=1
+    )
     return {
         'trade_id': trade.id,
         'split_id': split.id,
@@ -3139,7 +3154,10 @@ def _trade_payload(trade, split, order, directory=None):
         'trade_nature': order.trade_nature.name if order.trade_nature else None,
         'execution_price': _money(price),
         'executed_quantity': quantity,
-        'trade_value': _money(turnover(price, quantity)),
+        'trade_value': _money(value),
+        'est_costs': _money(costs.total),
+        'net_value': _money(value - costs.total if order.side == EQUITY_SIDE_SELL
+                            else value + costs.total),
         'executed_at': _iso(trade.executed_at),
         'broker_trade_id': trade.broker_trade_id,
         'broker_order_id': split.broker_order_id,
@@ -4606,9 +4624,10 @@ def _build_trade_book(filters):
     """
     M6 Trade Book: every fill, with its execution price and its parent order.
 
-    Fills are written by the order status reconciliation, which is not part of
-    this increment, so this list is empty until that lands. The screen has to
-    render an empty state rather than assume rows.
+    Fills are written by the equity fill poller from the broker's trade book,
+    so this is real from the moment an order fills. It was structurally empty
+    before that existed. The screen still renders an empty state, because a day
+    with no trades is normal.
     """
     query = db.session.query(EquityTrade, EquityOrderSplit, EquityOrder).join(
         EquityOrderSplit, EquityTrade.split_id == EquityOrderSplit.id
@@ -4649,8 +4668,12 @@ def _build_trade_book(filters):
     ).all()
 
     directory = _account_directory()
+    # One rate lookup for the whole book rather than one per fill.
+    rates_by_account, unconfigured_rate_accounts = _brokerage_rates_by_account(
+        sorted({split.account_id for _, split, _ in records})
+    )
     rows = [
-        _trade_payload(trade, split, order, directory)
+        _trade_payload(trade, split, order, directory, rates_by_account)
         for trade, split, order in records
     ]
 
@@ -4660,7 +4683,11 @@ def _build_trade_book(filters):
             'trades': len(rows),
             'quantity': sum(row['executed_quantity'] for row in rows),
             'value': _money(sum(row['trade_value'] for row in rows)),
+            'est_costs': _money(sum(row['est_costs'] for row in rows)),
         },
+        # Named so the screen can say the figures are incomplete rather than
+        # showing a confidently wrong zero for an account with no rates set.
+        'unconfigured_rate_accounts': unconfigured_rate_accounts,
         'filters': _filters_echo(filters),
         'options': _filter_options(),
         'window': {
