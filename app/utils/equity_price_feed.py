@@ -41,9 +41,19 @@ SymbolKey = Tuple[str, str]
 # BSE, and NSE is the common case.
 DEFAULT_EXCHANGE = 'NSE'
 
-# Subscription mode. LTP only: it is the cheapest push mode and the only field
-# the Equity screens need live. Previous close is not pushed in this mode.
-SUBSCRIPTION_MODE = 'ltp'
+# Subscription mode. Quote rather than LTP.
+#
+# LTP is the cheaper push mode, but it carries only the traded price, so
+# previous close had to be fetched over REST once per symbol per day and
+# retried on a zero answer. Quote pushes open, high, low, close, volume and the
+# timestamp alongside the LTP, and its `close` IS the previous close. That
+# removes a recurring REST call from the hot path and means the day change on
+# every equity screen comes from the same tick as the price it is compared
+# against, rather than from a separate call that could be a day stale.
+#
+# The extra bandwidth is per tick, not per symbol subscribed, and the equity
+# feed is capped at MAX_TRACKED_SYMBOLS well below the 1000 the proxy allows.
+SUBSCRIPTION_MODE = 'quote'
 
 # Hard ceiling on how many symbols this feed will ever hold subscribed, so the
 # set cannot grow without bound as holdings change across accounts.
@@ -204,6 +214,9 @@ class EquityPriceFeed:
         self._prices: Dict[SymbolKey, float] = {}
         # Tick time per symbol, so an aged price can be told from a live one.
         self._price_times: Dict[SymbolKey, datetime] = {}
+        # Previous close per symbol, pushed on every Quote tick. Kept apart
+        # from _prices so a previous close can never be served as a live price.
+        self._prev_closes: Dict[SymbolKey, float] = {}
 
         # Diagnostics.
         self._tick_count = 0
@@ -321,7 +334,7 @@ class EquityPriceFeed:
         cached = self._manager_ltp(manager)
         upper_index: Optional[Dict[str, object]] = None
 
-        # Timezone aware to match how _price_times is written in _on_ltp_tick.
+        # Timezone aware to match how _price_times is written in _on_tick.
         # Comparing a naive datetime against an aware one raises TypeError.
         cutoff = datetime.now(timezone.utc) - timedelta(seconds=MAX_PRICE_AGE_SECONDS)
         with self._lock:
@@ -372,6 +385,36 @@ class EquityPriceFeed:
 
         return prices
 
+    def get_previous_closes(self, symbol_keys) -> Dict[SymbolKey, float]:
+        """
+        Previous closes pushed on Quote ticks, for the day change on screen.
+
+        Deliberately not age gated, unlike get_prices. A previous close belongs
+        to the last completed session, so it does not go stale while the market
+        is open; a traded price does, and serving a frozen one as live is the
+        failure get_prices exists to prevent.
+
+        Never calls the broker. A symbol with no pushed close is simply absent,
+        so the caller keeps its own REST fallback for the first poll after a
+        restart and for anything the feed has not yet seen a tick for.
+
+        Args:
+            symbol_keys: iterable of (symbol, exchange) tuples.
+
+        Returns:
+            dict: {(SYMBOL, EXCHANGE): previous_close} with values above zero.
+        """
+        keys = _normalise_keys(symbol_keys)
+        if not keys:
+            return {}
+
+        with self._lock:
+            return {
+                key: self._prev_closes[key]
+                for key in keys
+                if _to_price(self._prev_closes.get(key)) > 0
+            }
+
     def prime(self, symbol_keys) -> Dict[SymbolKey, float]:
         """
         ensure_subscribed followed by get_prices, for a caller that wants both.
@@ -415,6 +458,7 @@ class EquityPriceFeed:
                 self._pending.discard(key)
                 self._prices.pop(key, None)
                 self._price_times.pop(key, None)
+                self._prev_closes.pop(key, None)
 
         if released:
             self._unsubscribe(released)
@@ -434,6 +478,7 @@ class EquityPriceFeed:
             self._pending.clear()
             self._prices.clear()
             self._price_times.clear()
+            self._prev_closes.clear()
 
         if released:
             self._unsubscribe(released)
@@ -497,14 +542,21 @@ class EquityPriceFeed:
     # Tick handling
     # ------------------------------------------------------------------
 
-    def _on_ltp_tick(self, payload):
+    def _on_tick(self, payload):
         """
-        LTP handler, called on the WebSocket reader thread.
+        Tick handler, called on the WebSocket reader thread.
 
         Records the tick timestamp and, for a symbol this feed tracks, the
-        pushed price. No database write and no broker call happens here. Every
-        failure is swallowed: an exception must never propagate back into the
-        reader thread.
+        pushed price. In Quote mode the tick also carries `close`, which is the
+        PREVIOUS close rather than a current one, so it is stored separately and
+        never confused with the traded price.
+
+        Registered for both LTP and Quote ticks: the manager routes by the mode
+        on each tick, not by what was subscribed, so a stray LTP tick during a
+        mode change still lands somewhere rather than being dropped.
+
+        No database write and no broker call happens here. Every failure is
+        swallowed: an exception must never propagate back into the reader thread.
         """
         try:
             if not isinstance(payload, dict):
@@ -516,6 +568,9 @@ class EquityPriceFeed:
             symbol = str(payload.get('symbol') or data.get('symbol') or '').strip().upper()
             exchange = str(payload.get('exchange') or data.get('exchange') or '').strip().upper()
             price = _to_price(data.get('ltp') if data.get('ltp') is not None else payload.get('ltp'))
+            # Quote mode only. Absent from an LTP tick, and 0 before the first
+            # session of a newly listed symbol, so it is only stored when real.
+            prev_close = _to_price(data.get('close'))
 
             now = datetime.now(timezone.utc)
 
@@ -536,6 +591,11 @@ class EquityPriceFeed:
                     # bounded REST backstop refreshes it.
                     self._prices[key] = price
                     self._price_times[key] = now
+                if prev_close > 0:
+                    # No age gate. A previous close is a property of the last
+                    # completed session, so unlike a traded price it does not
+                    # go stale during the day.
+                    self._prev_closes[key] = prev_close
 
         except Exception as exc:
             try:
@@ -559,11 +619,20 @@ class EquityPriceFeed:
                 processor = getattr(manager, 'data_processor', None)
                 if processor is None or not hasattr(processor, 'register_ltp_handler'):
                     return
-                processor.register_ltp_handler(self._on_ltp_tick)
+                # Both, because the manager routes each tick by the mode on the
+                # tick itself. Subscribing in Quote mode does not guarantee that
+                # nothing ever arrives as LTP, and a tick routed to a handler
+                # that was never registered is simply lost.
+                processor.register_ltp_handler(self._on_tick)
+                if hasattr(processor, 'register_quote_handler'):
+                    processor.register_quote_handler(self._on_tick)
                 self._handler_registered = True
-                logger.debug("[EQUITY_FEED] LTP handler registered on shared WebSocket manager")
+                logger.debug(
+                    "[EQUITY_FEED] Tick handlers registered on shared WebSocket manager "
+                    f"(subscribing in {SUBSCRIPTION_MODE} mode)"
+                )
             except Exception as exc:
-                logger.error(f"[EQUITY_FEED] Could not register LTP handler: {exc}")
+                logger.error(f"[EQUITY_FEED] Could not register tick handlers: {exc}")
 
     # ------------------------------------------------------------------
     # Internals
@@ -597,6 +666,7 @@ class EquityPriceFeed:
             self._symbol_index.clear()
             self._prices.clear()
             self._price_times.clear()
+            self._prev_closes.clear()
             replaced = previous is not None
 
         with self._handler_lock:

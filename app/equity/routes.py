@@ -1178,12 +1178,18 @@ def _resolve_prices(creds, snapshots, symbol_keys, row_closes=None,
     try:
         equity_price_feed.ensure_subscribed(keys)
         feed_prices = equity_price_feed.get_prices(keys)
+        # The feed subscribes in Quote mode, whose ticks carry the previous
+        # close. Preferring it removes the REST round trip this used to need
+        # once per symbol per day, and means the day change is computed against
+        # the same tick as the price it is compared with.
+        feed_closes = equity_price_feed.get_previous_closes(keys)
     except Exception as exc:
         current_app.logger.warning(
             f'Equity price feed unavailable, falling back to REST quotes: {exc}',
             extra={'event': 'equity_feed_unavailable'}
         )
         feed_prices = {}
+        feed_closes = {}
 
     row_closes = row_closes or {}
     quotes = {}
@@ -1192,7 +1198,10 @@ def _resolve_prices(creds, snapshots, symbol_keys, row_closes=None,
         if ltp > 0:
             stats['from_feed'] += 1
 
-        prev_close = _prev_close_cached(key)
+        # Pushed close first, then the day cache, then the broker's own row.
+        prev_close = _to_float(feed_closes.get(key))
+        if prev_close <= 0:
+            prev_close = _prev_close_cached(key)
         if prev_close <= 0:
             # Last resort for the day's reference price: the close the broker
             # put on the holding row itself. Free, and better than showing no

@@ -3,7 +3,7 @@
 How Saravanan's equity commit gets folded into AlgoMirror: what is adopted, what is
 rewritten, what is discarded, and what has to be fixed first.
 
-Status: Phases 0 and 1 done. Phase 2 core done (fills are real). Phases 3 to 5 not started.
+Status: Phases 0 and 1 done. Phase 2 core done. Phase 3 started (3.1 done). Phases 4 and 5 not started.
 Prepared: 8 September 2026.
 
 ## 0. Provenance
@@ -347,7 +347,7 @@ restarts. So this phase is mostly surfacing and widening, not plumbing.
 
 | # | Item | Note |
 | --- | --- | --- |
-| 3.1 | Move the price feed from LTP to Quote mode | Quote carries the previous close that LTP does not, removing a per-symbol per-day REST call |
+| 3.1 | Move the price feed from LTP to Quote mode | DONE | Quote carries the previous close that LTP does not, removing a per-symbol per-day REST call. Stored separately from the traded price and not age gated, since it belongs to a finished session |
 | 3.2 | Websocket depth for Place Order | PRD M4 wants 5-level depth. Websocket depth supplies strictly more than REST (adds a per-level `orders` count). Currently REST at 15s (`app/equity/routes.py:5183`). Subscribe one symbol, only while the panel is open, keep REST as the cold-start fallback since the first frame has not arrived on open |
 | 3.3 | SSE for the live equity screens | Follow `app/trading/routes.py:1519`: capture `current_app._get_current_object()` before the generator, `with app.app_context()` plus `db.session.expire_all()` each iteration, `X-Accel-Buffering: no`. Client pattern from `strategy/builder.html:2503-2541` |
 | 3.4 | Feed freshness badge on equity screens | Endpoints already return `price_feed` and nothing renders it. Reuse the F&O badge vocabulary |

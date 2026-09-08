@@ -116,3 +116,112 @@ class TestStalenessGuard:
             with f._lock:
                 f._prices.pop(key, None)
                 f._price_times.pop(key, None)
+
+
+class TestQuoteMode:
+    """
+    The feed subscribes in Quote rather than LTP mode.
+
+    Quote carries the previous close as `close`, which removes a REST call that
+    used to run once per symbol per day. The risk introduced is confusing that
+    previous close with a live price, so these tests pin that they are stored
+    separately and aged differently.
+    """
+
+    def test_the_feed_subscribes_in_quote_mode(self):
+        assert feed_module.SUBSCRIPTION_MODE == "quote"
+
+    def test_a_quote_tick_records_the_previous_close(self):
+        f = feed_module.equity_price_feed
+        key = ("QUOTESYM", "NSE")
+        with f._lock:
+            f._subscribed.add(key)
+            f._symbol_index.setdefault(key[0], set()).add(key[1])
+        try:
+            f._on_tick({
+                "symbol": "QUOTESYM", "exchange": "NSE", "mode": 2,
+                "data": {"ltp": 105.0, "close": 100.0, "open": 101.0,
+                         "high": 106.0, "low": 100.5, "volume": 1000},
+            })
+            assert f.get_prices([key]).get(key) == pytest.approx(105.0)
+            assert f.get_previous_closes([key]).get(key) == pytest.approx(100.0)
+        finally:
+            f.release([key])
+
+    def test_a_previous_close_is_never_served_as_a_price(self):
+        """The one way this change could put a wrong number on a screen."""
+        f = feed_module.equity_price_feed
+        key = ("CLOSEONLY", "NSE")
+        with f._lock:
+            f._subscribed.add(key)
+            f._symbol_index.setdefault(key[0], set()).add(key[1])
+        try:
+            # A tick with a close but no traded price yet.
+            f._on_tick({
+                "symbol": "CLOSEONLY", "exchange": "NSE", "mode": 2,
+                "data": {"ltp": 0, "close": 100.0},
+            })
+            assert key not in f.get_prices([key])
+            assert f.get_previous_closes([key]).get(key) == pytest.approx(100.0)
+        finally:
+            f.release([key])
+
+    def test_the_previous_close_is_not_age_gated(self):
+        """It belongs to a finished session, so it does not go stale intraday."""
+        f = feed_module.equity_price_feed
+        key = ("OLDCLOSE", "NSE")
+        old = datetime.now(timezone.utc) - timedelta(seconds=feed_module.MAX_PRICE_AGE_SECONDS + 300)
+        with f._lock:
+            f._prev_closes[key] = 100.0
+            f._prices[key] = 105.0
+            f._price_times[key] = old
+        try:
+            # The price has aged out; the previous close has not.
+            assert key not in f.get_prices([key])
+            assert f.get_previous_closes([key]).get(key) == pytest.approx(100.0)
+        finally:
+            with f._lock:
+                f._prev_closes.pop(key, None)
+                f._prices.pop(key, None)
+                f._price_times.pop(key, None)
+
+    def test_an_ltp_only_tick_still_records_the_price(self):
+        """A stray LTP tick during a mode change must not be dropped."""
+        f = feed_module.equity_price_feed
+        key = ("LTPONLY", "NSE")
+        with f._lock:
+            f._subscribed.add(key)
+            f._symbol_index.setdefault(key[0], set()).add(key[1])
+        try:
+            f._on_tick({"symbol": "LTPONLY", "exchange": "NSE", "mode": 1,
+                        "data": {"ltp": 42.0}})
+            assert f.get_prices([key]).get(key) == pytest.approx(42.0)
+            assert key not in f.get_previous_closes([key])
+        finally:
+            f.release([key])
+
+    def test_a_zero_close_is_not_stored(self):
+        """Zero is what a newly listed symbol reports before its first session."""
+        f = feed_module.equity_price_feed
+        key = ("ZEROCLOSE", "NSE")
+        with f._lock:
+            f._subscribed.add(key)
+            f._symbol_index.setdefault(key[0], set()).add(key[1])
+        try:
+            f._on_tick({"symbol": "ZEROCLOSE", "exchange": "NSE", "mode": 2,
+                        "data": {"ltp": 10.0, "close": 0}})
+            assert key not in f.get_previous_closes([key])
+        finally:
+            f.release([key])
+
+    def test_releasing_a_symbol_drops_its_previous_close(self):
+        f = feed_module.equity_price_feed
+        key = ("DROPME", "NSE")
+        with f._lock:
+            f._subscribed.add(key)
+            f._prev_closes[key] = 100.0
+        f.release([key])
+        assert key not in f.get_previous_closes([key])
+
+    def test_get_previous_closes_on_empty_input(self):
+        assert feed_module.equity_price_feed.get_previous_closes([]) == {}
