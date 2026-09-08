@@ -3,7 +3,7 @@
 How Saravanan's equity commit gets folded into AlgoMirror: what is adopted, what is
 rewritten, what is discarded, and what has to be fixed first.
 
-Status: Phases 0 and 1 implemented and tested. Phases 2 to 5 not started.
+Status: Phases 0 and 1 done. Phase 2 core done (fills are real). Phases 3 to 5 not started.
 Prepared: 8 September 2026.
 
 ## 0. Provenance
@@ -321,16 +321,16 @@ and cancellations, registered for 17 brokers (`openalgo/services/order_update_se
 against GTT's five. Constraint: order updates are genuinely per-account, so this needs one
 connection per broker account, unlike market data which is shared.
 
-| # | Item |
-| --- | --- |
-| 2.1 | Equity order status poller, modelled on `app/utils/order_status_poller.py`. Its 1 req/sec/account limiter, 3x `average_price` re-fetch, 3-strike rejected-then-tradebook verification and restart recovery are all segment-agnostic |
-| 2.2 | `subscribe_orders` consumer per account, feeding the same reconciliation path as the poller |
-| 2.3 | Write `EquityTrade` rows on fill. This alone makes Trade Book real |
-| 2.4 | Drive `recompute_parent_status` from real fills, so Order Status distinguishes PRD Partial from Completed correctly |
-| 2.5 | Fix `accounts_label` to filled-over-selected per PRD 7.1 and 7.6 |
-| 2.6 | Adopt the external broker activity model. Rated the single highest-value idea in his commit: orders and holdings that appear at the broker without originating here must be visible rather than silently reconciled away |
-| 2.7 | Adopt holding notices and Check With Broker |
-| 2.8 | Resolve the stuck-state set his docs identify: a parent with one filled and one SKIPPED account sits at PARTIAL forever; `INDETERMINATE` splits with zero or two adoption candidates have no automated exit; `EXIT_PENDING` has no recovery on crash |
+| # | Item | Status | Note |
+| --- | --- | --- | --- |
+| 2.1 | Equity fill poller, modelled on the F&O poller | DONE | New `app/utils/equity_fill_poller.py`, 10s from the shared scheduler. Scheduler-callable rather than its own thread, matching the equity house style |
+| 2.2 | `subscribe_orders` consumer per account | TODO | Needs one websocket connection per broker account. The poller covers the same ground first |
+| 2.3 | Write `EquityTrade` rows on fill | DONE | Trade Book is no longer structurally empty. De-duplicated by the unique index, with a quantity/price fallback for brokers that return no trade id |
+| 2.4 | Drive `recompute_parent_status` from real fills | DONE | Parent status now rolls up from booked fills |
+| 2.5 | Fix `accounts_label` to filled-over-selected | DONE | `app/equity/routes.py:3018`, per PRD 7.1 and 7.6. `accounts_placed` still carries "reached the broker" |
+| 2.6 | Adopt the external broker activity model | TODO | Highest-value idea in the client commit |
+| 2.7 | Adopt holding notices and Check With Broker | TODO | |
+| 2.8 | Resolve the stuck-state set | TODO | PARTIAL-for-ever, INDETERMINATE with no candidate, EXIT_PENDING on crash |
 
 Note for Holdings: OpenAlgo's `holdings` returns quantity, pnl and pnlpercent but **no average
 price and no LTP**. PRD M7 requires Avg Cost, so it must come from our own trade history. Another

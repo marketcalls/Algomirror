@@ -3011,7 +3011,11 @@ def _order_payload(order, splits, directory=None, include_splits=False):
         'accounts_placed': placed,
         'accounts_filled': counts['filled'],
         'accounts_open': counts['open'],
-        'accounts_label': f'{placed}/{total}',
+        # PRD 7.1 and 7.6 both ask for filled over selected ("5/5 fully filled,
+        # 4/5 partial"), which was impossible while nothing booked a fill. The
+        # fill poller now does, so this is the filled count. accounts_placed
+        # stays available separately for anyone who wants "reached the broker".
+        'accounts_label': f"{counts['filled']}/{total}",
         'counts': counts,
         'is_open': bool(order.is_open),
         'can_modify': bool(order.is_open),
@@ -5608,12 +5612,12 @@ def api_order_book():
          "accounts_filled", "accounts_open", "accounts_label",
          "counts", "is_open", "can_modify", "can_cancel", "is_carried_gtt"}
 
-    accounts_label is a PLACED over selected count, for example "4/5", where
-    placed means the order reached the broker (open or filled). The PRD asks for
-    filled over selected, which needs fill reconciliation: until that lands,
-    accounts_filled carries the true filled count separately, so the two are not
-    conflated. status_reason is the short explanation next to PARTIAL, for
-    example "1 failed".
+    accounts_label is a FILLED over selected count, for example "4/5", as PRD
+    7.1 and 7.6 specify. It was a placed-over-selected count while nothing
+    booked a fill; the equity fill poller now writes EquityTrade rows, so the
+    filled count is real. accounts_placed still carries "reached the broker"
+    separately, so the two are not conflated. status_reason is the short
+    explanation next to PARTIAL, for example "1 failed".
     """
     filters, error = _read_book_filters()
     if error:
