@@ -250,11 +250,13 @@ _HOLDINGS_REFRESHED_AT = {}
 # would serve arbitrarily old cash as fresh and never mark it stale.
 _FUNDS_REFRESHED_AT = {}
 
-# Previous close for the current trading day, keyed (symbol, exchange). The push
-# feed subscribes in LTP mode and carries no previous close, but the value does
-# not move during the day, so one REST quote per symbol per day is enough to
-# keep Today's P&L alive. A recorded 0.0 means the broker was asked and reported
-# nothing, which is what stops the fallback asking again on every poll.
+# Previous close for the current trading day, keyed (symbol, exchange).
+#
+# The push feed now subscribes in Quote mode, whose ticks carry the previous
+# close, so this is a backstop rather than the main path: it covers the first
+# poll after a restart and any symbol no tick has arrived for yet. A recorded
+# 0.0 means the broker was asked and reported nothing, which is what stops the
+# fallback asking again on every poll.
 # A previous close the broker would not answer is retried after this long
 # rather than being written off for the day.
 PREV_CLOSE_RETRY_SECONDS = 300.0
@@ -266,9 +268,78 @@ _PREV_CLOSE_DAY = None
 # against the feed's own ceiling.
 _FEED_SYMBOLS = set()
 
-# One lock for all three. Every critical section below is a dict or set
-# operation on plain values, so a single lock is cheaper than three.
+# Analyzer mode per OpenAlgo host, keyed by normalised host URL.
+#
+# Analyzer mode is application-wide per OpenAlgo INSTANCE and explicitly not per
+# API key, so it is a property of the host an account points at, not of the
+# account. In this deployment each account has its own instance, so in practice
+# it varies per account, but keying by host is what the semantics actually are
+# and it collapses correctly if two accounts ever share an instance.
+#
+# It matters because in analyze mode orders are simulated and never reach a
+# broker. Finding that out afterwards is the worst way to find it out.
+ANALYZE_STATUS_TTL_SECONDS = 60.0
+# Short: this is a status read on a screen refresh path, never an order write.
+ANALYZE_STATUS_TIMEOUT_SECONDS = 5
+_ANALYZE_STATUS = {}
+
+# One lock for all of the above. Every critical section below is a dict or set
+# operation on plain values, so a single lock is cheaper than several.
 _CACHE_LOCK = threading.Lock()
+
+
+def _analyze_host_key(host_url):
+    """Normalise a host URL so two spellings of one instance share a cache slot."""
+    return str(host_url or '').strip().rstrip('/').lower()
+
+
+def _analyze_mode_for(creds):
+    """
+    Whether any OpenAlgo host behind this view is in analyzer mode.
+
+    Cached per host for ANALYZE_STATUS_TTL_SECONDS, because it changes rarely
+    and every screen would otherwise ask on every poll. A host that cannot be
+    read is reported as not in analyze mode: this drives a warning badge, and
+    inventing a warning out of a failed read would train the admin to ignore it.
+
+    Returns a dict for the payload: {'analyze': bool, 'hosts': [host, ...]}.
+    """
+    now = time.time()
+    in_analyze = []
+
+    for cred in (creds or []):
+        host = _analyze_host_key(cred.get('host_url'))
+        if not host:
+            continue
+
+        with _CACHE_LOCK:
+            cached = _ANALYZE_STATUS.get(host)
+        if cached is not None and (now - cached[1]) < ANALYZE_STATUS_TTL_SECONDS:
+            if cached[0]:
+                in_analyze.append(host)
+            continue
+
+        analyze = False
+        try:
+            client = ExtendedOpenAlgoAPI(
+                api_key=cred.get('api_key'),
+                host=cred.get('host_url'),
+                timeout=ANALYZE_STATUS_TIMEOUT_SECONDS,
+            )
+            response = client.analyzerstatus()
+            if isinstance(response, dict) and str(response.get('status')).lower() != 'error':
+                data = response.get('data') or {}
+                analyze = bool(data.get('analyze_mode')) or \
+                    str(data.get('mode', '')).strip().lower() == 'analyze'
+        except Exception as exc:
+            current_app.logger.debug(f'Equity analyzer status unavailable for {host}: {exc}')
+
+        with _CACHE_LOCK:
+            _ANALYZE_STATUS[host] = (analyze, now)
+        if analyze:
+            in_analyze.append(host)
+
+    return {'analyze': bool(in_analyze), 'hosts': sorted(set(in_analyze))}
 
 
 # ---------------------------------------------------------------------------
@@ -1628,6 +1699,7 @@ def _build_dashboard_payload():
         'todays_orders': _build_todays_orders(),
         'stale_account_ids': stale_account_ids,
         'price_feed': price_feed,
+        'analyze': _analyze_mode_for(context['creds']),
         'generated_at': _iso(datetime.utcnow()),
     }
 
@@ -1940,6 +2012,7 @@ def _build_holdings_payload(account_filter, nature_filter):
         'accounts_missing_rates': unconfigured_rate_accounts,
         'exit_mode_tags': EXIT_MODE_TAGS,
         'price_feed': price_feed,
+        'analyze': _analyze_mode_for(context['creds']),
         'generated_at': _iso(datetime.utcnow()),
     }
 
@@ -3821,6 +3894,7 @@ def _build_watchlist_payload(with_prices=True):
         'price_alerts_enabled': bool(settings.price_alerts_enabled) if settings else True,
         'max_items': MAX_WATCHLIST_ITEMS,
         'price_feed': price_feed,
+        'analyze': _analyze_mode_for(context['creds']),
         'generated_at': _iso(datetime.utcnow()),
     }
 

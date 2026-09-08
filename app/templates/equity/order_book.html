@@ -757,6 +757,7 @@ async function equityLoadOrderBook() {
         equityShowStale('');
         equitySetText('equity-last-updated', 'Updated ' + EquityFormat.clockTime(data.generated_at));
         equityRenderFeedBadge(data.price_feed);
+        equityRenderAnalyzeBadge(data.analyze && data.analyze.analyze);
     } catch (error) {
         // Degrade to a visible stale marker, never blank the page.
         equityShowStale('The order book could not be loaded, showing the last values loaded. Retrying shortly.');

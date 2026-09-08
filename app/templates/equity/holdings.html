@@ -1448,6 +1448,8 @@ function equityRenderNotes(payload) {
     equitySetText('equity-last-updated', 'Updated ' + EquityFormat.clockTime(payload.generated_at));
 
     equityRenderFeedBadge(payload.price_feed);
+
+    equityRenderAnalyzeBadge(payload.analyze && payload.analyze.analyze);
 }
 
 async function equityLoadHoldings(force) {
