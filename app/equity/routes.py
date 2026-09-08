@@ -3902,9 +3902,13 @@ def _build_watchlist_payload(with_prices=True):
                                      'fallback_symbols': 0})
     alerts = []
 
+    # Bound unconditionally: analyzer mode is a property of the hosts, not of
+    # whether this particular call wanted prices, and an empty watch list still
+    # has to report it.
+    creds = _account_credentials(_active_accounts())
+
     if items and with_prices:
         keys = [(item.symbol, item.exchange) for item in items]
-        creds = _account_credentials(_active_accounts())
         quotes, price_feed = _resolve_prices(creds, {}, keys, want_prev_close=True)
         alerts = _evaluate_watchlist_alerts(items, quotes)
 
@@ -3921,7 +3925,7 @@ def _build_watchlist_payload(with_prices=True):
         'price_alerts_enabled': bool(settings.price_alerts_enabled) if settings else True,
         'max_items': MAX_WATCHLIST_ITEMS,
         'price_feed': price_feed,
-        'analyze': _analyze_mode_for(context['creds']),
+        'analyze': _analyze_mode_for(creds),
         'generated_at': _iso(datetime.utcnow()),
     }
 

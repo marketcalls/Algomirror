@@ -130,3 +130,124 @@ def test_every_url_for_endpoint_in_every_template_exists():
         'These url_for endpoints do not exist, so every render of those pages '
         'raises: ' + '; '.join(broken)
     )
+
+
+# ---------------------------------------------------------------------------
+# The JSON endpoints behind those pages.
+#
+# A page rendering 200 says nothing about the endpoint that fills it: the
+# template is served first and the data is fetched separately. _build_watchlist_
+# payload carried a NameError for several commits, so /equity/watchlist rendered
+# perfectly and then showed no data, and every page test still passed.
+#
+# The cause was a blanket edit that added the same line to three payload
+# builders. Two of them bound `context`; the watch list bound `creds`. Nothing
+# imports or type-checks its way to that, and only calling the function finds it.
+# ---------------------------------------------------------------------------
+
+# Every GET endpoint that needs no query parameters. The list is asserted
+# complete below, so a new endpoint cannot be added without being covered.
+API_ENDPOINTS = [
+    '/equity/api/accounts',
+    '/equity/api/dashboard',
+    '/equity/api/external-activity',
+    '/equity/api/holdings',
+    '/equity/api/holdings/exit-queue',
+    '/equity/api/order-book',
+    '/equity/api/orders/status',
+    '/equity/api/settings/preferences',
+    '/equity/api/settings/rates',
+    '/equity/api/trade-book',
+    '/equity/api/trade-natures',
+    '/equity/api/watchlist',
+    '/equity/api/watchlist/quotes',
+]
+
+EXPORTS = [
+    '/equity/api/holdings/export',
+    '/equity/api/order-book/export',
+    '/equity/api/trade-book/export',
+    '/equity/api/watchlist/export',
+]
+
+# Excluded, with the reason, so the completeness check below stays honest.
+#   depth, quote, symbol-search  require a query parameter
+#   stream                       an SSE connection that never returns
+NEEDS_PARAMS = {
+    '/equity/api/depth', '/equity/api/quote', '/equity/api/symbol-search',
+    '/equity/api/stream',
+}
+
+
+@pytest.mark.parametrize('url', API_ENDPOINTS)
+def test_the_api_endpoint_answers(client, url):
+    """A 500 here means the payload builder raised."""
+    test_client, _ = client
+    response = test_client.get(url)
+    assert response.status_code == 200, (
+        f'{url} returned {response.status_code}. The page that reads it will '
+        'render fine and then show nothing.'
+    )
+
+
+@pytest.mark.parametrize('url', EXPORTS)
+def test_the_csv_export_answers(client, url):
+    test_client, _ = client
+    response = test_client.get(url)
+    assert response.status_code == 200, f'{url} returned {response.status_code}'
+    assert 'text/csv' in response.headers.get('Content-Type', '')
+
+
+def test_every_payload_builder_runs(client):
+    """
+    Call the builders directly, so a branch the empty-database fixture does not
+    reach is still executed.
+
+    The watch list bug lived in the return statement, which every call reaches,
+    but the credentials it needed were bound inside `if items and with_prices`.
+    An empty watch list and a populated one take different paths through it.
+    """
+    _, app = client
+    from app.equity import routes as eq
+
+    with app.test_request_context('/'):
+        from flask_login import login_user
+        from app.models import User
+        login_user(User.query.first())
+
+        for name in ('_build_dashboard_payload', '_build_holdings_payload',
+                     '_build_watchlist_payload', '_build_trade_natures_payload'):
+            builder = getattr(eq, name)
+            try:
+                if name == '_build_holdings_payload':
+                    payload = builder(None, None)
+                else:
+                    payload = builder()
+            except Exception as exc:
+                raise AssertionError(f'{name} raised {type(exc).__name__}: {exc}')
+            assert isinstance(payload, dict), f'{name} returned {type(payload)}'
+
+
+def test_the_endpoint_list_above_is_complete(client):
+    """
+    A new GET endpoint must be covered, or explicitly excluded with a reason.
+
+    Without this the lists rot: the next endpoint gets added, nobody adds it
+    here, and it ships untested exactly like the watch list payload did.
+    """
+    _, app = client
+    covered = set(API_ENDPOINTS) | set(EXPORTS) | NEEDS_PARAMS
+
+    live = {
+        str(rule.rule) for rule in app.url_map.iter_rules()
+        if 'GET' in rule.methods
+        and str(rule.rule).startswith('/equity/api/')
+        and '<' not in str(rule.rule)
+    }
+
+    uncovered = sorted(live - covered)
+    assert not uncovered, (
+        'These equity GET endpoints are not exercised by any test. Add them to '
+        'API_ENDPOINTS or EXPORTS, or to NEEDS_PARAMS with the reason: '
+        + ', '.join(uncovered)
+    )
