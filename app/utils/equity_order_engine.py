@@ -675,38 +675,74 @@ def _placement_worker(app, job):
         return outcome
 
 
+def _host_of(job):
+    """The OpenAlgo host a job will talk to, normalised for grouping."""
+    host = (job.get('credential') or {}).get('host_url') or ''
+    return str(host).strip().rstrip('/').lower()
+
+
 def _run_jobs(app, jobs, worker, max_workers=None):
     """
-    Run one worker per account concurrently and collect every result.
+    Run the accounts concurrently and collect every result.
+
+    Concurrency is bounded PER OPENALGO HOST, not globally. OpenAlgo's rate
+    limiter is per IP and in memory, and order writes share a single bucket of
+    ten per second on each instance, with no Retry-After to push back with. In
+    this deployment every account has its own OpenAlgo instance, so hosts differ
+    and every account still runs in parallel exactly as before. That is a
+    property of the deployment, not of the code: the moment two accounts are
+    pointed at one instance, their writes share one bucket, and firing them
+    together would spend it on collisions. Grouping by host makes the fan-out
+    degrade to sequential for co-located accounts instead.
 
     A single job runs inline, so the common one account case costs no thread.
-    The pool is bounded, each worker is already wrapped in try/except, and a
-    worker that still manages to raise is recorded as a failed account rather
-    than being allowed to break the other accounts.
+    Each worker is already wrapped in try/except, and a worker that still
+    manages to raise is recorded as an indeterminate account rather than being
+    allowed to break the others.
+
+    Results come back in the caller's job order regardless of completion order,
+    because the caller pairs them with its own split rows positionally.
     """
     if not jobs:
         return []
     if len(jobs) == 1:
         return [worker(app, jobs[0])]
 
-    bound = min(max_workers or MAX_ORDER_WORKERS, MAX_ORDER_WORKERS, len(jobs))
-    results = []
-    with ThreadPoolExecutor(max_workers=bound) as executor:
-        futures = [(job, executor.submit(worker, app, job)) for job in jobs]
-        for job, future in futures:
+    def _crash_outcome(job, exc):
+        account_id = job['credential'].get('account_id')
+        logger.error('Equity worker crashed for account %s: %s', account_id, exc)
+        outcome = _blank_outcome()
+        outcome['fill_status'] = EQUITY_SPLIT_STATUS_INDETERMINATE
+        outcome['indeterminate'] = True
+        outcome['error_type'] = 'worker_crash'
+        outcome['error_message'] = 'Worker crashed: %s' % exc
+        outcome['account_id'] = account_id
+        return outcome
+
+    # index -> job, so results can be restored to the caller's order.
+    by_host = {}
+    for index, job in enumerate(jobs):
+        by_host.setdefault(_host_of(job), []).append((index, job))
+
+    def _run_host(host_jobs):
+        """Every job on one host, in order, one at a time."""
+        out = []
+        for index, job in host_jobs:
             try:
-                results.append(future.result())
+                out.append((index, worker(app, job)))
             except Exception as exc:
-                account_id = job['credential'].get('account_id')
-                logger.error('Equity worker crashed for account %s: %s', account_id, exc)
-                outcome = _blank_outcome()
-                outcome['fill_status'] = EQUITY_SPLIT_STATUS_INDETERMINATE
-                outcome['indeterminate'] = True
-                outcome['error_type'] = 'worker_crash'
-                outcome['error_message'] = 'Worker crashed: %s' % exc
-                outcome['account_id'] = account_id
-                results.append(outcome)
-    return results
+                out.append((index, _crash_outcome(job, exc)))
+        return out
+
+    bound = min(max_workers or MAX_ORDER_WORKERS, MAX_ORDER_WORKERS, len(by_host))
+    collected = {}
+    with ThreadPoolExecutor(max_workers=bound) as executor:
+        futures = [executor.submit(_run_host, group) for group in by_host.values()]
+        for future in futures:
+            for index, outcome in future.result():
+                collected[index] = outcome
+
+    return [collected[index] for index in range(len(jobs))]
 
 
 # ---------------------------------------------------------------------------
