@@ -489,3 +489,82 @@ def test_a_completed_order_is_never_open(split, poller):
     order = db.session.get(EquityOrder, split.equity_order_id)
     assert order.status == EQUITY_SPLIT_STATUS_COMPLETED
     assert order.is_open is False
+
+
+# ------------------------------------------------------ external activity
+
+def external_rows():
+    from app.models import EquityExternalTrade
+    return EquityExternalTrade.query.all()
+
+
+def test_a_trade_we_did_not_place_is_recorded(split, poller):
+    """
+    The admin also has the broker's own terminal. A trade placed there moves the
+    same holding the stop loss monitor sizes exits against, and used to be
+    absorbed in silence.
+    """
+    broker = FakeBroker(status='open', trades=[
+        trade(trade_id='OURS', order_id=ORDER_ID),
+        trade(trade_id='THEIRS', order_id='SOMEONE-ELSE-OID', quantity=25, price=98.0),
+    ])
+    tick = sweep(poller, broker)
+
+    rows = external_rows()
+    assert len(rows) == 1
+    assert rows[0].broker_trade_id == 'THEIRS'
+    assert rows[0].broker_order_id == 'SOMEONE-ELSE-OID'
+    assert rows[0].quantity == 25
+    assert rows[0].account_id == split.account_id
+    assert tick['external_trades'] == 1
+
+
+def test_our_own_fills_are_not_flagged_as_external(split, poller):
+    broker = FakeBroker(status='complete', trades=[trade(trade_id='OURS')])
+    sweep(poller, broker)
+
+    assert external_rows() == []
+
+
+def test_an_external_trade_is_recorded_once_not_once_per_sweep(split, poller):
+    """A trade book is re-read every ten seconds and returns the same rows."""
+    rows = [trade(trade_id='OURS'), trade(trade_id='THEIRS', order_id='OTHER')]
+    sweep(poller, FakeBroker(status='open', trades=rows))
+    assert len(external_rows()) == 1
+
+    sweep(poller, FakeBroker(status='open', trades=rows))
+    sweep(poller, FakeBroker(status='open', trades=rows))
+
+    assert len(external_rows()) == 1
+
+
+def test_an_external_trade_with_no_id_is_not_recorded(split, poller):
+    """Nothing stable to de-duplicate on means a notice repeated every sweep."""
+    row = trade(order_id='OTHER')
+    row.pop('tradeid')
+    sweep(poller, FakeBroker(status='open', trades=[row]))
+
+    assert external_rows() == []
+
+
+def test_recording_an_external_trade_does_not_change_our_holding(split, poller):
+    """A notice, not a correction. The admin decides what it means."""
+    broker = FakeBroker(status='open', trades=[
+        trade(trade_id='THEIRS', order_id='OTHER', quantity=99),
+    ])
+    sweep(poller, broker)
+
+    db.session.refresh(split)
+    assert split.filled_quantity in (0, None)
+    assert split.fill_status == EQUITY_SPLIT_STATUS_PENDING
+
+
+def test_an_external_trade_starts_unacknowledged(split, poller):
+    sweep(poller, FakeBroker(status='open', trades=[
+        trade(trade_id='THEIRS', order_id='OTHER'),
+    ]))
+
+    row = external_rows()[0]
+    assert row.acknowledged_at is None
+    assert row.is_acknowledged is False
+    assert row.first_seen_at is not None

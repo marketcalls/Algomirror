@@ -60,6 +60,7 @@ from app.models import (
     ActivityLog,
     EquityAccountAllocation,
     EquityBrokerageRate,
+    EquityExternalTrade,
     EquityHolding,
     EquityOrder,
     EquityOrderSplit,
@@ -2880,6 +2881,13 @@ def _owned_holding(holding_id):
     """One tracked holding, scoped by BOTH id and owner."""
     return EquityHolding.query.filter_by(
         id=holding_id, user_id=current_user.id
+    ).first()
+
+
+def _owned_external_trade(trade_id):
+    """One external activity notice, scoped by BOTH id and owner."""
+    return EquityExternalTrade.query.filter_by(
+        id=trade_id, user_id=current_user.id
     ).first()
 
 
@@ -6648,3 +6656,95 @@ def api_save_settings_preferences():
         _log_activity('equity_preferences_saved', {'changes': changes})
 
     return _ok(_build_preferences_payload(), 'Equity preferences saved')
+
+
+# ---------------------------------------------------------------------------
+# External broker activity
+#
+# Trades that happened in a managed account without originating here: the
+# broker's own terminal, its mobile app, or a family member with their own
+# credentials. The fill poller identifies them by elimination from the trade
+# book it already reads, so this costs no extra broker call.
+#
+# These are notices, never corrections. Nothing here changes a holding or
+# places an order, because a wrong automatic correction on a real position is
+# worse than a visible unknown.
+# ---------------------------------------------------------------------------
+
+@equity_bp.route('/api/external-activity')
+@login_required
+@api_rate_limit()
+@_json_route
+def api_external_activity():
+    """
+    Broker activity that did not originate in AlgoMirror.
+
+    Query string:
+        include_acknowledged  '1' to include notices already dealt with
+
+    Response: {"status", "trades": [...], "count", "unacknowledged"}
+    """
+    include_acknowledged = _arg('include_acknowledged').lower() in ('1', 'true', 'yes')
+
+    query = EquityExternalTrade.query.filter_by(user_id=current_user.id)
+    if not include_acknowledged:
+        query = query.filter(EquityExternalTrade.acknowledged_at.is_(None))
+
+    rows = query.order_by(
+        EquityExternalTrade.first_seen_at.desc(), EquityExternalTrade.id.desc()
+    ).limit(200).all()
+
+    directory = _account_directory()
+    unacknowledged = EquityExternalTrade.query.filter_by(
+        user_id=current_user.id, acknowledged_at=None
+    ).count()
+
+    return _ok({
+        'trades': [{
+            'id': row.id,
+            'account_id': row.account_id,
+            'account_name': (directory.get(row.account_id) or {}).get('account_name'),
+            'broker_trade_id': row.broker_trade_id,
+            'broker_order_id': row.broker_order_id,
+            'symbol': row.symbol,
+            'exchange': row.exchange,
+            'side': row.side,
+            'quantity': _to_int(row.quantity),
+            'price': _money(row.price),
+            'value': _money(turnover(_to_float(row.price), _to_int(row.quantity))),
+            'executed_at': _iso(row.executed_at),
+            'first_seen_at': _iso(row.first_seen_at),
+            'acknowledged_at': _iso(row.acknowledged_at),
+        } for row in rows],
+        'count': len(rows),
+        'unacknowledged': unacknowledged,
+        'generated_at': _iso(datetime.utcnow()),
+    })
+
+
+@equity_bp.route('/api/external-activity/<int:trade_id>/acknowledge', methods=['POST'])
+@login_required
+@api_rate_limit()
+@_json_route
+def api_acknowledge_external_activity(trade_id):
+    """
+    Mark one notice as seen.
+
+    Acknowledging hides it from the default list and changes nothing else. The
+    row is never deleted, because a record of real broker activity outside this
+    application is exactly the thing an audit needs to keep.
+    """
+    row = _owned_external_trade(trade_id)
+    if row is None:
+        return _json_error('External activity not found', 404)
+
+    if row.acknowledged_at is None:
+        row.acknowledged_at = datetime.utcnow()
+        db.session.commit()
+        _log_activity(
+            'equity_external_activity_acknowledged',
+            f'Acknowledged external {row.side or "trade"} of {row.quantity} '
+            f'{row.symbol or "?"} on account {row.account_id}'
+        )
+
+    return _ok({'id': row.id, 'acknowledged_at': _iso(row.acknowledged_at)})

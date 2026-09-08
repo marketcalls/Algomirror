@@ -328,7 +328,7 @@ connection per broker account, unlike market data which is shared.
 | 2.3 | Write `EquityTrade` rows on fill | DONE | Trade Book is no longer structurally empty. De-duplicated by the unique index, with a quantity/price fallback for brokers that return no trade id |
 | 2.4 | Drive `recompute_parent_status` from real fills | DONE | Parent status now rolls up from booked fills |
 | 2.5 | Fix `accounts_label` to filled-over-selected | DONE | `app/equity/routes.py:3018`, per PRD 7.1 and 7.6. `accounts_placed` still carries "reached the broker" |
-| 2.6 | Adopt the external broker activity model | TODO | Highest-value idea in the client commit |
+| 2.6 | Adopt the external broker activity model | DONE | `EquityExternalTrade` (migration 017). Detected by elimination from the trade book the fill poller already reads, so no extra broker call. Notices only: nothing corrects a holding. Listed and acknowledged via `/api/external-activity` |
 | 2.7 | Adopt holding notices and Check With Broker | TODO | |
 | 2.8 | Resolve the stuck-state set | PARTIAL DONE | PARTIAL-for-ever fixed: `is_open` now requires a live split, so a settled mixed order stops offering Modify and Cancel. INDETERMINATE-with-no-candidate and EXIT_PENDING-on-crash still open |
 

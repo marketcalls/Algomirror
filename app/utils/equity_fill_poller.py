@@ -35,7 +35,10 @@ from datetime import datetime
 from flask import current_app, has_app_context
 
 from app import db
+from sqlalchemy.exc import IntegrityError
+
 from app.models import (
+    EquityExternalTrade,
     EquityOrderSplit,
     EquityTrade,
     TradingAccount,
@@ -190,6 +193,7 @@ class EquityFillPoller:
             'splits_settled': 0,
             'fills_booked': 0,
             'reads_failed': 0,
+            'external_trades': 0,
         }
 
         try:
@@ -263,6 +267,10 @@ class EquityFillPoller:
                 # serves every split we are about to settle.
                 trades_by_order = self._trades_by_order(client, account_id)
 
+                # The same read also tells us what happened in this account that
+                # did NOT come from here. Free, so it happens on every sweep.
+                self._record_external_trades(account, trades_by_order, tick)
+
                 changed = False
                 for split_id in split_ids:
                     split = db.session.get(EquityOrderSplit, split_id)
@@ -305,6 +313,98 @@ class EquityFillPoller:
             if order_id:
                 grouped.setdefault(order_id, []).append(row)
         return grouped
+
+    def _record_external_trades(self, account, trades_by_order, tick):
+        """
+        Note fills in this account that did not originate in AlgoMirror.
+
+        The admin also has the broker's terminal and app. A trade placed there
+        moves the same holding the stop loss monitor sizes exits against, and
+        was previously absorbed in silence.
+
+        Identification is by elimination: the trade book was already read to
+        book our own fills, so any order id that matches none of our splits for
+        this account came from somewhere else. That makes this free rather than
+        another broker call.
+
+        Nothing here corrects a holding or places an order. It records a notice
+        and lets the admin decide, because a wrong automatic correction on a
+        real position is worse than a visible unknown.
+        """
+        if not trades_by_order:
+            return
+
+        known = {
+            _as_text(row[0])
+            for row in db.session.query(EquityOrderSplit.broker_order_id)
+            .filter(
+                EquityOrderSplit.account_id == account.id,
+                EquityOrderSplit.broker_order_id.isnot(None),
+            ).all()
+            if row[0]
+        }
+
+        foreign = [
+            (order_id, rows)
+            for order_id, rows in trades_by_order.items()
+            if order_id not in known
+        ]
+        if not foreign:
+            return
+
+        # One query rather than one per candidate row.
+        seen_ids = {
+            row[0] for row in db.session.query(EquityExternalTrade.broker_trade_id)
+            .filter(EquityExternalTrade.account_id == account.id).all()
+            if row[0]
+        }
+
+        recorded = 0
+        for order_id, rows in foreign:
+            for row in rows:
+                trade_id = _as_text(row.get('tradeid') or row.get('trade_id'))
+                if not trade_id:
+                    # With no trade id there is nothing stable to de-duplicate
+                    # on, and a notice repeated every ten seconds is noise that
+                    # teaches the admin to ignore all of them.
+                    continue
+                if trade_id in seen_ids:
+                    continue
+
+                quantity = _to_int(row.get('quantity'))
+                if quantity <= 0:
+                    continue
+
+                db.session.add(EquityExternalTrade(
+                    user_id=account.user_id,
+                    account_id=account.id,
+                    broker_trade_id=trade_id,
+                    broker_order_id=order_id,
+                    symbol=_as_text(row.get('symbol')).upper() or None,
+                    exchange=_as_text(row.get('exchange')).upper() or None,
+                    side=_as_text(row.get('action') or row.get('side')).upper() or None,
+                    quantity=quantity,
+                    price=_to_float(row.get('average_price') or row.get('price')),
+                    executed_at=datetime.utcnow(),
+                    first_seen_at=datetime.utcnow(),
+                ))
+                seen_ids.add(trade_id)
+                recorded += 1
+
+        if recorded:
+            try:
+                db.session.commit()
+            except IntegrityError:
+                # Another sweep won the race on the unique index. Harmless: the
+                # row it wrote is the one we were about to write.
+                db.session.rollback()
+                return
+            tick['external_trades'] = tick.get('external_trades', 0) + recorded
+            logger.warning(
+                '[EQUITY_FILL] %d trade(s) in account %s did not originate here. '
+                'Recorded as external activity for review.',
+                recorded, account.id
+            )
 
     def _poll_split(self, client, split, trades_by_order, tick):
         """Read one split's status and settle it. True when anything changed."""

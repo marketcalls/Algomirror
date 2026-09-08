@@ -2326,3 +2326,67 @@ class EquitySetting(db.Model):
             setting = EquitySetting.query.filter_by(user_id=user_id).first()
 
         return setting
+
+
+class EquityExternalTrade(db.Model):
+    """
+    A fill that happened in a broker account without originating here.
+
+    The admin also has the broker's own terminal and mobile app, and a family
+    member may hold their own credentials. A trade placed that way lands in the
+    same account AlgoMirror manages, changes the same holding, and until now was
+    absorbed in silence: the holdings quantity simply moved and nothing said
+    why. That is the worst kind of quiet, because the stop loss monitor sizes an
+    exit against a quantity it believes it understands.
+
+    Recording these makes the gap visible rather than reconciling it away. It is
+    a notice, not a correction: nothing here changes a holding or places an
+    order. The admin decides what it means.
+
+    Detection is free. The fill poller already reads each account's trade book
+    to book our own fills, so a row whose order id matches none of our splits
+    for that account is external by elimination.
+
+    acknowledged_at is how a notice stops being shown without being deleted,
+    because the audit trail is the point.
+    """
+    __tablename__ = 'equity_external_trades'
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
+    account_id = db.Column(db.Integer, db.ForeignKey('trading_accounts.id'), nullable=False, index=True)
+
+    broker_trade_id = db.Column(db.String(100), index=True)
+    broker_order_id = db.Column(db.String(100), index=True)
+
+    symbol = db.Column(db.String(50), index=True)
+    exchange = db.Column(db.String(20))
+    side = db.Column(db.String(10))
+    quantity = db.Column(db.Integer, default=0)
+    price = db.Column(db.Float)
+
+    executed_at = db.Column(db.DateTime, index=True)
+    first_seen_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+    acknowledged_at = db.Column(db.DateTime, index=True)
+
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    account = db.relationship('TradingAccount', backref='equity_external_trades')
+
+    # A trade book is re-read on every sweep and returns the same rows, so the
+    # de-duplication has to be at the database rather than in the poller. Kept
+    # as a unique index rather than a table constraint because SQLite cannot add
+    # a constraint to an existing table but can create an index, which keeps
+    # db.create_all() and the migration producing the same object.
+    __table_args__ = (
+        db.Index('ix_equity_external_trades_account_trade_uc',
+                 'account_id', 'broker_trade_id', unique=True),
+    )
+
+    @property
+    def is_acknowledged(self):
+        return self.acknowledged_at is not None
+
+    def __repr__(self):
+        return (f'<EquityExternalTrade {self.side} {self.symbol} '
+                f'Qty: {self.quantity} on account {self.account_id}>')
