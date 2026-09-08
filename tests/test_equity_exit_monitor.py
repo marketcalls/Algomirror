@@ -1143,3 +1143,100 @@ def test_a_holding_claimed_mid_tick_is_left_to_the_other_caller(ctx):
     assert refreshed.exit_status == EQUITY_HOLDING_STATUS_EXIT_SUBMITTED
     assert refreshed.exit_broker_order_id == 'MANUAL-1'
     assert refreshed.sl_hit_at is None, 'no breach is written onto a claimed row'
+
+
+# ---------------------------------------------------------------------------
+# Recovery from a crash that stranded an exit claim.
+# ---------------------------------------------------------------------------
+
+class TestStaleExitClaimRecovery:
+    """
+    EXIT_PENDING means "claimed, committed, the broker call is running". If the
+    process dies in that window nothing ever moves the row on, and the monitor
+    only evaluates ACTIVE rows, so the holding's stop loss silently stops being
+    watched. It is the quietest way to lose a stop.
+
+    Recovery goes to EXIT_INDETERMINATE, never back to ACTIVE: the crashed
+    process may have reached the broker before it died. Releasing to ACTIVE
+    would let the monitor sell the same shares again, which is the exact failure
+    the claim exists to prevent.
+    """
+
+    def test_a_stranded_claim_is_recovered(self, ctx):
+        holding = _make_holding(ctx, stop_loss=900.0)
+        from app.models import (
+            EquityHolding,
+            EQUITY_HOLDING_STATUS_EXIT_PENDING,
+            EQUITY_HOLDING_STATUS_EXIT_INDETERMINATE,
+        )
+        holding.exit_status = EQUITY_HOLDING_STATUS_EXIT_PENDING
+        holding.exit_claimed_at = datetime.utcnow() - timedelta(hours=2)
+        holding.exit_broker_order_id = None
+        db.session.commit()
+
+        assert EquityHolding.recover_stale_exit_claims() == 1
+
+        db.session.refresh(holding)
+        assert holding.exit_status == EQUITY_HOLDING_STATUS_EXIT_INDETERMINATE
+        assert 'broker' in (holding.exit_error or '').lower()
+
+    def test_recovery_never_returns_a_row_to_active(self, ctx):
+        holding = _make_holding(ctx, stop_loss=900.0)
+        """ACTIVE would re-arm the monitor against a possibly live order."""
+        from app.models import (
+            EquityHolding,
+            EQUITY_HOLDING_STATUS_EXIT_PENDING,
+            EQUITY_HOLDING_STATUS_ACTIVE,
+        )
+        holding.exit_status = EQUITY_HOLDING_STATUS_EXIT_PENDING
+        holding.exit_claimed_at = datetime.utcnow() - timedelta(hours=2)
+        db.session.commit()
+
+        EquityHolding.recover_stale_exit_claims()
+
+        db.session.refresh(holding)
+        assert holding.exit_status != EQUITY_HOLDING_STATUS_ACTIVE
+
+    def test_a_fresh_claim_is_left_alone(self, ctx):
+        holding = _make_holding(ctx, stop_loss=900.0)
+        """A claim seconds old is a broker call that is genuinely running."""
+        from app.models import EquityHolding, EQUITY_HOLDING_STATUS_EXIT_PENDING
+        holding.exit_status = EQUITY_HOLDING_STATUS_EXIT_PENDING
+        holding.exit_claimed_at = datetime.utcnow()
+        db.session.commit()
+
+        assert EquityHolding.recover_stale_exit_claims() == 0
+
+        db.session.refresh(holding)
+        assert holding.exit_status == EQUITY_HOLDING_STATUS_EXIT_PENDING
+
+    def test_a_claim_that_reached_the_broker_is_left_alone(self, ctx):
+        holding = _make_holding(ctx, stop_loss=900.0)
+        """With an order id the fill poller owns it, not this."""
+        from app.models import EquityHolding, EQUITY_HOLDING_STATUS_EXIT_PENDING
+        holding.exit_status = EQUITY_HOLDING_STATUS_EXIT_PENDING
+        holding.exit_claimed_at = datetime.utcnow() - timedelta(hours=2)
+        holding.exit_broker_order_id = 'OID-LIVE'
+        db.session.commit()
+
+        assert EquityHolding.recover_stale_exit_claims() == 0
+
+    def test_an_active_holding_is_never_touched(self, ctx):
+        holding = _make_holding(ctx, stop_loss=900.0)
+        from app.models import EquityHolding, EQUITY_HOLDING_STATUS_ACTIVE
+        holding.exit_status = EQUITY_HOLDING_STATUS_ACTIVE
+        db.session.commit()
+
+        assert EquityHolding.recover_stale_exit_claims() == 0
+
+        db.session.refresh(holding)
+        assert holding.exit_status == EQUITY_HOLDING_STATUS_ACTIVE
+
+    def test_the_threshold_is_far_above_any_real_broker_call(self):
+        """30s is the broker order timeout; the default must not catch one."""
+        import inspect as _inspect
+        from app.models import EquityHolding
+        default = _inspect.signature(
+            EquityHolding.recover_stale_exit_claims
+        ).parameters['older_than_seconds'].default
+        assert default >= 300

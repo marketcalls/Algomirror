@@ -330,7 +330,7 @@ connection per broker account, unlike market data which is shared.
 | 2.5 | Fix `accounts_label` to filled-over-selected | DONE | `app/equity/routes.py:3018`, per PRD 7.1 and 7.6. `accounts_placed` still carries "reached the broker" |
 | 2.6 | Adopt the external broker activity model | DONE | `EquityExternalTrade` (migration 017). Detected by elimination from the trade book the fill poller already reads, so no extra broker call. Notices only: nothing corrects a holding. Listed and acknowledged via `/api/external-activity` |
 | 2.7 | Adopt holding notices and Check With Broker | TODO | |
-| 2.8 | Resolve the stuck-state set | PARTIAL DONE | PARTIAL-for-ever fixed: `is_open` now requires a live split, so a settled mixed order stops offering Modify and Cancel. INDETERMINATE-with-no-candidate and EXIT_PENDING-on-crash still open |
+| 2.8 | Resolve the stuck-state set | MOSTLY DONE | PARTIAL-for-ever fixed (`is_open` now requires a live split). EXIT_PENDING-on-crash fixed (`recover_stale_exit_claims`, swept by the exit monitor, recovers to EXIT_INDETERMINATE and never to ACTIVE). INDETERMINATE-with-no-adoption-candidate still open |
 
 Note for Holdings: OpenAlgo's `holdings` returns quantity, pnl and pnlpercent but **no average
 price and no LTP**. PRD M7 requires Avg Cost, so it must come from our own trade history. Another

@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from flask_login import UserMixin
 from werkzeug.security import generate_password_hash, check_password_hash
 from cryptography.fernet import Fernet
@@ -1922,6 +1922,58 @@ class EquityHolding(db.Model):
         holding.exit_error = str(message)[:1000] if message else 'Outcome unknown, verify at the broker'
         db.session.commit()
         return True
+
+    @classmethod
+    def recover_stale_exit_claims(cls, older_than_seconds=600):
+        """
+        Rescue holdings stranded in EXIT_PENDING by a crash or a restart.
+
+        EXIT_PENDING means "claimed, committed, the broker call is about to run
+        or is running". If the process dies between the commit and the answer,
+        nothing ever moves the row on. The monitor only evaluates ACTIVE rows,
+        so that holding's stop loss and target stop being watched permanently
+        and nothing says so. It is the quietest way to lose a stop.
+
+        Recovery goes to EXIT_INDETERMINATE, never back to ACTIVE. The crashed
+        process may have reached the broker before it died, so the order may be
+        live. EXIT_INDETERMINATE is precisely the state that means "a human must
+        check the broker order book", is never auto retried, and already has
+        resolve_exit_indeterminate to clear it. Releasing to ACTIVE would let
+        the monitor sell the same shares a second time, which is the exact
+        failure the claim exists to prevent.
+
+        Rows that already carry a broker order id are left alone: those reached
+        the broker, so the fill poller and mark_exit_submitted own them.
+
+        older_than_seconds must stay far above any real in-flight duration. The
+        broker order timeout is 30 seconds, so ten minutes cannot catch a call
+        that is genuinely still running.
+
+        Returns:
+            The number of rows recovered.
+        """
+        cutoff = datetime.utcnow() - timedelta(seconds=older_than_seconds)
+
+        stranded = cls.query.filter(
+            cls.exit_status == EQUITY_HOLDING_STATUS_EXIT_PENDING,
+            cls.exit_claimed_at.isnot(None),
+            cls.exit_claimed_at < cutoff,
+            db.or_(cls.exit_broker_order_id.is_(None), cls.exit_broker_order_id == ''),
+        ).all()
+
+        recovered = 0
+        for holding in stranded:
+            holding.exit_status = EQUITY_HOLDING_STATUS_EXIT_INDETERMINATE
+            holding.exit_error = (
+                'The process holding this exit claim stopped before the broker '
+                'answered. The sell may or may not have reached the broker. '
+                'Check the broker order book, then resolve this row.'
+            )
+            recovered += 1
+
+        if recovered:
+            db.session.commit()
+        return recovered
 
     @classmethod
     def mark_exit_completed(cls, holding_id, user_id, remaining_quantity=0):

@@ -499,12 +499,34 @@ class EquityExitMonitor:
             'holdings_evaluated': 0,
             'holdings_without_price': 0,
             'breaches_recorded': 0,
+            'stale_claims_recovered': 0,
         }
 
         try:
             # Force fresh reads. Another thread may have edited a level, or
             # claimed a holding, since this session last looked.
             db.session.expire_all()
+
+            # Rescue anything a crash stranded in EXIT_PENDING before deciding
+            # there is nothing to do. Those rows are invisible to
+            # _monitorable_user_ids (only ACTIVE is monitorable), so a stranded
+            # holding would otherwise sit unwatched for ever and an early return
+            # below would skip the sweep that could have found it.
+            try:
+                recovered = EquityHolding.recover_stale_exit_claims()
+                if recovered:
+                    tick['stale_claims_recovered'] = recovered
+                    logger.warning(
+                        '[EQUITY_EXIT] Recovered %d holding(s) stranded in '
+                        'EXIT_PENDING by a stopped process. Marked indeterminate '
+                        'for review, never resent.', recovered
+                    )
+            except Exception as exc:
+                logger.error(
+                    '[EQUITY_EXIT] Stale exit claim recovery failed: %s', exc,
+                    exc_info=True
+                )
+                self._safe_rollback()
 
             user_ids = self._monitorable_user_ids()
             if not user_ids:
