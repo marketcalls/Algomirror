@@ -686,6 +686,7 @@
     </div>
 </dialog>
 
+<script src="{{ url_for('static', filename='js/equity_common.js') }}"></script>
 <script>
 // ---------------------------------------------------------------------------
 // Equity Place Order (M4) and Order Status (M4b).
@@ -820,15 +821,6 @@ let equityActiveTab = 'place';
 // Small shared helpers
 // ---------------------------------------------------------------------------
 
-function equitySetText(id, text, className) {
-    const el = document.getElementById(id);
-    if (!el) { return; }
-    el.textContent = text;
-    if (className !== undefined) {
-        el.className = className;
-    }
-}
-
 function equityShowBanner(bannerId, textId, message, kind) {
     const banner = document.getElementById(bannerId);
     const text = document.getElementById(textId);
@@ -844,28 +836,6 @@ function equityShowBanner(bannerId, textId, message, kind) {
                 : (kind === 'info' ? 'alert-info' : 'alert-warning'))
     );
     banner.classList.remove('hidden');
-}
-
-function equityCell(text, className) {
-    const td = document.createElement('td');
-    if (className) { td.className = className; }
-    td.textContent = text === null || text === undefined ? '' : String(text);
-    return td;
-}
-
-function equityMessageRow(message, columns) {
-    const row = document.createElement('tr');
-    const cell = document.createElement('td');
-    cell.colSpan = columns || EQUITY_SPLIT_COLUMNS;
-    cell.className = 'text-center py-8 text-base-content/60';
-    cell.textContent = message;
-    row.appendChild(cell);
-    return row;
-}
-
-function equityValue(id) {
-    const el = document.getElementById(id);
-    return el ? (el.value || '').trim() : '';
 }
 
 function equityNumberOrNull(id) {
@@ -909,14 +879,6 @@ function equityShowTab(name) {
 // ---------------------------------------------------------------------------
 // Symbol search
 // ---------------------------------------------------------------------------
-
-function equityCloseSearchResults() {
-    const list = document.getElementById('equity-search-results');
-    if (list) {
-        list.textContent = '';
-        list.classList.add('hidden');
-    }
-}
 
 function equitySearchInput() {
     equitySetText('equity-selected-note', 'No stock selected', 'label-text-alt');
@@ -1703,17 +1665,6 @@ async function equitySubmitOrder() {
     }
 }
 
-function equitySplitStatusBadgeClass(status) {
-    if (status === 'COMPLETED') { return 'badge badge-success badge-sm'; }
-    if (status === 'PENDING') { return 'badge badge-info badge-sm'; }
-    if (status === 'PARTIAL') { return 'badge badge-warning badge-sm'; }
-    if (status === 'INDETERMINATE') { return 'badge badge-error badge-sm'; }
-    if (status === 'FAILED' || status === 'REJECTED') { return 'badge badge-error badge-sm'; }
-    if (status === 'UNSUPPORTED') { return 'badge badge-warning badge-sm'; }
-    if (status === 'SKIPPED' || status === 'CANCELLED') { return 'badge badge-ghost badge-sm'; }
-    return 'badge badge-outline badge-sm';
-}
-
 function equityRenderResult(result) {
     const card = document.getElementById('equity-result-card');
     if (card) { card.classList.remove('hidden'); }
@@ -2004,14 +1955,6 @@ async function equityLoadDepth() {
 // ---------------------------------------------------------------------------
 // Order Status (M4b)
 // ---------------------------------------------------------------------------
-
-function equityStatusBadgeClass(status) {
-    if (status === 'COMPLETED') { return 'badge badge-success badge-sm'; }
-    if (status === 'PENDING') { return 'badge badge-info badge-sm'; }
-    if (status === 'PARTIAL') { return 'badge badge-warning badge-sm'; }
-    if (status === 'CANCELLED') { return 'badge badge-ghost badge-sm'; }
-    return 'badge badge-outline badge-sm';
-}
 
 function equityStatusOrderRow(order) {
     const tr = document.createElement('tr');

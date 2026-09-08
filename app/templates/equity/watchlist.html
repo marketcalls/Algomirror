@@ -292,6 +292,7 @@
     </div>
 </dialog>
 
+<script src="{{ url_for('static', filename='js/equity_common.js') }}"></script>
 <script>
 // ---------------------------------------------------------------------------
 // Equity Watch List (M3).
@@ -404,15 +405,6 @@ let equityAlertLines = [];
 // Small shared helpers
 // ---------------------------------------------------------------------------
 
-function equitySetText(id, text, className) {
-    const el = document.getElementById(id);
-    if (!el) { return; }
-    el.textContent = text;
-    if (className !== undefined) {
-        el.className = className;
-    }
-}
-
 function equityShowBanner(bannerId, textId, message, kind) {
     const banner = document.getElementById(bannerId);
     const text = document.getElementById(textId);
@@ -433,23 +425,6 @@ function equityShowResult(message, kind) {
     equityShowBanner('equity-result-banner', 'equity-result-text', message, kind);
 }
 
-function equityCell(text, className) {
-    const td = document.createElement('td');
-    if (className) { td.className = className; }
-    td.textContent = text === null || text === undefined ? '' : String(text);
-    return td;
-}
-
-function equityMessageRow(message) {
-    const row = document.createElement('tr');
-    const cell = document.createElement('td');
-    cell.colSpan = EQUITY_COLUMN_COUNT;
-    cell.className = 'text-center py-8 text-base-content/60';
-    cell.textContent = message;
-    row.appendChild(cell);
-    return row;
-}
-
 // A number input that was left blank means "clear this field". A blank is sent
 // as null, which the server reads as a clear rather than as a zero.
 function equityReadOptionalNumber(id) {
@@ -467,14 +442,6 @@ function equityReadOptionalNumber(id) {
 // ---------------------------------------------------------------------------
 // Symbol search
 // ---------------------------------------------------------------------------
-
-function equityCloseSearchResults() {
-    const list = document.getElementById('equity-search-results');
-    if (list) {
-        list.textContent = '';
-        list.classList.add('hidden');
-    }
-}
 
 function equitySearchInput() {
     equitySelectedSearch = null;

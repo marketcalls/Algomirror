@@ -322,6 +322,7 @@
     {% endif %}
 </div>
 
+<script src="{{ url_for('static', filename='js/equity_common.js') }}"></script>
 <script>
 // ---------------------------------------------------------------------------
 // Equity Settings: brokerage and statutory charges, versioned by effective
@@ -360,15 +361,6 @@ const EQUITY_RATE_FIELDS = [
     'gst_pct',
     'dp_amc_charge'
 ];
-
-function equitySetText(id, text, className) {
-    const el = document.getElementById(id);
-    if (!el) { return; }
-    el.textContent = text;
-    if (className !== undefined) {
-        el.className = className;
-    }
-}
 
 function equityShowResult(message, kind) {
     const banner = document.getElementById('equity-result-banner');

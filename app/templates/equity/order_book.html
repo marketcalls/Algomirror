@@ -237,6 +237,7 @@
     </div>
 </dialog>
 
+<script src="{{ url_for('static', filename='js/equity_common.js') }}"></script>
 <script>
 // ---------------------------------------------------------------------------
 // Equity Order Book (M5). Read only.
@@ -313,54 +314,9 @@ let equityLoading = false;
 let equityAccountsRendered = false;
 let equityOrdersById = {};
 
-function equitySetText(id, text, className) {
-    const el = document.getElementById(id);
-    if (!el) { return; }
-    el.textContent = text;
-    if (className !== undefined) {
-        el.className = className;
-    }
-}
-
-function equityShowStale(message) {
-    const banner = document.getElementById('equity-stale-banner');
-    const text = document.getElementById('equity-stale-text');
-    if (!banner || !text) { return; }
-    if (message) {
-        text.textContent = message;
-        banner.classList.remove('hidden');
-    } else {
-        banner.classList.add('hidden');
-    }
-}
-
-function equityCell(text, className) {
-    const td = document.createElement('td');
-    if (className) { td.className = className; }
-    td.textContent = text === null || text === undefined ? '' : String(text);
-    return td;
-}
-
-function equityMessageRow(message, columns) {
-    const row = document.createElement('tr');
-    const cell = document.createElement('td');
-    cell.colSpan = columns || EQUITY_COLUMN_COUNT;
-    cell.className = 'text-center py-8 text-base-content/60';
-    cell.textContent = message;
-    row.appendChild(cell);
-    return row;
-}
-
 // ---------------------------------------------------------------------------
 // Filters
 // ---------------------------------------------------------------------------
-
-function equityValue(id, fallback) {
-    const el = document.getElementById(id);
-    if (!el) { return fallback; }
-    const raw = (el.value || '').trim();
-    return raw === '' ? fallback : raw;
-}
 
 function equityFilterQuery() {
     const params = new URLSearchParams();
@@ -400,55 +356,12 @@ function equityClearFilters() {
 // The account filter is built from the payload rather than from the page
 // context, because an order can reference an account that has since been
 // deactivated and that history has to stay reachable.
-function equityRenderAccountOptions(options) {
-    if (equityAccountsRendered) { return; }
-    const select = document.getElementById('equity-filter-account');
-    if (!select) { return; }
-
-    const chosen = select.value;
-    select.textContent = '';
-
-    const all = document.createElement('option');
-    all.value = 'all';
-    all.textContent = 'All Accounts';
-    select.appendChild(all);
-
-    (options.accounts || []).forEach(function (account) {
-        const option = document.createElement('option');
-        option.value = String(account.account_id);
-        option.textContent = account.account_name + (account.is_active ? '' : ' (inactive)');
-        select.appendChild(option);
-    });
-
-    select.value = chosen || 'all';
-    equityAccountsRendered = true;
-}
-
 // ---------------------------------------------------------------------------
 // Rows
 //
 // Every cell is written with textContent, so a broker supplied symbol or an
 // admin supplied account name can never be treated as markup.
 // ---------------------------------------------------------------------------
-
-function equityStatusBadgeClass(status) {
-    if (status === 'COMPLETED') { return 'badge badge-success badge-sm'; }
-    if (status === 'PENDING') { return 'badge badge-info badge-sm'; }
-    if (status === 'PARTIAL') { return 'badge badge-warning badge-sm'; }
-    if (status === 'CANCELLED') { return 'badge badge-ghost badge-sm'; }
-    return 'badge badge-outline badge-sm';
-}
-
-function equitySplitStatusBadgeClass(status) {
-    if (status === 'COMPLETED') { return 'badge badge-success badge-sm'; }
-    if (status === 'PENDING') { return 'badge badge-info badge-sm'; }
-    if (status === 'PARTIAL') { return 'badge badge-warning badge-sm'; }
-    if (status === 'INDETERMINATE') { return 'badge badge-error badge-sm'; }
-    if (status === 'FAILED' || status === 'REJECTED') { return 'badge badge-error badge-sm'; }
-    if (status === 'UNSUPPORTED') { return 'badge badge-warning badge-sm'; }
-    if (status === 'SKIPPED' || status === 'CANCELLED') { return 'badge badge-ghost badge-sm'; }
-    return 'badge badge-outline badge-sm';
-}
 
 function equityStatusCell(order) {
     const td = document.createElement('td');
@@ -472,15 +385,6 @@ function equityStatusCell(order) {
         td.appendChild(error);
     }
 
-    return td;
-}
-
-function equitySideCell(side) {
-    const td = document.createElement('td');
-    const badge = document.createElement('span');
-    badge.className = side === 'SELL' ? 'badge badge-error badge-sm' : 'badge badge-success badge-sm';
-    badge.textContent = side;
-    td.appendChild(badge);
     return td;
 }
 

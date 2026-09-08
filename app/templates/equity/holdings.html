@@ -343,6 +343,7 @@
     </div>
 </dialog>
 
+<script src="{{ url_for('static', filename='js/equity_common.js') }}"></script>
 <script>
 // ---------------------------------------------------------------------------
 // Equity Holdings (M7).
@@ -450,15 +451,6 @@ let equityPendingLevels = null;
 let equityApproveHoldingId = null;
 let equityResolveHoldingId = null;
 
-function equitySetText(id, text, className) {
-    const el = document.getElementById(id);
-    if (!el) { return; }
-    el.textContent = text;
-    if (className !== undefined) {
-        el.className = className;
-    }
-}
-
 function equityShowBanner(bannerId, textId, message) {
     const banner = document.getElementById(bannerId);
     const text = document.getElementById(textId);
@@ -517,23 +509,6 @@ function equityFiltersChanged() {
 // Row rendering. Every cell is written with textContent, so a broker supplied
 // symbol or an admin supplied account name can never be treated as markup.
 // ---------------------------------------------------------------------------
-
-function equityCell(text, className) {
-    const td = document.createElement('td');
-    if (className) { td.className = className; }
-    td.textContent = text === null || text === undefined ? '' : String(text);
-    return td;
-}
-
-function equityMessageRow(message, columns) {
-    const row = document.createElement('tr');
-    const cell = document.createElement('td');
-    cell.colSpan = columns || EQUITY_COLUMN_COUNT;
-    cell.className = 'text-center py-8 text-base-content/60';
-    cell.textContent = message;
-    row.appendChild(cell);
-    return row;
-}
 
 function equityGroupRow(group) {
     const row = document.createElement('tr');

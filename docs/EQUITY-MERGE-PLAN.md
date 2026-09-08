@@ -3,7 +3,7 @@
 How Saravanan's equity commit gets folded into AlgoMirror: what is adopted, what is
 rewritten, what is discarded, and what has to be fixed first.
 
-Status: Phases 0 and 1 done. Phase 2 core done. Phase 3 started (3.1 done). Phases 4 and 5 not started.
+Status: Phases 0 and 1 done. Phase 2 core done. Phase 3.1, 4.1, 4.2, 4.4 done. Phase 5 started (equity_common.js extracted). Template adoption not started.
 Prepared: 8 September 2026.
 
 ## 0. Provenance
@@ -448,7 +448,9 @@ into 5. The copies have already drifted: `rupees()` returns different output in 
 positions, and `equityShowBanner` takes three, four and five arguments in three different files.
 `holdings.html:656-659` documents a drift that already broke a render at runtime.
 
-**Extracting `equity_common.js` (roughly 2,000 lines) is a merge condition, not a follow-up.**
+**DONE for our own templates.** `app/static/js/equity_common.js` now holds eleven helpers and 38 duplicate definitions were removed. Our baseline had the same disease: 27 duplicated helpers of which 19 had already drifted. 16 remain, each with genuine per-page drift to reconcile one at a time, and a ratchet test fails if that count grows. Saravanan's templates must be brought onto this module as they are adopted.
+
+**Extracting `equity_common.js` was a merge condition, not a follow-up.**
 Adopting ten templates that each carry a drifting private copy of the money formatter is how the
 next money bug gets written.
 

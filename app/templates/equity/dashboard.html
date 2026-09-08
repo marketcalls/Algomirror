@@ -197,6 +197,7 @@
     {% endif %}
 </div>
 
+<script src="{{ url_for('static', filename='js/equity_common.js') }}"></script>
 <script>
 // ---------------------------------------------------------------------------
 // Equity Dashboard (M1). Read only: it polls /equity/api/dashboard and writes
@@ -271,34 +272,6 @@ const EQUITY_POLL_MS = 30000;
 const EQUITY_FETCH_TIMEOUT_MS = 20000;
 let equityPollTimer = null;
 let equityLoading = false;
-
-function equitySetText(id, text, className) {
-    const el = document.getElementById(id);
-    if (!el) { return; }
-    el.textContent = text;
-    if (className !== undefined) {
-        el.className = className;
-    }
-}
-
-function equityShowStale(message) {
-    const banner = document.getElementById('equity-stale-banner');
-    const text = document.getElementById('equity-stale-text');
-    if (!banner || !text) { return; }
-    if (message) {
-        text.textContent = message;
-        banner.classList.remove('hidden');
-    } else {
-        banner.classList.add('hidden');
-    }
-}
-
-function equityStatusDotClass(status, isStale) {
-    if (isStale) { return 'w-2 h-2 rounded-full bg-warning inline-block'; }
-    if (status === 'connected') { return 'w-2 h-2 rounded-full bg-success inline-block'; }
-    if (status === 'disconnected') { return 'w-2 h-2 rounded-full bg-gray-400 inline-block'; }
-    return 'w-2 h-2 rounded-full bg-error inline-block';
-}
 
 function equityApplyKpi(kpi) {
     equitySetText('equity-kpi-active-accounts', EquityFormat.integer(kpi.active_accounts));
