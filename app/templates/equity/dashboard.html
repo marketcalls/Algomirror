@@ -12,12 +12,19 @@
     .equity-num { font-variant-numeric: tabular-nums; }
 </style>
 
-<div class="space-y-6">
-    <!-- Header -->
+<div class="space-y-4">
+    <!--
+        Header.
+
+        No big heading here. The top bar already names the page and, unlike
+        anything in this content area, it does not scroll away - so a second
+        title below it was saying the same thing twice and the copy that
+        survived scrolling was the one nobody had chosen. What is left is the
+        line that actually adds something: what this screen is for.
+    -->
     <div class="flex justify-between items-center flex-wrap gap-3">
         <div>
-            <h1 class="text-3xl font-bold">Equity Trading</h1>
-            <p class="text-base-content/70 mt-1">
+            <p class="text-base-content/70">
                 One-click investment and swing trades across all accounts.
             </p>
         </div>
@@ -38,6 +45,25 @@
         <span id="equity-stale-text"></span>
     </div>
 
+    <!--
+        SHARES YOU OWE.
+
+        Above the KPI strip and not part of it. Every tile below measures how
+        the portfolio is DOING; this is a job that has to be finished before the
+        close, and a job does not belong in a row of measurements the eye skims
+        past. Hidden entirely when nothing is owed, so it never becomes
+        furniture that stops being read.
+    -->
+    <div class="alert alert-error hidden" id="equity-shorts-banner">
+        <div class="w-full">
+            <div class="font-bold" id="equity-shorts-headline"></div>
+            <div class="text-xs mt-1" id="equity-shorts-detail"></div>
+        </div>
+        <a href="{{ url_for('equity.positions') }}" class="btn btn-sm btn-outline">
+            Open Positions
+        </a>
+    </div>
+
     {% if accounts %}
     <!--
         KPI STRIP.
@@ -51,38 +77,66 @@
         illustrative sample data. Correct the definition here and on the server
         together if the owner intended something else.
     -->
-    <div class="overflow-x-auto">
-        <div class="stats shadow w-full">
-            <div class="stat">
-                <div class="stat-title">Active Accounts</div>
-                <div class="stat-value text-2xl equity-num" id="equity-kpi-active-accounts">--</div>
-                <div class="stat-desc" id="equity-kpi-connected-accounts">Connected: --</div>
-            </div>
-            <div class="stat">
-                <div class="stat-title">Total Portfolio Value</div>
-                <div class="stat-value text-2xl equity-num" id="equity-kpi-portfolio-value">--</div>
-                <div class="stat-desc">Sum of holdings value</div>
-            </div>
-            <div class="stat">
-                <div class="stat-title">Available Cash</div>
-                <div class="stat-value text-2xl equity-num" id="equity-kpi-available-cash">--</div>
-                <div class="stat-desc">Live broker balance</div>
-            </div>
-            <div class="stat">
-                <div class="stat-title">Unrealised P&amp;L</div>
-                <div class="stat-value text-2xl equity-num" id="equity-kpi-unrealised-pnl">--</div>
-                <div class="stat-desc">Before exit costs</div>
-            </div>
-            <div class="stat">
-                <div class="stat-title">Today's P&amp;L</div>
-                <div class="stat-value text-2xl equity-num" id="equity-kpi-todays-pnl">--</div>
-                <div class="stat-desc" id="equity-kpi-todays-pnl-note">Against previous close</div>
-            </div>
-            <div class="stat">
-                <div class="stat-title">Open Orders</div>
-                <div class="stat-value text-2xl equity-num" id="equity-kpi-open-orders">--</div>
-                <div class="stat-desc">Pending or partial</div>
-            </div>
+    <div class="stats stats-vertical lg:stats-horizontal shadow w-full bg-base-100 border-b border-base-300">
+        <div class="stat">
+            <div class="stat-figure text-primary">
+                    <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"></path>
+                    </svg>
+                </div>
+            <div class="stat-title">Active Accounts</div>
+            <div class="stat-value text-primary text-2xl lg:text-4xl equity-num" id="equity-kpi-active-accounts">--</div>
+            <div class="stat-desc" id="equity-kpi-connected-accounts">Connected: --</div>
+        </div>
+        <div class="stat">
+            <div class="stat-figure text-secondary">
+                    <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 13.255A23.931 23.931 0 0112 15c-3.183 0-6.22-.62-9-1.745M16 6V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v1m4 6h.01M5 20h14a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"></path>
+                    </svg>
+                </div>
+            <div class="stat-title">Total Portfolio Value</div>
+            <div class="stat-value text-secondary text-2xl lg:text-4xl equity-num" id="equity-kpi-portfolio-value">--</div>
+            <div class="stat-desc">Sum of holdings value</div>
+        </div>
+        <div class="stat">
+            <div class="stat-figure text-secondary">
+                    <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                    </svg>
+                </div>
+            <div class="stat-title">Available Cash</div>
+            <div class="stat-value text-secondary text-2xl lg:text-4xl equity-num" id="equity-kpi-available-cash">--</div>
+            <div class="stat-desc">Live broker balance</div>
+        </div>
+        <div class="stat">
+            <div class="stat-figure ">
+                    <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"></path>
+                    </svg>
+                </div>
+            <div class="stat-title">Unrealised P&amp;L</div>
+            <div class="stat-value text-2xl lg:text-4xl equity-num" id="equity-kpi-unrealised-pnl">--</div>
+            <div class="stat-desc" id="equity-kpi-unrealised-pnl-note">Before exit costs</div>
+        </div>
+        <div class="stat">
+            <div class="stat-figure ">
+                    <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path>
+                    </svg>
+                </div>
+            <div class="stat-title">Today's P&amp;L</div>
+            <div class="stat-value text-2xl lg:text-4xl equity-num" id="equity-kpi-todays-pnl">--</div>
+            <div class="stat-desc" id="equity-kpi-todays-pnl-note">Against previous close</div>
+        </div>
+        <div class="stat">
+            <div class="stat-figure text-warning">
+                    <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01"></path>
+                    </svg>
+                </div>
+            <div class="stat-title">Open Orders</div>
+            <div class="stat-value text-warning text-2xl lg:text-4xl equity-num" id="equity-kpi-open-orders">--</div>
+            <div class="stat-desc">Pending or partial</div>
         </div>
     </div>
 
@@ -91,50 +145,46 @@
     <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {% for account in accounts %}
         <div class="card bg-base-100 shadow-xl" id="equity-card-{{ account.id }}">
-            <div class="card-body p-4 space-y-3">
-                <div class="flex justify-between items-start gap-2">
+            <div class="card-body">
+                <div class="flex justify-between items-start mb-2">
                     <div class="min-w-0">
-                        <h3 class="font-semibold truncate">{{ account.account_name }}</h3>
-                        <p class="text-xs text-base-content/60 truncate">{{ account.broker_name or 'Broker not detected' }}</p>
+                        <h3 class="font-semibold text-lg truncate">{{ account.account_name }}</h3>
+                        <p class="text-sm text-base-content/60 truncate">{{ account.broker_name or 'Broker not detected' }}</p>
                     </div>
-                    <div class="flex items-center gap-2 shrink-0">
-                        <span class="w-2 h-2 rounded-full bg-gray-400 inline-block" id="equity-dot-{{ account.id }}"></span>
-                        <span class="text-xs text-base-content/60" id="equity-status-{{ account.id }}">{{ account.connection_status or 'unknown' }}</span>
+                    <div class="flex flex-col items-end gap-1 shrink-0">
+                        <span class="badge badge-sm badge-ghost" id="equity-status-{{ account.id }}">{{ account.connection_status or 'unknown' }}</span>
                     </div>
                 </div>
 
-                <div class="grid grid-cols-2 gap-3">
-                    <div>
-                        <div class="text-xs text-base-content/60">Equity Allocation Ratio</div>
-                        <div class="font-semibold equity-num" id="equity-ratio-{{ account.id }}">--</div>
+                <!-- Four plain figures, then the two P&L numbers side by side
+                     below a divider, per the approved card format. -->
+                <div class="space-y-1.5">
+                    <div class="flex justify-between items-baseline gap-3">
+                        <span class="text-sm text-base-content/70">Available Cash</span>
+                        <span class="font-semibold equity-num whitespace-nowrap" id="equity-cash-{{ account.id }}">--</span>
                     </div>
-                    <div>
-                        <div class="text-xs text-base-content/60">Available Cash</div>
-                        <div class="font-semibold equity-num" id="equity-cash-{{ account.id }}">--</div>
+                    <div class="flex justify-between items-baseline gap-3">
+                        <span class="text-sm text-base-content/70">Holdings Value</span>
+                        <span class="font-semibold equity-num whitespace-nowrap" id="equity-holdings-{{ account.id }}">--</span>
                     </div>
-                    <div>
-                        <div class="text-xs text-base-content/60">Holdings Value</div>
-                        <div class="font-semibold equity-num" id="equity-holdings-{{ account.id }}">--</div>
+                    <div class="flex justify-between items-baseline gap-3">
+                        <span class="text-sm text-base-content/70">Invested %</span>
+                        <span class="font-semibold equity-num whitespace-nowrap" id="equity-invested-{{ account.id }}">--</span>
                     </div>
-                    <div>
-                        <div class="text-xs text-base-content/60">Invested</div>
-                        <div class="font-semibold equity-num" id="equity-invested-{{ account.id }}">--</div>
+                    <div class="flex justify-between items-baseline gap-3">
+                        <span class="text-sm text-base-content/70">Holdings</span>
+                        <span class="font-semibold equity-num whitespace-nowrap" id="equity-count-{{ account.id }}">--</span>
                     </div>
+                </div>
+
+                <div class="grid grid-cols-2 gap-3 pt-3 mt-3 border-t">
                     <div>
-                        <div class="text-xs text-base-content/60">Pledge %</div>
-                        <div class="font-semibold equity-num" id="equity-pledged-{{ account.id }}">--</div>
+                        <div class="text-sm text-base-content/70" id="equity-unrealised-label-{{ account.id }}">Unrealised P&amp;L</div>
+                        <div class="text-lg font-bold equity-num" id="equity-unrealised-{{ account.id }}">--</div>
                     </div>
-                    <div>
-                        <div class="text-xs text-base-content/60">Unrealised P&amp;L</div>
-                        <div class="font-semibold equity-num" id="equity-unrealised-{{ account.id }}">--</div>
-                    </div>
-                    <div>
-                        <div class="text-xs text-base-content/60">Today's P&amp;L</div>
-                        <div class="font-semibold equity-num" id="equity-todays-{{ account.id }}">--</div>
-                    </div>
-                    <div>
-                        <div class="text-xs text-base-content/60">Holdings</div>
-                        <div class="font-semibold equity-num" id="equity-count-{{ account.id }}">--</div>
+                    <div class="text-right">
+                        <div class="text-sm text-base-content/70">Today's P&amp;L</div>
+                        <div class="text-lg font-bold equity-num" id="equity-todays-{{ account.id }}">--</div>
                     </div>
                 </div>
 
@@ -148,15 +198,18 @@
     <div class="card bg-base-100 shadow-xl">
         <div class="card-body">
             <h2 class="card-title">Today's Orders</h2>
-            <p class="text-sm text-base-content/60">
-                Every multi-account equity order placed today. Use View Split to see the per-account breakdown.
-            </p>
+            <!-- The broker's own book behind this list is read on a timer, not
+                 on every poll, so it can be a few seconds old. Orders placed
+                 through AlgoMirror are never stale; one placed at the broker
+                 terminal can lag. Said out loud rather than left to be
+                 assumed. The Order Book screen always reads live. -->
+            <p class="text-xs text-base-content/50" id="equity-orders-book-age"></p>
 
             <div class="overflow-x-auto">
                 <table class="table table-sm">
                     <thead>
                         <tr>
-                            <th>Order ID</th>
+                            <th>Time</th>
                             <th>Symbol</th>
                             <th>Exchange</th>
                             <th>Side</th>
@@ -165,16 +218,13 @@
                             <th class="text-right">Qty</th>
                             <th class="text-right">Filled</th>
                             <th class="text-right">Price</th>
-                            <th class="text-right">Stop Loss</th>
-                            <th class="text-right">Target</th>
                             <th>Status</th>
                             <th class="text-right">Accounts</th>
-                            <th>Placed At</th>
                         </tr>
                     </thead>
                     <tbody id="equity-orders-body">
                         <tr id="equity-orders-empty">
-                            <td colspan="14" class="text-center py-8 text-base-content/60">
+                            <td colspan="11" class="text-center py-8 text-base-content/60">
                                 No orders today. Nothing on this screen can place an order in this increment.
                             </td>
                         </tr>
@@ -193,12 +243,17 @@
                 Add and connect a trading account before using the equity module.
             </p>
             <div class="mt-6">
-                <a href="{{ url_for('accounts.add') }}" class="btn btn-primary">Add Account</a>
+                <a href="{{ url_for('accounts.add') }}" class="btn btn-primary btn-sm">Add Account</a>
             </div>
         </div>
     </div>
     {% endif %}
 </div>
+
+<!-- The "Updated" line, shared by every equity screen so one thing is
+     said one way: date and time, green while the market is open and
+     amber while it is closed. -->
+<script src="{{ url_for('static', filename='js/equity_updated.js') }}"></script>
 
 <script src="{{ url_for('static', filename='js/equity_common.js') }}"></script>
 <script>
@@ -211,6 +266,29 @@
 // cannot drift between the KPI strip, the account cards and the orders table.
 const EquityFormat = {
     LAKH: 100000,
+
+    // Every headline figure on this screen, always in lakhs.
+    //
+    // The suffix is unconditional on purpose. The old rule showed it only above
+    // one lakh, so 24.91L and 7,848 sat in the same column reading as the same
+    // scale - and 7,848 was taken for 7.85 lakh, a hundredfold misreading of a
+    // portfolio. One scale, one suffix, no arithmetic required of the reader.
+    //
+    // Two decimals cannot express a few hundred rupees, so anything this
+    // rounds to zero carries the exact figure on the line beneath it. The
+    // headline is for comparing; the sub-line is for reading.
+    lakhs: function (value) {
+        const num = Number(value);
+        if (!isFinite(num)) { return '₹0.00L'; }
+        const sign = num < 0 ? '-' : '';
+        return sign + '₹' + (Math.abs(num) / EquityFormat.LAKH).toFixed(2) + 'L';
+    },
+
+    signedLakhs: function (value) {
+        const num = Number(value);
+        if (!isFinite(num) || num === 0) { return EquityFormat.lakhs(0); }
+        return (num > 0 ? '+' : '') + EquityFormat.lakhs(num);
+    },
 
     // Compact rupees for summary figures: the lakh suffix above one lakh
     // (Rs 47.10L), plain Indian grouped digits below it (Rs 1,14,500).
@@ -265,9 +343,15 @@ const EquityFormat = {
 
     clockTime: function (isoText) {
         if (!isoText) { return ''; }
-        const parsed = new Date(isoText);
+        // The server sends UTC with no timezone marker. Unmarked, the browser
+        // reads it as LOCAL time and prints it raw - which is why an exit
+        // placed at 09:44:56 IST read 04:14:56 here while every other equity
+        // screen showed it correctly. Mark it, then render in IST explicitly.
+        let text = String(isoText);
+        if (!/(Z|[+-]\d{2}:?\d{2})$/.test(text)) { text += 'Z'; }
+        const parsed = new Date(text);
         if (isNaN(parsed.getTime())) { return ''; }
-        return parsed.toLocaleTimeString('en-IN', { hour12: false });
+        return parsed.toLocaleTimeString('en-IN', { hour12: false, timeZone: 'Asia/Kolkata' });
     }
 };
 
@@ -275,64 +359,179 @@ const EQUITY_FETCH_TIMEOUT_MS = 20000;
 let equityPollTimer = null;
 let equityLoading = false;
 
+// The card header carries a badge rather than a coloured dot, matching the F&O
+// dashboard. Stale outranks the connection status: a figure that has stopped
+// refreshing matters more than the socket being nominally open.
+function equityApplyBookAge(seconds) {
+    const node = document.getElementById('equity-orders-book-age');
+    if (!node) { return; }
+    const age = Number(seconds);
+    if (!isFinite(age) || age <= 0) {
+        node.textContent = 'Broker book read just now.';
+        return;
+    }
+    node.textContent = 'Broker book as of ' + Math.round(age) +
+        ' seconds ago. Orders placed here appear immediately.';
+}
+
+
+function equityApplyShorts(shorts) {
+    /*
+     * Shares you OWE, at the top of the screen.
+     *
+     * Written to be readable in one glance from across a desk, because the
+     * only thing this banner is for is making sure an open short is never
+     * missed. It says the count, what they are, how long is left, and - kept
+     * separate because it is a different and worse situation - how many have
+     * no stop resting at the broker.
+     */
+    const banner = document.getElementById('equity-shorts-banner');
+    if (!banner) { return; }
+
+    const data = shorts || {};
+    const count = Number(data.count) || 0;
+
+    if (!count) {
+        banner.classList.add('hidden');
+        return;
+    }
+
+    banner.classList.remove('hidden');
+    const squareOff = data.squareoff_at || '15:12';
+    const quantity = Number(data.quantity) || 0;
+    const symbols = (data.symbols || []).join(', ');
+
+    equitySetText('equity-shorts-headline',
+        'You owe ' + EquityFormat.integer(quantity) + ' shares'
+        + (symbols ? ' of ' + symbols : '')
+        + ' that must be bought back today.');
+
+    const parts = [];
+    const left = Number(data.minutes_to_squareoff);
+    if (data.past_squareoff) {
+        parts.push('It is past ' + squareOff + ' and the buy-back should already '
+            + 'have run. Check Positions and your broker now.');
+    } else if (Number.isFinite(left)) {
+        parts.push('AlgoMirror buys them back at ' + squareOff + ', in '
+            + equityShortMinutesText(left) + '.');
+    } else {
+        parts.push('AlgoMirror buys them back at ' + squareOff + '.');
+    }
+
+    const unprotected = Number(data.unprotected) || 0;
+    if (unprotected) {
+        parts.push(unprotected + ' of ' + count + ' have NO stop resting at your '
+            + 'broker, so they are only protected while AlgoMirror is running.');
+    }
+
+    const inFlight = Number(data.in_flight) || 0;
+    if (inFlight) {
+        parts.push(inFlight + ' already have a buy-back at the broker.');
+    }
+
+    equitySetText('equity-shorts-detail', parts.join(' '));
+}
+
+function equityShortMinutesText(minutes) {
+    /* "2h 14m", because the number that matters is whether there is time. */
+    const total = Math.max(Math.round(Number(minutes) || 0), 0);
+    const hours = Math.floor(total / 60);
+    const rest = total % 60;
+    if (hours && rest) { return hours + 'h ' + rest + 'm'; }
+    if (hours) { return hours + 'h'; }
+    return rest + 'm';
+}
+
 function equityApplyKpi(kpi) {
     equitySetText('equity-kpi-active-accounts', EquityFormat.integer(kpi.active_accounts));
     equitySetText('equity-kpi-connected-accounts', 'Connected: ' + EquityFormat.integer(kpi.connected_accounts));
-    equitySetText('equity-kpi-portfolio-value', EquityFormat.compact(kpi.total_portfolio_value));
-    equitySetText('equity-kpi-available-cash', EquityFormat.compact(kpi.available_cash));
+    equitySetText('equity-kpi-portfolio-value', EquityFormat.lakhs(kpi.total_portfolio_value));
+    equitySetText('equity-kpi-available-cash', EquityFormat.lakhs(kpi.available_cash));
 
     equitySetText(
         'equity-kpi-unrealised-pnl',
-        EquityFormat.signed(kpi.unrealised_pnl, 'compact'),
-        ('stat-value text-2xl equity-num ' + EquityFormat.pnlClass(kpi.unrealised_pnl)).trim()
+        EquityFormat.signedLakhs(kpi.unrealised_pnl),
+        ('stat-value text-2xl lg:text-4xl equity-num ' + EquityFormat.pnlClass(kpi.unrealised_pnl)).trim()
     );
-
+    // The label is not decoration. Unrealised now means profit to YESTERDAY'S
+    // CLOSE, so that it and Today's P&L add up instead of overlapping. Read as
+    // "total profit" it would be short by exactly today's move, so the card has
+    // to say which of the two measures it is showing.
+    equitySetText(
+        'equity-kpi-unrealised-pnl-note',
+        kpi.unrealised_to_previous_close
+            ? 'Till Previous close'
+            : 'Total since purchase. No previous close reported.'
+    );
     if (kpi.todays_pnl_available) {
         equitySetText(
             'equity-kpi-todays-pnl',
-            EquityFormat.signed(kpi.todays_pnl, 'compact'),
-            ('stat-value text-2xl equity-num ' + EquityFormat.pnlClass(kpi.todays_pnl)).trim()
+            EquityFormat.signedLakhs(kpi.todays_pnl),
+            ('stat-value text-2xl lg:text-4xl equity-num ' + EquityFormat.pnlClass(kpi.todays_pnl)).trim()
         );
         equitySetText('equity-kpi-todays-pnl-note', 'Against previous close');
     } else {
-        equitySetText('equity-kpi-todays-pnl', 'n/a', 'stat-value text-2xl equity-num');
+        equitySetText('equity-kpi-todays-pnl', 'n/a', 'stat-value text-2xl lg:text-4xl equity-num');
         equitySetText('equity-kpi-todays-pnl-note', 'No previous close reported');
     }
 
     equitySetText('equity-kpi-open-orders', EquityFormat.integer(kpi.open_orders));
 }
 
+/*
+ * One string standing for everything on this screen that moves with a price.
+ *
+ * Deliberately NOT the whole payload: cash balances, account names and the
+ * order book change for reasons that have nothing to do with the market, and
+ * including them would turn the line green when a broker balance settled.
+ */
+function equityDashboardPriceKey(data) {
+    const kpi = data.kpi || {};
+    const parts = [
+        'total=' + kpi.total_portfolio_value,
+        'unrealised=' + kpi.unrealised_pnl,
+        'today=' + kpi.todays_pnl
+    ];
+    (data.accounts || []).forEach(function (card) {
+        parts.push(card.account_id + ':' + card.holdings_value + ':' + card.todays_pnl);
+    });
+    return parts.join('|');
+}
+
 function equityApplyCard(card) {
     const id = card.account_id;
 
-    equitySetText('equity-ratio-' + id, EquityFormat.percent(card.order_qty_ratio_pct));
-    equitySetText('equity-cash-' + id, EquityFormat.compact(card.available_cash));
-    equitySetText('equity-holdings-' + id, EquityFormat.compact(card.holdings_value));
+    equitySetText('equity-cash-' + id, EquityFormat.lakhs(card.available_cash));
+    equitySetText('equity-holdings-' + id, EquityFormat.lakhs(card.holdings_value));
     equitySetText('equity-invested-' + id, EquityFormat.percent(card.invested_pct));
-    // Pledge percent, not a share count: (collateral / 0.90) / holdings value.
-    equitySetText('equity-pledged-' + id, EquityFormat.percent(card.pledge_pct));
     equitySetText('equity-count-' + id, EquityFormat.integer(card.holdings_count));
 
     equitySetText(
         'equity-unrealised-' + id,
-        EquityFormat.signed(card.unrealised_pnl, 'compact'),
-        ('font-semibold equity-num ' + EquityFormat.pnlClass(card.unrealised_pnl)).trim()
+        EquityFormat.signedLakhs(card.unrealised_pnl),
+        ('text-lg font-bold equity-num ' + EquityFormat.pnlClass(card.unrealised_pnl)).trim()
     );
-
+    const unrealisedLabel = document.getElementById('equity-unrealised-label-' + id);
+    if (unrealisedLabel) {
+        unrealisedLabel.textContent = card.unrealised_to_previous_close
+            ? 'Unrealised P&L (to prev close)'
+            : 'Unrealised P&L';
+    }
     if (card.todays_pnl_available) {
         equitySetText(
             'equity-todays-' + id,
-            EquityFormat.signed(card.todays_pnl, 'compact'),
-            ('font-semibold equity-num ' + EquityFormat.pnlClass(card.todays_pnl)).trim()
+            EquityFormat.signedLakhs(card.todays_pnl),
+            ('text-lg font-bold equity-num ' + EquityFormat.pnlClass(card.todays_pnl)).trim()
         );
     } else {
-        equitySetText('equity-todays-' + id, 'n/a', 'font-semibold equity-num');
+        equitySetText('equity-todays-' + id, 'n/a', 'text-lg font-bold equity-num');
     }
 
-    const dot = document.getElementById('equity-dot-' + id);
-    if (dot) { dot.className = equityStatusDotClass(card.connection_status, card.is_stale); }
-
-    equitySetText('equity-status-' + id, card.is_stale ? 'stale' : (card.connection_status || 'unknown'));
+    equitySetText(
+        'equity-status-' + id,
+        card.is_stale ? 'stale' : (card.connection_status || 'unknown'),
+        equityStatusBadgeClass(card.connection_status, card.is_stale)
+    );
 
     const note = document.getElementById('equity-note-' + id);
     if (note) {
@@ -364,7 +563,7 @@ function equityApplyOrders(orders) {
     if (!orders || orders.length === 0) {
         const row = document.createElement('tr');
         const cell = document.createElement('td');
-        cell.colSpan = 14;
+        cell.colSpan = 11;
         cell.className = 'text-center py-8 text-base-content/60';
         cell.textContent = 'No orders today. Nothing on this screen can place an order in this increment.';
         row.appendChild(cell);
@@ -375,26 +574,54 @@ function equityApplyOrders(orders) {
     orders.forEach(function (order) {
         const row = document.createElement('tr');
         row.className = 'hover';
-        row.appendChild(equityOrderCell(order.order_id, 'equity-num'));
-        row.appendChild(equityOrderCell(order.symbol, 'font-semibold'));
+        // Time, not the order id. The id is AlgoMirror's own bookkeeping and
+        // means nothing on a glance-at-it screen; an order placed outside
+        // AlgoMirror has none at all. When it was in the first column it
+        // invited the reasonable question of where number 1 had gone.
+        row.appendChild(equityOrderCell(EquityFormat.clockTime(order.placed_at), 'equity-num'));
+        const stock = document.createElement('td');
+        const symbol = document.createElement('div');
+        symbol.className = 'font-semibold';
+        symbol.textContent = order.symbol;
+        stock.appendChild(symbol);
+        row.appendChild(stock);
         row.appendChild(equityOrderCell(order.exchange));
         row.appendChild(equityOrderCell(order.side));
         row.appendChild(equityOrderCell(order.order_type));
         row.appendChild(equityOrderCell(order.product));
         row.appendChild(equityOrderCell(EquityFormat.integer(order.total_quantity), 'text-right equity-num'));
         row.appendChild(equityOrderCell(EquityFormat.integer(order.filled_quantity), 'text-right equity-num'));
-        row.appendChild(equityOrderCell(EquityFormat.rupees(order.price), 'text-right equity-num'));
+        // The price it actually filled at, weighted across every account.
+        // A market order has no price of its own, so this column used to read
+        // Rs 0.00 - a price of zero, which is not what happened. Until it
+        // fills there is nothing to average: a limit order shows its limit, a
+        // market order shows Market.
+        let priceText, priceClass = 'text-right equity-num';
+        if (order.avg_price !== null && order.avg_price !== undefined) {
+            priceText = EquityFormat.rupees(order.avg_price);
+        } else if (order.order_type === 'MARKET') {
+            priceText = 'Market';
+            priceClass = 'text-right equity-num text-base-content/60';
+        } else {
+            priceText = order.price === null || order.price === undefined
+                ? '-' : EquityFormat.rupees(order.price);
+        }
+        row.appendChild(equityOrderCell(priceText, priceClass));
         row.appendChild(equityOrderCell(
-            order.stop_loss === null || order.stop_loss === undefined ? '-' : EquityFormat.rupees(order.stop_loss),
-            'text-right equity-num'
+            order.not_at_broker ? 'NOT AT BROKER' : order.status,
+            order.not_at_broker ? 'text-error font-semibold' : ''
         ));
-        row.appendChild(equityOrderCell(
-            order.target === null || order.target === undefined ? '-' : EquityFormat.rupees(order.target),
-            'text-right equity-num'
-        ));
-        row.appendChild(equityOrderCell(order.status));
-        row.appendChild(equityOrderCell(EquityFormat.integer(order.accounts_count), 'text-right equity-num'));
-        row.appendChild(equityOrderCell(EquityFormat.clockTime(order.placed_at), 'equity-num'));
+        // (D) = Direct: placed at the broker terminal, not through AlgoMirror.
+        // It sits with the account count because that is the column that says
+        // where an order came from, and it is short enough not to crowd it.
+        const accounts = document.createElement('td');
+        accounts.className = 'text-right equity-num';
+        accounts.textContent = EquityFormat.integer(order.accounts_count)
+            + (order.placed_outside ? ' (D)' : '');
+        if (order.placed_outside) {
+            accounts.title = 'Direct: placed at your broker, not through AlgoMirror';
+        }
+        row.appendChild(accounts);
         body.appendChild(row);
     });
 }
@@ -417,9 +644,11 @@ async function equityLoadDashboard() {
             return;
         }
 
+        equityApplyShorts(data.shorts);
         equityApplyKpi(data.kpi || {});
         (data.accounts || []).forEach(equityApplyCard);
         equityApplyOrders(data.todays_orders);
+        equityApplyBookAge(data.todays_orders_book_age_seconds);
 
         const staleIds = data.stale_account_ids || [];
         if (staleIds.length > 0) {
@@ -430,11 +659,30 @@ async function equityLoadDashboard() {
             equityShowStale('');
         }
 
-        equitySetText('equity-last-updated', 'Updated ' + EquityFormat.clockTime(data.generated_at));
-
-        equityRenderFeedBadge(data.price_feed);
-
-        equityRenderAnalyzeBadge(data.analyze && data.analyze.analyze);
+        if (window.EquityUpdated) {
+            // The fingerprint this screen had been passing was NOTHING, so the
+            // line could never turn green here however long the market ran -
+            // it was permanently making "no claim". Found on 7 September with
+            // a live market moving in front of it.
+            //
+            // This screen draws no LTP of its own, but the figures it DOES
+            // draw move with the prices behind them: each account's holdings
+            // value and today's profit, and the portfolio total. When a price
+            // moves, at least one of these moves with it.
+            //
+            // The account id goes in beside the figures so an account
+            // appearing or dropping out counts as a change, which it is - the
+            // same reason the shared helper includes the symbol beside the
+            // price.
+            window.EquityUpdated.write(
+                'equity-last-updated',
+                data.generated_at,
+                'Updated',
+                equityDashboardPriceKey(data)
+            );
+            equityRenderFeedBadge(data.price_feed);
+            equityRenderAnalyzeBadge(data.analyze && data.analyze.analyze);
+        }
     } catch (error) {
         // Degrade to a visible stale marker, never blank the page.
         equityShowStale('Live data unavailable, showing the last values loaded. Retrying shortly.');
@@ -454,7 +702,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
 window.addEventListener('beforeunload', function () {
     if (equityPollTimer) {
-        equityPollTimer();
+        equityPollTimer && equityPollTimer();
         equityPollTimer = null;
     }
 });

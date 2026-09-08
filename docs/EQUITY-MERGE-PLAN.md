@@ -3,7 +3,7 @@
 How Saravanan's equity commit gets folded into AlgoMirror: what is adopted, what is
 rewritten, what is discarded, and what has to be fixed first.
 
-Status: architecture is now event driven end to end. No equity component polls: order state arrives on `subscribe_orders`, prices on the shared feed, and the browser is pushed to over SSE. Phases 0 to 4 done bar 2.7 and the Order Status cost estimate. Phase 5: equity_common.js extracted, template adoption from the client tree not started.
+Status: architecture is now event driven end to end. No equity component polls: order state arrives on `subscribe_orders`, prices on the shared feed, and the browser is pushed to over SSE. Phases 0 to 4 done bar 2.7 and the Order Status cost estimate. Phase 5: seven of the client's screens adopted onto our architecture. settings.html held back and positions.html dropped, see section 9.
 Prepared: 8 September 2026.
 
 ## 0. Provenance

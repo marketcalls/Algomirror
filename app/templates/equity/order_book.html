@@ -2,7 +2,7 @@
 
 {% block title %}Equity Order Book - AlgoMirror{% endblock %}
 
-{% block page_title %}Equity Order Book{% endblock %}
+{% block page_title %}Order Book{% endblock %}
 
 {% block content %}
 <style>
@@ -12,148 +12,102 @@
     .equity-num { font-variant-numeric: tabular-nums; }
 </style>
 
-<div class="space-y-6">
-    <!-- Header -->
-    <div class="flex justify-between items-center flex-wrap gap-3">
-        <div>
-            <h1 class="text-3xl font-bold">Order Book</h1>
-            <p class="text-base-content/70 mt-1">
-                Equity orders with the per-account split behind each one. This screen is read-only: use Order Status
-                on the Place Order screen to modify or cancel an order that is still working.
-            </p>
-        </div>
+<div class="space-y-4">
+    <!--
+        Header.
+
+        No big heading here. The top bar already names the page and, unlike
+        anything in this content area, it does not scroll away - so a second
+        title below it was saying the same thing twice, and the copy that
+        survived scrolling was the one nobody had chosen.
+    -->
+    <div class="flex justify-end items-center flex-wrap gap-3">
         <div class="flex gap-3 items-center flex-wrap">
             <span id="equity-feed-badge" class="hidden"></span>
             <span id="equity-stream-badge" class="hidden"></span>
             <span id="equity-analyze-badge" class="hidden"></span>
             <span class="text-xs text-base-content/50 equity-num" id="equity-last-updated">Not loaded yet</span>
             <button onclick="equityLoadOrderBook()" class="btn btn-ghost btn-sm h-9" id="equity-refresh-btn">Refresh</button>
+            <!-- A pure read, so it is a plain link and wears no commit colour.
+                 Outlined, like the watch list's, because nothing is written by
+                 downloading a copy of what is already on the screen. -->
+            <a href="{{ url_for('equity.api_order_book_export') }}"
+               class="btn btn-outline btn-sm h-9" id="equity-export-link">Download CSV</a>
+            {% if accounts %}
+            <button onclick="equityReconcile()" class="btn btn-ghost btn-sm h-9" id="equity-reconcile-btn"
+                    title="Ask the broker what happened to every order still outstanding">Check With Broker</button>
+            {% endif %}
             <a href="{{ url_for('equity.place_order') }}#order-status" class="btn btn-primary btn-sm h-9">Order Status</a>
         </div>
     </div>
 
     <!-- Stale marker. Shown instead of blanking the page when a load fails. -->
-    <div class="alert alert-warning hidden" id="equity-stale-banner">
-        <span id="equity-stale-text"></span>
-    </div>
-
-    <!-- Filters -->
-    <div class="card bg-base-100 shadow">
-        <div class="card-body p-4">
-            <div class="flex items-end flex-wrap gap-4">
-                <div class="form-control">
-                    <label class="label" for="equity-filter-account">
-                        <span class="label-text">Account</span>
-                    </label>
-                    <select id="equity-filter-account" class="select select-bordered select-sm" onchange="equityLoadOrderBook()">
-                        <option value="all" selected>All Accounts</option>
-                    </select>
-                </div>
-
-                <div class="form-control">
-                    <label class="label" for="equity-filter-symbol">
-                        <span class="label-text">Stock</span>
-                    </label>
-                    <input type="text" id="equity-filter-symbol" class="input input-bordered input-sm w-36"
-                           placeholder="All" onchange="equityLoadOrderBook()">
-                </div>
-
-                <div class="form-control">
-                    <label class="label" for="equity-filter-side">
-                        <span class="label-text">Side</span>
-                    </label>
-                    <select id="equity-filter-side" class="select select-bordered select-sm" onchange="equityLoadOrderBook()">
-                        <option value="all" selected>All</option>
-                        <option value="BUY">BUY</option>
-                        <option value="SELL">SELL</option>
-                    </select>
-                </div>
-
-                <div class="form-control">
-                    <label class="label" for="equity-filter-status">
-                        <span class="label-text">Status</span>
-                    </label>
-                    <select id="equity-filter-status" class="select select-bordered select-sm" onchange="equityLoadOrderBook()">
-                        <option value="all" selected>All</option>
-                        <option value="PENDING">PENDING</option>
-                        <option value="PARTIAL">PARTIAL</option>
-                        <option value="COMPLETED">COMPLETED</option>
-                        <option value="CANCELLED">CANCELLED</option>
-                    </select>
-                </div>
-
-                <div class="form-control">
-                    <label class="label" for="equity-filter-type">
-                        <span class="label-text">Order Type</span>
-                    </label>
-                    <select id="equity-filter-type" class="select select-bordered select-sm" onchange="equityLoadOrderBook()">
-                        <option value="all" selected>All</option>
-                        <option value="MARKET">MARKET</option>
-                        <option value="LIMIT">LIMIT</option>
-                        <option value="GTT">GTT</option>
-                    </select>
-                </div>
-
-                <div class="form-control">
-                    <label class="label" for="equity-filter-nature">
-                        <span class="label-text">Trade Nature</span>
-                    </label>
-                    <select id="equity-filter-nature" class="select select-bordered select-sm" onchange="equityLoadOrderBook()">
-                        <option value="all" selected>All</option>
-                        {% for nature in trade_natures %}
-                        <option value="{{ nature.id }}">{{ nature.name }}</option>
-                        {% endfor %}
-                    </select>
-                </div>
-
-                <div class="form-control">
-                    <label class="label" for="equity-filter-from">
-                        <span class="label-text">From</span>
-                    </label>
-                    <input type="date" id="equity-filter-from" class="input input-bordered input-sm equity-num"
-                           onchange="equityLoadOrderBook()">
-                </div>
-
-                <div class="form-control">
-                    <label class="label" for="equity-filter-to">
-                        <span class="label-text">To</span>
-                    </label>
-                    <input type="date" id="equity-filter-to" class="input input-bordered input-sm equity-num"
-                           onchange="equityLoadOrderBook()">
-                </div>
-
-                <button onclick="equityClearFilters()" class="btn btn-ghost btn-sm">Clear Filters</button>
-            </div>
-
-            <p class="text-xs text-base-content/60 mt-2" id="equity-window-note">
-                With no date range the book shows today's orders, plus a GTT placed on an earlier day that is still
-                pending. A resting GTT stays visible so it remains reachable to cancel.
-            </p>
+    <div class="flex justify-center">
+        <div class="alert w-auto max-w-2xl shadow-lg alert-warning hidden" id="equity-stale-banner">
+            <span id="equity-stale-text"></span>
         </div>
     </div>
 
-    <!-- Totals -->
+
+    <!--
+        An account the broker would not answer for. The rows below are then an
+        incomplete picture, and a screen that does not say so is telling you
+        everything is here when it is not.
+    -->
+    <div class="flex justify-center">
+        <div class="alert w-auto max-w-2xl shadow-lg alert-warning hidden mt-2"
+             id="equity-unverified-banner">
+            <span id="equity-unverified-text"></span>
+        </div>
+    </div>
+
+    <!--
+        What a Modify or a Cancel came back with. Its own banner rather than
+        the stale marker's: one says the screen is out of date, the other says
+        what happened to an order, and a reader must never mistake the second
+        for the first.
+    -->
+    <div class="flex justify-center">
+        <div class="alert w-auto max-w-2xl shadow-lg hidden mt-2" id="equity-action-banner">
+            <span id="equity-action-text"></span>
+        </div>
+    </div>
+
+    <!--
+        Summary, in the shape the F&O module already uses, so the two modules
+        count the same things the same way and a reader moving between them
+        does not have to learn a second layout.
+
+        These five describe the REGULAR orders only. A GTT has not done
+        anything yet - counting a resting instruction as an Open order would
+        say the day has work outstanding when it has not - so the GTT count
+        stands apart at the end.
+    -->
     <div class="overflow-x-auto">
-        <div class="stats shadow w-full">
+        <div class="stats shadow w-full border-b border-base-300">
             <div class="stat">
-                <div class="stat-title">Orders</div>
-                <div class="stat-value text-2xl equity-num" id="equity-total-orders">--</div>
-                <div class="stat-desc">In the current view</div>
+                <div class="stat-title">Buy Orders</div>
+                <div class="stat-value text-2xl equity-num text-success" id="equity-total-buy">--</div>
             </div>
             <div class="stat">
-                <div class="stat-title">Open Orders</div>
-                <div class="stat-value text-2xl equity-num" id="equity-total-open">--</div>
-                <div class="stat-desc">Pending or partial</div>
+                <div class="stat-title">Sell Orders</div>
+                <div class="stat-value text-2xl equity-num text-error" id="equity-total-sell">--</div>
             </div>
             <div class="stat">
-                <div class="stat-title">Quantity</div>
-                <div class="stat-value text-2xl equity-num" id="equity-total-quantity">--</div>
-                <div class="stat-desc" id="equity-total-filled">Filled: --</div>
+                <div class="stat-title">Completed</div>
+                <div class="stat-value text-2xl equity-num text-success" id="equity-total-completed">--</div>
             </div>
             <div class="stat">
-                <div class="stat-title">Carried GTT</div>
-                <div class="stat-value text-2xl equity-num" id="equity-total-carried">--</div>
-                <div class="stat-desc">Placed earlier, still pending</div>
+                <div class="stat-title">Open</div>
+                <div class="stat-value text-2xl equity-num text-warning" id="equity-total-open">--</div>
+            </div>
+            <div class="stat">
+                <div class="stat-title">Cancelled</div>
+                <div class="stat-value text-2xl equity-num text-base-content/50" id="equity-total-cancelled">--</div>
+            </div>
+            <div class="stat">
+                <div class="stat-title">GTT Orders</div>
+                <div class="stat-value text-2xl equity-num text-info" id="equity-total-gtt">--</div>
             </div>
         </div>
     </div>
@@ -161,47 +115,286 @@
     <!-- Orders -->
     <div class="card bg-base-100 shadow-xl">
         <div class="card-body">
-            <h2 class="card-title">Orders</h2>
-            <p class="text-sm text-base-content/60">
-                The Accounts column is the count that reached the broker over the count selected, for example 4/5.
-                View Split opens the per-account breakdown behind that count.
-            </p>
+            <h2 class="card-title">Regular Orders</h2>
 
             <div class="overflow-x-auto">
                 <table class="table table-sm">
                     <thead>
                         <tr>
-                            <th>Time</th>
-                            <th>Symbol</th>
-                            <th>Exchange</th>
-                            <th>Action</th>
-                            <th>Type</th>
-                            <th class="text-right">Qty</th>
-                            <th class="text-right">Filled</th>
-                            <th class="text-right">Price</th>
-                            <th>Trade Nature</th>
-                            <th class="text-right">Accounts</th>
-                            <th>Status</th>
+                            <!-- Not sortable, and deliberately. This is where a
+                                 row sits in the order you are looking at, so
+                                 sorting BY it would be asking to sort by the
+                                 order it is already in. -->
+                            <th class="text-right">Sl</th>
+                            <th>
+                                <button type="button" class="equity-sort"
+                                        title="Sort by the time the order was placed" onclick="equitySortBy('orders', 'placed_at')">Time<span
+                                        class="equity-sort-mark" id="equity-sort-mark-orders-placed_at"></span></button>
+                            </th>
+                            <th>
+                                <button type="button" class="equity-sort"
+                                        title="Sort by stock name, A to Z" onclick="equitySortBy('orders', 'symbol')">Symbol<span
+                                        class="equity-sort-mark" id="equity-sort-mark-orders-symbol"></span></button>
+                            </th>
+                            <th>
+                                <button type="button" class="equity-sort"
+                                        title="Sort by exchange" onclick="equitySortBy('orders', 'exchange')">Exchange<span
+                                        class="equity-sort-mark" id="equity-sort-mark-orders-exchange"></span></button>
+                            </th>
+                            <th>
+                                <button type="button" class="equity-sort"
+                                        title="Sort by buy or sell" onclick="equitySortBy('orders', 'side')">Action<span
+                                        class="equity-sort-mark" id="equity-sort-mark-orders-side"></span></button>
+                            </th>
+                            <th>
+                                <button type="button" class="equity-sort"
+                                        title="Sort by order type" onclick="equitySortBy('orders', 'order_type')">Type<span
+                                        class="equity-sort-mark" id="equity-sort-mark-orders-order_type"></span></button>
+                            </th>
+                            <th class="text-right">
+                                <button type="button" class="equity-sort"
+                                        title="Sort by quantity" onclick="equitySortBy('orders', 'total_quantity')">Qty<span
+                                        class="equity-sort-mark" id="equity-sort-mark-orders-total_quantity"></span></button>
+                            </th>
+                            <th class="text-right">
+                                <button type="button" class="equity-sort"
+                                        title="Sort by the quantity filled" onclick="equitySortBy('orders', 'filled_quantity')">Filled<span
+                                        class="equity-sort-mark" id="equity-sort-mark-orders-filled_quantity"></span></button>
+                            </th>
+                            <th class="text-right">
+                                <button type="button" class="equity-sort"
+                                        title="Sort by price" onclick="equitySortBy('orders', 'price')">Price<span
+                                        class="equity-sort-mark" id="equity-sort-mark-orders-price"></span></button>
+                            </th>
+                            <th class="text-right">
+                                <button type="button" class="equity-sort"
+                                        title="Sort by stop loss" onclick="equitySortBy('orders', 'stop_loss')">Stop Loss<span
+                                        class="equity-sort-mark" id="equity-sort-mark-orders-stop_loss"></span></button>
+                            </th>
+                            <th class="text-right">
+                                <button type="button" class="equity-sort"
+                                        title="Sort by target" onclick="equitySortBy('orders', 'target')">Target<span
+                                        class="equity-sort-mark" id="equity-sort-mark-orders-target"></span></button>
+                            </th>
+                            <th>
+                                <button type="button" class="equity-sort"
+                                        title="Sort by trade nature, A to Z" onclick="equitySortBy('orders', 'trade_nature')">Trade Nature<span
+                                        class="equity-sort-mark" id="equity-sort-mark-orders-trade_nature"></span></button>
+                            </th>
+                            <th class="text-right">
+                                <button type="button" class="equity-sort"
+                                        title="Sort by the number of accounts that reached the broker" onclick="equitySortBy('orders', 'accounts_placed')">Accounts<span
+                                        class="equity-sort-mark" id="equity-sort-mark-orders-accounts_placed"></span></button>
+                            </th>
+                            <th>
+                                <button type="button" class="equity-sort"
+                                        title="Sort by status" onclick="equitySortBy('orders', 'status')">Status<span
+                                        class="equity-sort-mark" id="equity-sort-mark-orders-status"></span></button>
+                            </th>
                             <th>Actions</th>
                         </tr>
                     </thead>
                     <tbody id="equity-orders-body">
                         <tr>
-                            <td colspan="12" class="text-center py-8 text-base-content/60">
+                            <td colspan="15" class="text-center py-8 text-base-content/60">
                                 Loading orders.
                             </td>
                         </tr>
                     </tbody>
                 </table>
             </div>
-
-            <p class="text-xs text-base-content/60 mt-4">
-                Qty Ratio and Cash Balance inside a split are the point-in-time snapshot taken when the order was
-                created. They are never recalculated from today's allocations or today's cash.
-            </p>
         </div>
     </div>
+
+    <!--
+        GTT Orders.
+
+        Its own table, because a GTT is not something that happened today. It
+        is a standing instruction that can sit for weeks waiting for a price,
+        and counting it among the day's orders made the day read as busier
+        than it was. It stays on this screen rather than moving away entirely,
+        because a resting instruction has to remain visible to be cancelled.
+    -->
+    <div class="card bg-base-100 shadow-xl hidden" id="equity-gtt-card">
+        <div class="card-body">
+            <h2 class="card-title">GTT Orders</h2>
+            <p class="text-sm text-base-content/60">
+                Still waiting for their price, whichever day they were placed.
+            </p>
+
+            <div class="overflow-x-auto">
+                <table class="table table-sm">
+                    <thead>
+                        <tr>
+                            <th class="text-right">Sl</th>
+                            <th>
+                                <button type="button" class="equity-sort"
+                                        title="Sort by the day the GTT was placed" onclick="equitySortBy('gtt', 'placed_at')">Placed<span
+                                        class="equity-sort-mark" id="equity-sort-mark-gtt-placed_at"></span></button>
+                            </th>
+                            <th>
+                                <button type="button" class="equity-sort"
+                                        title="Sort by stock name, A to Z" onclick="equitySortBy('gtt', 'symbol')">Symbol<span
+                                        class="equity-sort-mark" id="equity-sort-mark-gtt-symbol"></span></button>
+                            </th>
+                            <th>
+                                <button type="button" class="equity-sort"
+                                        title="Sort by exchange" onclick="equitySortBy('gtt', 'exchange')">Exchange<span
+                                        class="equity-sort-mark" id="equity-sort-mark-gtt-exchange"></span></button>
+                            </th>
+                            <th>
+                                <button type="button" class="equity-sort"
+                                        title="Sort by buy or sell" onclick="equitySortBy('gtt', 'side')">Action<span
+                                        class="equity-sort-mark" id="equity-sort-mark-gtt-side"></span></button>
+                            </th>
+                            <th>
+                                <button type="button" class="equity-sort"
+                                        title="Sort by order type" onclick="equitySortBy('gtt', 'order_type')">Type<span
+                                        class="equity-sort-mark" id="equity-sort-mark-gtt-order_type"></span></button>
+                            </th>
+                            <th class="text-right">
+                                <button type="button" class="equity-sort"
+                                        title="Sort by quantity" onclick="equitySortBy('gtt', 'total_quantity')">Qty<span
+                                        class="equity-sort-mark" id="equity-sort-mark-gtt-total_quantity"></span></button>
+                            </th>
+                            <th class="text-right">
+                                <button type="button" class="equity-sort"
+                                        title="Sort by the quantity filled" onclick="equitySortBy('gtt', 'filled_quantity')">Filled<span
+                                        class="equity-sort-mark" id="equity-sort-mark-gtt-filled_quantity"></span></button>
+                            </th>
+                            <th class="text-right">
+                                <button type="button" class="equity-sort"
+                                        title="Sort by price" onclick="equitySortBy('gtt', 'price')">Price<span
+                                        class="equity-sort-mark" id="equity-sort-mark-gtt-price"></span></button>
+                            </th>
+                            <!-- Its own column here, and only here. The trigger
+                                 is the whole point of a GTT - it is the price
+                                 being waited for - so it is not a footnote
+                                 under the limit price the way it is on a
+                                 regular order. -->
+                            <th class="text-right">
+                                <button type="button" class="equity-sort"
+                                        title="Sort by trigger price" onclick="equitySortBy('gtt', 'trigger_price')">Trigger<span
+                                        class="equity-sort-mark" id="equity-sort-mark-gtt-trigger_price"></span></button>
+                            </th>
+                            <th class="text-right">
+                                <button type="button" class="equity-sort"
+                                        title="Sort by stop loss" onclick="equitySortBy('gtt', 'stop_loss')">Stop Loss<span
+                                        class="equity-sort-mark" id="equity-sort-mark-gtt-stop_loss"></span></button>
+                            </th>
+                            <th class="text-right">
+                                <button type="button" class="equity-sort"
+                                        title="Sort by target" onclick="equitySortBy('gtt', 'target')">Target<span
+                                        class="equity-sort-mark" id="equity-sort-mark-gtt-target"></span></button>
+                            </th>
+                            <th>
+                                <button type="button" class="equity-sort"
+                                        title="Sort by trade nature, A to Z" onclick="equitySortBy('gtt', 'trade_nature')">Trade Nature<span
+                                        class="equity-sort-mark" id="equity-sort-mark-gtt-trade_nature"></span></button>
+                            </th>
+                            <th class="text-right">
+                                <button type="button" class="equity-sort"
+                                        title="Sort by the number of accounts that reached the broker" onclick="equitySortBy('gtt', 'accounts_placed')">Accounts<span
+                                        class="equity-sort-mark" id="equity-sort-mark-gtt-accounts_placed"></span></button>
+                            </th>
+                            <th>
+                                <button type="button" class="equity-sort"
+                                        title="Sort by status" onclick="equitySortBy('gtt', 'status')">Status<span
+                                        class="equity-sort-mark" id="equity-sort-mark-gtt-status"></span></button>
+                            </th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="equity-gtt-body"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!--
+        The one standing note on this screen.
+
+        Everything this screen used to say in five separate paragraphs, said
+        once, at the bottom, where it is read after the tables rather than
+        before them.
+    -->
+    <p class="text-xs text-base-content/60">
+        Showing today's orders &amp; pending GTT orders. Modify and Cancel are offered while an order is still
+        working. Qty Ratio and Cash Balance inside a split are taken when the order was created.
+    </p>
 </div>
+
+<!-- Modify an order. Same shape and same wording as Order Status, because it
+     is the same action and a reader should not have to learn it twice. -->
+<dialog id="equity-modify-modal" class="modal">
+    <div class="modal-box">
+        <h3 class="font-bold text-lg" id="equity-modify-title">Modify Order</h3>
+        <p class="text-sm text-base-content/60" id="equity-modify-subtitle"></p>
+
+        <div class="space-y-3 py-4">
+            <div class="form-control">
+                <label class="label" for="equity-modify-quantity">
+                    <span class="label-text">Total Quantity</span>
+                </label>
+                <input type="number" id="equity-modify-quantity" class="input input-bordered input-sm equity-num"
+                       min="1" step="1" placeholder="Leave blank to keep it unchanged">
+            </div>
+
+            <div class="form-control">
+                <label class="label" for="equity-modify-price">
+                    <span class="label-text">Price</span>
+                </label>
+                <input type="number" id="equity-modify-price" class="input input-bordered input-sm equity-num"
+                       min="0" step="0.05" placeholder="Leave blank to keep it unchanged">
+            </div>
+
+            <div class="form-control">
+                <label class="label" for="equity-modify-trigger">
+                    <span class="label-text">Trigger Price</span>
+                </label>
+                <input type="number" id="equity-modify-trigger" class="input input-bordered input-sm equity-num"
+                       min="0" step="0.05" placeholder="GTT only, blank keeps it unchanged">
+            </div>
+        </div>
+
+        <div class="alert alert-warning">
+            <span>
+                Every account still working on this order is modified. A new total quantity is re-split on the ratio
+                already recorded against each account, not on today's allocations.
+            </span>
+        </div>
+
+        <div class="modal-action">
+            <form method="dialog">
+                <button class="btn btn-sm btn-outline equity-btn">Back</button>
+            </form>
+            <button type="button" class="btn btn-sm btn-primary equity-btn" id="equity-modify-confirm-btn"
+                    onclick="equitySubmitModify()">Send Modification</button>
+        </div>
+    </div>
+</dialog>
+
+<!-- Cancel an order -->
+<dialog id="equity-cancel-modal" class="modal">
+    <div class="modal-box">
+        <h3 class="font-bold text-lg">Cancel Order</h3>
+        <p class="py-4" id="equity-cancel-text"></p>
+        <div class="alert alert-warning">
+            <span>
+                An account is marked CANCELLED only when the broker confirms it. If a cancel never gets an answer the
+                split is left as it was with the reason recorded, because we do not know whether that order is still
+                live.
+            </span>
+        </div>
+        <div class="modal-action">
+            <form method="dialog">
+                <button class="btn btn-sm btn-outline equity-btn">Keep the Order</button>
+            </form>
+            <button type="button" class="btn btn-sm btn-error equity-btn" id="equity-cancel-confirm-btn"
+                    onclick="equitySubmitCancel()">Cancel the Order</button>
+        </div>
+    </div>
+</dialog>
 
 <!-- View Split -->
 <dialog id="equity-split-modal" class="modal">
@@ -217,7 +410,7 @@
             <table class="table table-sm">
                 <thead>
                     <tr>
-                        <th>Member</th>
+                        <th>Account</th>
                         <th class="text-right">Qty Ratio</th>
                         <th class="text-right">Qty</th>
                         <th class="text-right">Est. Value</th>
@@ -234,11 +427,16 @@
 
         <div class="modal-action">
             <form method="dialog">
-                <button class="btn btn-sm">Close</button>
+                <button class="btn btn-sm btn-outline equity-btn">Back</button>
             </form>
         </div>
     </div>
 </dialog>
+
+<!-- The "Updated" line, shared by every equity screen so one thing is
+     said one way: date and time, green while the market is open and
+     amber while it is closed. -->
+<script src="{{ url_for('static', filename='js/equity_updated.js') }}"></script>
 
 <script src="{{ url_for('static', filename='js/equity_common.js') }}"></script>
 <script>
@@ -295,69 +493,229 @@ const EquityFormat = {
 
     clockTime: function (isoText) {
         if (!isoText) { return ''; }
-        const parsed = new Date(isoText);
+        // The server sends UTC with no timezone marker. A marker-less value is
+        // read by the browser as LOCAL time, which put every clock on this screen
+        // 5h30m behind. Mark it as UTC, then render explicitly in IST so the
+        // screen agrees with the market whatever the machine thinks the time is.
+        let text = String(isoText);
+        if (!/(Z|[+-]\d{2}:?\d{2})$/.test(text)) { text += 'Z'; }
+        const parsed = new Date(text);
         if (isNaN(parsed.getTime())) { return ''; }
-        return parsed.toLocaleTimeString('en-IN', { hour12: false });
+        return parsed.toLocaleTimeString('en-IN', { hour12: false, timeZone: 'Asia/Kolkata' });
     },
 
     dateTime: function (isoText) {
         if (!isoText) { return ''; }
-        const parsed = new Date(isoText);
+        // The server sends UTC with no timezone marker. A marker-less value is
+        // read by the browser as LOCAL time, which put every clock on this screen
+        // 5h30m behind. Mark it as UTC, then render explicitly in IST so the
+        // screen agrees with the market whatever the machine thinks the time is.
+        let text = String(isoText);
+        if (!/(Z|[+-]\d{2}:?\d{2})$/.test(text)) { text += 'Z'; }
+        const parsed = new Date(text);
         if (isNaN(parsed.getTime())) { return ''; }
-        return parsed.toLocaleString('en-IN', { hour12: false });
+        return parsed.toLocaleString('en-IN', { hour12: false, timeZone: 'Asia/Kolkata' });
     }
 };
 
 const EQUITY_FETCH_TIMEOUT_MS = 20000;
-const EQUITY_COLUMN_COUNT = 12;
+// A modify or a cancel is one broker round trip PER ACCOUNT, so it gets the
+// same long timeout the Place Order screen uses rather than the read timeout.
+const EQUITY_ACTION_TIMEOUT_MS = 60000;
+const EQUITY_COLUMN_COUNT = 15;
 
 let equityPollTimer = null;
 let equityLoading = false;
-let equityAccountsRendered = false;
 let equityOrdersById = {};
+let equityModifyOrderId = null;
+let equityCancelOrderId = null;
+// The last payload received, so a sort can repaint without asking the broker
+// for the same rows again.
+let equityLastPayload = null;
 
-// ---------------------------------------------------------------------------
-// Filters
-// ---------------------------------------------------------------------------
+/**
+ * Ask the broker what actually happened to every outstanding order.
+ *
+ * The background pass does this on its own every few seconds; this is the same
+ * work on demand, for when somebody is looking at the screen and wants an
+ * answer now. It reads only - it never places, modifies or cancels anything.
+ */
+async function equityReconcile() {
+    const button = document.getElementById('equity-reconcile-btn');
+    if (button) {
+        if (button.disabled) { return; }
+        button.disabled = true;
+        button.textContent = 'Checking...';
+    }
 
-function equityFilterQuery() {
-    const params = new URLSearchParams();
-    params.set('account', equityValue('equity-filter-account', 'all'));
-    params.set('side', equityValue('equity-filter-side', 'all'));
-    params.set('status', equityValue('equity-filter-status', 'all'));
-    params.set('order_type', equityValue('equity-filter-type', 'all'));
-    params.set('trade_nature', equityValue('equity-filter-nature', 'all'));
+    try {
+        const meta = document.querySelector('meta[name="csrf-token"]');
+        const headers = { 'Content-Type': 'application/json' };
+        if (meta) { headers['X-CSRFToken'] = meta.getAttribute('content'); }
 
-    const symbol = equityValue('equity-filter-symbol', '');
-    if (symbol) { params.set('symbol', symbol.toUpperCase()); }
+        const response = await fetch('/equity/api/orders/reconcile', {
+            method: 'POST',
+            headers: headers,
+            credentials: 'same-origin',
+            body: JSON.stringify({}),
+            signal: AbortSignal.timeout(EQUITY_FETCH_TIMEOUT_MS)
+        });
+        const data = await response.json();
 
-    const from = equityValue('equity-filter-from', '');
-    if (from) { params.set('from', from); }
-
-    const to = equityValue('equity-filter-to', '');
-    if (to) { params.set('to', to); }
-
-    // Splits come back inline so View Split never needs a second request.
-    params.set('splits', '1');
-    return params.toString();
+        equityShowStale(data.message || '');
+        equityLoadOrderBook();
+    } catch (error) {
+        equityShowStale('The broker could not be reached. Nothing was changed.');
+        console.error('Equity reconciliation failed:', error);
+    } finally {
+        if (button) {
+            button.disabled = false;
+            button.textContent = 'Check With Broker';
+        }
+    }
 }
 
-function equityClearFilters() {
-    ['equity-filter-symbol', 'equity-filter-from', 'equity-filter-to'].forEach(function (id) {
-        const el = document.getElementById(id);
-        if (el) { el.value = ''; }
-    });
-    ['equity-filter-account', 'equity-filter-side', 'equity-filter-status',
-     'equity-filter-type', 'equity-filter-nature'].forEach(function (id) {
-        const el = document.getElementById(id);
-        if (el) { el.value = 'all'; }
-    });
-    equityLoadOrderBook();
+// ---------------------------------------------------------------------------
+// Sorting
+//
+// This screen used to carry eight filter boxes. They were removed: the book
+// now shows one day, which is short enough to read, and a column heading you
+// click is quicker than a box you type into and then have to remember to
+// clear. A filter left set is the reason a screen lies to you; a sort cannot.
+// ---------------------------------------------------------------------------
+
+// What each sortable column holds. Anything not listed here cannot be sorted:
+// Sl is the position in the order you are already looking at, and Actions is
+// a button.
+const EQUITY_SORT_COLUMNS = {
+    placed_at: 'text',
+    symbol: 'text',
+    exchange: 'text',
+    side: 'text',
+    order_type: 'text',
+    total_quantity: 'number',
+    filled_quantity: 'number',
+    price: 'number',
+    trigger_price: 'number',
+    stop_loss: 'number',
+    target: 'number',
+    trade_nature: 'text',
+    accounts_placed: 'number',
+    status: 'text'
+};
+
+// Columns whose first click sorts DESCENDING.
+//
+// The default cycle starts ascending, which is right for a name. It is wrong
+// for a size or a price: clicking Qty asks "what was the biggest order", and
+// the answer to that belongs at the top. Time starts newest first for the
+// same reason - that is the order the book already arrives in.
+const EQUITY_SORT_DESC_FIRST = {
+    placed_at: true, total_quantity: true, filled_quantity: true,
+    price: true, trigger_price: true, stop_loss: true, target: true,
+    accounts_placed: true
+};
+
+// One sort per table. The two tables on this screen are two different
+// questions, so sorting one must not disturb the other.
+const equitySort = {
+    orders: { key: '', dir: 'asc' },
+    gtt: { key: '', dir: 'asc' }
+};
+
+/**
+ * Cycle the sort on one column: ascending, then descending, then back to the
+ * order the server sent.
+ *
+ * The third step matters. Without it a table that has been sorted once can
+ * never be put back, and the server's order - newest first - is itself the
+ * order most worth returning to on a book of one day.
+ */
+function equitySortBy(table, key) {
+    const state = equitySort[table];
+    if (!state) { return; }
+    if (!Object.prototype.hasOwnProperty.call(EQUITY_SORT_COLUMNS, key)) { return; }
+
+    const first = EQUITY_SORT_DESC_FIRST[key] ? 'desc' : 'asc';
+    const second = first === 'asc' ? 'desc' : 'asc';
+
+    if (state.key !== key) {
+        state.key = key;
+        state.dir = first;
+    } else if (state.dir === first) {
+        state.dir = second;
+    } else {
+        state.key = '';
+        state.dir = 'asc';
+    }
+
+    equityRenderFromLast();
 }
 
-// The account filter is built from the payload rather than from the page
-// context, because an order can reference an account that has since been
-// deactivated and that history has to stay reachable.
+function equityUpdateSortMarks(table) {
+    const state = equitySort[table];
+    if (!state) { return; }
+
+    Object.keys(EQUITY_SORT_COLUMNS).forEach(function (key) {
+        const mark = document.getElementById('equity-sort-mark-' + table + '-' + key);
+        if (!mark) { return; }
+        if (state.key === key) {
+            mark.textContent = state.dir === 'asc' ? '↑' : '↓';
+            mark.className = 'equity-sort-mark is-active';
+        } else {
+            mark.textContent = '↕';
+            mark.className = 'equity-sort-mark';
+        }
+    });
+}
+
+/**
+ * What one row is worth in the column being sorted.
+ *
+ * Returned with a missing flag rather than as a bare value, because a row with
+ * nothing in the column is not the same as a row holding zero. A market order
+ * has no price and a plain order has no stop loss; neither belongs among the
+ * prices at either end of the order, so they are reported as missing and sink
+ * to the bottom whichever way the sort runs.
+ */
+function equitySortValue(row, key) {
+    const numeric = EQUITY_SORT_COLUMNS[key] === 'number';
+    const blank = { missing: true, value: numeric ? 0 : '' };
+
+    let raw = row[key];
+    if (key === 'status') { raw = equityStatusLabel(row); }
+    if (raw === null || raw === undefined || raw === '') { return blank; }
+
+    if (numeric) {
+        const num = Number(raw);
+        return isFinite(num) ? { missing: false, value: num } : blank;
+    }
+    return { missing: false, value: String(raw).toUpperCase() };
+}
+
+function equitySortRows(table, rows) {
+    const state = equitySort[table];
+    if (!state || !state.key || !EQUITY_SORT_COLUMNS[state.key]) { return rows.slice(); }
+
+    const key = state.key;
+    const factor = state.dir === 'desc' ? -1 : 1;
+
+    return rows.slice().sort(function (first, second) {
+        const left = equitySortValue(first, key);
+        const right = equitySortValue(second, key);
+
+        if (left.missing !== right.missing) { return left.missing ? 1 : -1; }
+        if (left.value < right.value) { return -factor; }
+        if (left.value > right.value) { return factor; }
+
+        // Equal on the sorted column, so the symbol breaks the tie and the
+        // order stays the same from one refresh to the next.
+        const a = String(first.symbol || '');
+        const b = String(second.symbol || '');
+        return a < b ? -1 : (a > b ? 1 : 0);
+    });
+}
+
 // ---------------------------------------------------------------------------
 // Rows
 //
@@ -365,12 +723,37 @@ function equityClearFilters() {
 // admin supplied account name can never be treated as markup.
 // ---------------------------------------------------------------------------
 
+/**
+ * The word shown on the badge, which is not always the stored status.
+ *
+ * An order where every account is unconfirmed is stored as PARTIAL, because
+ * PARTIAL is the bucket for "not all filled, not all cancelled, not all still
+ * working". But PARTIAL reads as "some worked and some did not", and that is
+ * the one thing this case is not: nothing is known either way. The stored
+ * status is left alone so filters and history keep working; only the label the
+ * eye lands on is corrected.
+ */
+function equityStatusLabel(order) {
+    const counts = order.counts || {};
+    const total = Number(counts.total) || 0;
+    const unconfirmed = Number(counts.indeterminate) || 0;
+
+    // An order the broker has no record of must never read as though it were
+    // working. This is the strongest thing the row can say and it outranks
+    // everything stored, because the broker is the one that would know.
+    if (order.not_at_broker) { return 'NOT AT BROKER'; }
+    if (total > 0 && unconfirmed === total) { return 'UNCONFIRMED'; }
+    return order.status;
+}
+
 function equityStatusCell(order) {
     const td = document.createElement('td');
 
     const badge = document.createElement('span');
-    badge.className = equityStatusBadgeClass(order.status);
-    badge.textContent = order.status;
+    badge.className = order.not_at_broker
+        ? 'badge badge-sm badge-error'
+        : equityStatusBadgeClass(order.status);
+    badge.textContent = equityStatusLabel(order);
     td.appendChild(badge);
 
     if (order.status_reason) {
@@ -397,6 +780,18 @@ function equityStockCell(order) {
     symbol.className = 'font-semibold';
     symbol.textContent = order.symbol;
     td.appendChild(symbol);
+
+    // An order the broker reports that AlgoMirror never placed. It is shown
+    // because it is real and it affects your position; it is marked because
+    // none of AlgoMirror's own information - trade nature, account split,
+    // levels - exists for it, and a blank column should say why.
+    if (order.placed_outside) {
+        const outside = document.createElement('div');
+        outside.className = 'badge badge-sm badge-outline mt-1';
+        outside.title = 'Placed at your broker, not through AlgoMirror';
+        outside.textContent = 'Outside AlgoMirror';
+        td.appendChild(outside);
+    }
 
     if (order.source && order.source !== 'MANUAL') {
         const source = document.createElement('div');
@@ -427,7 +822,42 @@ function equityTimeCell(order) {
     return td;
 }
 
-function equityPriceCell(order) {
+function equityOrderTypeCell(order) {
+    /*
+     * The order type, and the product under it when the product is not
+     * delivery.
+     *
+     * Everything in this module is CNC, so saying so on every line would be
+     * noise. MIS is the exception and it is never a small one: an MIS line is
+     * either an intraday short or the buy-back that closes one, and both have
+     * to be finished today. So it is named, and only when it is true.
+     */
+    const cell = document.createElement('td');
+
+    const type = document.createElement('div');
+    type.textContent = order.order_type || '';
+    cell.appendChild(type);
+
+    if ((order.product || 'CNC') !== 'CNC') {
+        const badge = document.createElement('div');
+        badge.className = 'badge badge-sm badge-error mt-1';
+        badge.title = 'Intraday. This is either a short or the buy-back that '
+            + 'closes one, and it does not survive the day.';
+        badge.textContent = order.product;
+        cell.appendChild(badge);
+    }
+
+    return cell;
+}
+
+/**
+ * The price cell.
+ *
+ * withTrigger is false on the GTT table, where the trigger has a column of its
+ * own. Printing it in both places would show one number twice and make the two
+ * tables disagree about what the Price column means.
+ */
+function equityPriceCell(order, withTrigger) {
     const td = document.createElement('td');
     td.className = 'text-right equity-num';
 
@@ -442,7 +872,8 @@ function equityPriceCell(order) {
         ? '-' : EquityFormat.rupees(order.price);
     td.appendChild(price);
 
-    if (order.trigger_price !== null && order.trigger_price !== undefined) {
+    if (withTrigger !== false
+        && order.trigger_price !== null && order.trigger_price !== undefined) {
         const trigger = document.createElement('div');
         trigger.className = 'text-xs text-base-content/60';
         trigger.textContent = 'Trigger ' + EquityFormat.rupees(order.trigger_price);
@@ -480,36 +911,82 @@ function equityAccountsCell(order) {
 
 function equityOrderActionsCell(order) {
     const td = document.createElement('td');
+    const wrapper = document.createElement('div');
+    wrapper.className = 'flex items-center gap-1 flex-wrap';
+
+    // Modify and Cancel exist only while the order is PENDING or PARTIAL, and
+    // never on a row the broker reported that AlgoMirror never placed - there
+    // is no order of ours behind it to act on. The server decides both; the
+    // screen only reads what it was told.
+    if (order.can_modify) {
+        const modify = document.createElement('button');
+        modify.type = 'button';
+        // Hollow. It opens a dialog and commits nothing; the Send
+        // Modification button inside it is the one that reaches the broker.
+        modify.className = 'btn btn-xs btn-outline';
+        modify.textContent = 'Modify';
+        modify.onclick = function () { equityOpenModify(order.order_id); };
+        wrapper.appendChild(modify);
+    }
+    if (order.can_cancel) {
+        const cancel = document.createElement('button');
+        cancel.type = 'button';
+        cancel.className = 'btn btn-xs btn-error';
+        cancel.textContent = 'Cancel';
+        cancel.onclick = function () { equityOpenCancel(order.order_id); };
+        wrapper.appendChild(cancel);
+    }
 
     const view = document.createElement('button');
     view.type = 'button';
     view.className = 'btn btn-xs btn-outline';
     view.textContent = 'View Split';
     view.onclick = function () { equityOpenSplit(order.order_id); };
-    td.appendChild(view);
+    wrapper.appendChild(view);
 
-    if (order.is_open) {
-        const note = document.createElement('div');
-        note.className = 'text-xs text-base-content/50';
-        note.textContent = 'Modify and cancel on Order Status';
-        td.appendChild(note);
-    }
-
+    td.appendChild(wrapper);
     return td;
 }
 
-function equityOrderRow(order) {
+function equityLevelCell(value) {
+    // A level that was never set is blank, never a dash-zero. Zero on a stop
+    // loss column reads as "sell at any price", which is the opposite of
+    // nothing being set.
+    if (value === null || value === undefined || value === '') {
+        return equityCell('\u2014', 'text-right opacity-40');
+    }
+    return equityCell(EquityFormat.rupees(value), 'text-right equity-num');
+}
+
+function equityOrderRow(order, serial, table) {
     const tr = document.createElement('tr');
     tr.className = 'hover';
+
+    // Where this row sits in the order on screen. It renumbers when you sort,
+    // which is what a serial number on a sorted table means.
+    tr.appendChild(equityCell(
+        serial === undefined ? '' : String(serial),
+        'text-right equity-num text-base-content/60'
+    ));
 
     tr.appendChild(equityTimeCell(order));
     tr.appendChild(equityStockCell(order));
     tr.appendChild(equityCell(order.exchange));
     tr.appendChild(equitySideCell(order.side));
-    tr.appendChild(equityCell(order.order_type));
+    tr.appendChild(equityOrderTypeCell(order));
     tr.appendChild(equityCell(EquityFormat.integer(order.total_quantity), 'text-right equity-num'));
     tr.appendChild(equityCell(EquityFormat.integer(order.filled_quantity), 'text-right equity-num'));
-    tr.appendChild(equityPriceCell(order));
+    const isGtt = table === 'gtt';
+    tr.appendChild(equityPriceCell(order, !isGtt));
+    if (isGtt) {
+        // The price the instruction is waiting for.
+        tr.appendChild(equityLevelCell(order.trigger_price));
+    }
+    // What was meant to protect the order, alongside what it was placed at.
+    // These are the figures entered at order time; whether they are ARMED is a
+    // question about the holding, and Holdings and Positions answer it.
+    tr.appendChild(equityLevelCell(order.stop_loss));
+    tr.appendChild(equityLevelCell(order.target));
     tr.appendChild(equityCell(order.trade_nature || 'Unassigned'));
     tr.appendChild(equityAccountsCell(order));
     tr.appendChild(equityStatusCell(order));
@@ -518,24 +995,290 @@ function equityOrderRow(order) {
     return tr;
 }
 
-function equityRenderOrders(orders) {
-    const body = document.getElementById('equity-orders-body');
+/**
+ * Fill one table.
+ *
+ * Both tables on this screen are the same shape and the same row builder, so
+ * they share this. What differs is which list they hold and which sort they
+ * are under.
+ */
+function equityFillTable(table, bodyId, rows, emptyText) {
+    const body = document.getElementById(bodyId);
     if (!body) { return; }
 
     body.textContent = '';
-    equityOrdersById = {};
+    equityUpdateSortMarks(table);
 
-    if (!orders.length) {
-        body.appendChild(equityMessageRow(
-            'No orders for the selected filters. Widen the date range or clear the filters to see more.'
-        ));
+    if (!rows.length) {
+        body.appendChild(equityMessageRow(emptyText));
         return;
     }
 
-    orders.forEach(function (order) {
+    equitySortRows(table, rows).forEach(function (order, index) {
+        // Registered whichever table it is in, so View Split works from both.
         equityOrdersById[order.order_id] = order;
-        body.appendChild(equityOrderRow(order));
+        body.appendChild(equityOrderRow(order, index + 1, table));
     });
+}
+
+function equityRenderOrders(payload) {
+    equityOrdersById = {};
+
+    equityFillTable(
+        'orders', 'equity-orders-body', payload.orders || [],
+        'No orders today.'
+    );
+
+    // The GTT table is hidden rather than shown empty. An empty table with a
+    // heading reads as something that failed to load; nothing at all reads as
+    // what it is, which is that no instruction is resting.
+    const gtt = payload.gtt_orders || [];
+    const card = document.getElementById('equity-gtt-card');
+    if (card) { card.classList.toggle('hidden', gtt.length === 0); }
+    if (gtt.length) {
+        equityFillTable('gtt', 'equity-gtt-body', gtt, 'No resting GTT.');
+    }
+}
+
+/**
+ * Repaint from the payload already in hand.
+ *
+ * Sorting must not cost a broker read. The rows are the same rows; only their
+ * order changes.
+ */
+function equityRenderFromLast() {
+    if (!equityLastPayload) { return; }
+    equityRenderOrders(equityLastPayload);
+}
+
+// ---------------------------------------------------------------------------
+// Modify and Cancel
+//
+// The same two actions the Order Status tab offers, against the same two
+// endpoints. This screen used to send you there for them, which meant leaving
+// the list you were reading to act on a row you were looking at.
+//
+// Nothing here decides WHETHER an order can be changed. The server answers
+// that with can_modify and can_cancel on every row, so the two screens can
+// never disagree about it, and an order the broker reported that AlgoMirror
+// never placed offers neither.
+// ---------------------------------------------------------------------------
+
+function equityFieldValue(id) {
+    const el = document.getElementById(id);
+    return el ? (el.value || '').trim() : '';
+}
+
+/**
+ * A number from an input, or null when it was left blank.
+ *
+ * Returns NaN for something typed that is not a positive number, so the caller
+ * can tell "left alone" from "typed wrongly". Those must never collapse into
+ * one: the first means keep what the broker holds, the second is a mistake
+ * that has to be refused.
+ */
+function equityFieldNumber(id) {
+    const raw = equityFieldValue(id);
+    if (raw === '') { return null; }
+    const value = Number(raw);
+    return (isFinite(value) && value > 0) ? value : NaN;
+}
+
+function equityShowAction(text, kind) {
+    const banner = document.getElementById('equity-action-banner');
+    const label = document.getElementById('equity-action-text');
+    if (!banner || !label) { return; }
+    if (!text) {
+        banner.classList.add('hidden');
+        return;
+    }
+    label.textContent = text;
+    banner.className = 'alert w-auto max-w-2xl shadow-lg mt-2 alert-' + (kind || 'info');
+}
+
+function equityOpenModify(orderId) {
+    const order = equityOrdersById[orderId];
+    if (!order || !order.can_modify) { return; }
+
+    equityModifyOrderId = orderId;
+    equitySetText('equity-modify-title', 'Modify ' + order.symbol + ' ' + order.side);
+    equitySetText(
+        'equity-modify-subtitle',
+        order.order_type + ' on ' + order.exchange + ', ' + EquityFormat.integer(order.total_quantity) +
+        ' shares, status ' + order.status + '. ' + (order.accounts_label || '') + ' accounts are at the broker.'
+    );
+
+    const quantity = document.getElementById('equity-modify-quantity');
+    if (quantity) { quantity.value = ''; quantity.placeholder = 'Currently ' + order.total_quantity; }
+
+    const price = document.getElementById('equity-modify-price');
+    if (price) {
+        price.value = '';
+        price.placeholder = order.price ? ('Currently ' + order.price) : 'Leave blank to keep it unchanged';
+        // A MARKET order has no price to change, so the box is not offered.
+        price.disabled = order.order_type === 'MARKET';
+    }
+
+    const trigger = document.getElementById('equity-modify-trigger');
+    if (trigger) {
+        trigger.value = '';
+        trigger.placeholder = order.trigger_price ? ('Currently ' + order.trigger_price) : 'GTT only';
+        trigger.disabled = order.order_type !== 'GTT';
+    }
+
+    const button = document.getElementById('equity-modify-confirm-btn');
+    if (button) {
+        button.disabled = false;
+        button.textContent = 'Send Modification';
+    }
+
+    const modal = document.getElementById('equity-modify-modal');
+    if (modal) { modal.showModal(); }
+}
+
+async function equitySubmitModify() {
+    // Disabling comes first, before anything that can yield, so a second click
+    // cannot send a second modification.
+    const button = document.getElementById('equity-modify-confirm-btn');
+    if (button) {
+        if (button.disabled) { return; }
+        button.disabled = true;
+        button.textContent = 'Sending';
+    }
+    if (!equityModifyOrderId) { return; }
+    const orderId = equityModifyOrderId;
+
+    function refuse(message) {
+        equityShowAction(message, 'error');
+        if (button) { button.disabled = false; button.textContent = 'Send Modification'; }
+    }
+
+    const body = {};
+
+    const quantity = equityFieldValue('equity-modify-quantity');
+    if (quantity) {
+        const value = parseInt(quantity, 10);
+        if (!isFinite(value) || value < 1) {
+            refuse('The total quantity must be a whole number of at least one share.');
+            return;
+        }
+        body.total_quantity = value;
+    }
+
+    const price = equityFieldNumber('equity-modify-price');
+    if (isNaN(price)) {
+        refuse('The price must be a positive number.');
+        return;
+    }
+    if (price !== null) { body.price = price; }
+
+    const trigger = equityFieldNumber('equity-modify-trigger');
+    if (isNaN(trigger)) {
+        refuse('The trigger price must be a positive number.');
+        return;
+    }
+    if (trigger !== null) { body.trigger_price = trigger; }
+
+    if (!Object.keys(body).length) {
+        equityShowAction('Nothing was changed, so nothing was sent.', 'warning');
+        if (button) { button.disabled = false; button.textContent = 'Send Modification'; }
+        return;
+    }
+
+    try {
+        const response = await fetchWithCSRF('/equity/api/orders/' + orderId + '/modify', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify(body),
+            signal: AbortSignal.timeout(EQUITY_ACTION_TIMEOUT_MS)
+        });
+        const data = await response.json();
+
+        equityShowAction(
+            data.message || 'The modification was sent.',
+            data.status === 'success' ? 'success' : (data.status === 'partial' ? 'warning' : 'error')
+        );
+        if (typeof showToast === 'function') {
+            showToast(data.message || 'Modification sent',
+                data.status === 'success' ? 'success' : 'warning');
+        }
+    } catch (error) {
+        // An answer that never arrived is NOT a failure. The modification may
+        // be at the broker; saying otherwise would invite a second one.
+        equityShowAction(
+            'The answer to this modification never arrived. It may still have reached the broker. Check this '
+            + 'screen and your broker order book before sending it again.', 'error');
+        console.error('Equity order modify failed:', error);
+    } finally {
+        equityModifyOrderId = null;
+        const modal = document.getElementById('equity-modify-modal');
+        if (modal) { modal.close(); }
+        equityLoadOrderBook();
+    }
+}
+
+function equityOpenCancel(orderId) {
+    const order = equityOrdersById[orderId];
+    if (!order || !order.can_cancel) { return; }
+
+    equityCancelOrderId = orderId;
+    equitySetText(
+        'equity-cancel-text',
+        'Cancel the ' + order.side + ' of ' + EquityFormat.integer(order.total_quantity) + ' ' + order.symbol +
+        ' on ' + order.exchange + '? Every account still working on this order is cancelled: ' +
+        (order.accounts_open || 0) + ' of ' + (order.accounts_selected || 0) + ' are still open.'
+    );
+
+    const button = document.getElementById('equity-cancel-confirm-btn');
+    if (button) {
+        button.disabled = false;
+        button.textContent = 'Cancel the Order';
+    }
+
+    const modal = document.getElementById('equity-cancel-modal');
+    if (modal) { modal.showModal(); }
+}
+
+async function equitySubmitCancel() {
+    const button = document.getElementById('equity-cancel-confirm-btn');
+    if (button) {
+        if (button.disabled) { return; }
+        button.disabled = true;
+        button.textContent = 'Cancelling';
+    }
+    if (!equityCancelOrderId) { return; }
+    const orderId = equityCancelOrderId;
+
+    try {
+        const response = await fetchWithCSRF('/equity/api/orders/' + orderId + '/cancel', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({}),
+            signal: AbortSignal.timeout(EQUITY_ACTION_TIMEOUT_MS)
+        });
+        const data = await response.json();
+
+        equityShowAction(
+            data.message || 'The cancellation was sent.',
+            data.status === 'success' ? 'success' : (data.status === 'partial' ? 'warning' : 'error')
+        );
+        if (typeof showToast === 'function') {
+            showToast(data.message || 'Cancellation sent',
+                data.status === 'success' ? 'success' : 'warning');
+        }
+    } catch (error) {
+        equityShowAction(
+            'The answer to this cancellation never arrived. The order may still be live at the broker. Check this '
+            + 'screen and your broker order book before sending it again.', 'error');
+        console.error('Equity order cancel failed:', error);
+    } finally {
+        equityCancelOrderId = null;
+        const modal = document.getElementById('equity-cancel-modal');
+        if (modal) { modal.close(); }
+        equityLoadOrderBook();
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -601,7 +1344,7 @@ function equitySplitStatusCell(split) {
     return td;
 }
 
-function equityMemberCell(split) {
+function equityAccountCell(split) {
     const td = document.createElement('td');
 
     const name = document.createElement('div');
@@ -650,8 +1393,14 @@ function equityRenderSplits(order, splits) {
         const tr = document.createElement('tr');
         tr.className = 'hover';
 
-        tr.appendChild(equityMemberCell(split));
-        tr.appendChild(equityCell(EquityFormat.percent(split.qty_ratio), 'text-right equity-num'));
+        tr.appendChild(equityAccountCell(split));
+        // An order placed outside AlgoMirror was never split by a ratio. A
+        // percentage here would suggest this application decided the size.
+        tr.appendChild(equityCell(
+            split.qty_ratio === null || split.qty_ratio === undefined
+                ? '-' : EquityFormat.percent(split.qty_ratio),
+            'text-right equity-num'
+        ));
         tr.appendChild(equitySplitQtyCell(split));
         tr.appendChild(equityCell(
             split.est_value === null || split.est_value === undefined ? '-' : EquityFormat.rupees(split.est_value),
@@ -685,8 +1434,12 @@ function equityOpenSplit(orderId) {
     );
     equitySetText(
         'equity-split-subtitle',
-        order.order_type + ' on ' + order.exchange + ', placed ' + EquityFormat.dateTime(order.placed_at) +
-        ', status ' + order.status + '. ' + (order.accounts_label || '') + ' accounts reached the broker.'
+        order.placed_outside
+            ? order.order_type + ' on ' + order.exchange + ', status ' + order.status +
+              '. Placed outside AlgoMirror on ' + (order.accounts_count || 0) +
+              ' account(s), so there is no allocation ratio and no trade nature.'
+            : order.order_type + ' on ' + order.exchange + ', placed ' + EquityFormat.dateTime(order.placed_at) +
+              ', status ' + order.status + '. ' + (order.accounts_label || '') + ' accounts reached the broker.'
     );
 
     const leftoverBanner = document.getElementById('equity-split-leftover');
@@ -715,21 +1468,15 @@ function equityOpenSplit(orderId) {
 // ---------------------------------------------------------------------------
 
 function equityRenderTotals(payload) {
-    const totals = payload.totals || {};
-    equitySetText('equity-total-orders', EquityFormat.integer(totals.orders));
-    equitySetText('equity-total-open', EquityFormat.integer(totals.open_orders));
-    equitySetText('equity-total-quantity', EquityFormat.integer(totals.quantity));
-    equitySetText('equity-total-filled', 'Filled: ' + EquityFormat.integer(totals.filled_quantity));
-    equitySetText('equity-total-carried', EquityFormat.integer(totals.carried_gtt_orders));
+    equityRenderUnverified(payload);
 
-    const viewWindow = payload.window || {};
-    equitySetText(
-        'equity-window-note',
-        viewWindow.today_only
-            ? 'Showing today\'s orders, plus any GTT placed on an earlier day that is still pending. A resting GTT '
-              + 'stays visible so it remains reachable to cancel.'
-            : 'Showing the selected date range exactly. A GTT from outside the range is not carried into this view.'
-    );
+    const totals = payload.totals || {};
+    equitySetText('equity-total-buy', EquityFormat.integer(totals.buy_orders));
+    equitySetText('equity-total-sell', EquityFormat.integer(totals.sell_orders));
+    equitySetText('equity-total-completed', EquityFormat.integer(totals.completed_orders));
+    equitySetText('equity-total-open', EquityFormat.integer(totals.open_orders));
+    equitySetText('equity-total-cancelled', EquityFormat.integer(totals.cancelled_orders));
+    equitySetText('equity-total-gtt', EquityFormat.integer(totals.gtt_orders));
 }
 
 async function equityLoadOrderBook() {
@@ -741,7 +1488,9 @@ async function equityLoadOrderBook() {
 
     try {
         const response = await fetch(
-            '/equity/api/order-book?' + equityFilterQuery() + '&_t=' + Date.now(),
+            // Splits come back inline so View Split never needs a second
+            // request. No filters: this screen shows one day, whole.
+            '/equity/api/order-book?splits=1&_t=' + Date.now(),
             { signal: AbortSignal.timeout(EQUITY_FETCH_TIMEOUT_MS) }
         );
         const data = await response.json();
@@ -751,13 +1500,15 @@ async function equityLoadOrderBook() {
             return;
         }
 
-        equityRenderAccountOptions(data.options || {});
+        equityLastPayload = data;
         equityRenderTotals(data);
-        equityRenderOrders(data.orders || []);
+        equityRenderOrders(data);
         equityShowStale('');
-        equitySetText('equity-last-updated', 'Updated ' + EquityFormat.clockTime(data.generated_at));
+        if (window.EquityUpdated) {
+        window.EquityUpdated.write('equity-last-updated', data.generated_at);
         equityRenderFeedBadge(data.price_feed);
         equityRenderAnalyzeBadge(data.analyze && data.analyze.analyze);
+    }
     } catch (error) {
         // Degrade to a visible stale marker, never blank the page.
         equityShowStale('The order book could not be loaded, showing the last values loaded. Retrying shortly.');
@@ -775,9 +1526,10 @@ document.addEventListener('DOMContentLoaded', function () {
 
 window.addEventListener('beforeunload', function () {
     if (equityPollTimer) {
-        equityPollTimer();
+        equityPollTimer && equityPollTimer();
         equityPollTimer = null;
     }
 });
 </script>
+
 {% endblock %}

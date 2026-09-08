@@ -2,7 +2,7 @@
 
 {% block title %}Equity Watch List - AlgoMirror{% endblock %}
 
-{% block page_title %}Equity Watch List{% endblock %}
+{% block page_title %}Watch List{% endblock %}
 
 {% block content %}
 <style>
@@ -11,53 +11,257 @@
        rule is stated here so it applies in both themes. */
     .equity-num { font-variant-numeric: tabular-nums; }
 
+    /* Number boxes carry no spinner arrows. A price box steps by five paise,
+       which is too small a movement to be worth the width the arrows take, and
+       leaving them off also stops a stray scroll wheel from changing a price. */
+    input[type="number"]::-webkit-outer-spin-button,
+    input[type="number"]::-webkit-inner-spin-button {
+        -webkit-appearance: none;
+        margin: 0;
+    }
+    input[type="number"] {
+        -moz-appearance: textfield;
+        appearance: textfield;
+    }
+
     /* The symbol search results float over the form below them. */
     .equity-search-wrap { position: relative; }
-    .equity-search-results {
+    .equity-search-panel {
         position: absolute;
         z-index: 40;
         left: 0;
         right: 0;
         top: 100%;
-        max-height: 18rem;
+        max-height: 20rem;
         overflow-y: auto;
     }
+    /* The kind filter stays put while the results scroll under it. Written
+       here rather than as utility classes because the compiled stylesheet is
+       built from the classes these screens already use, and these are new. */
+    .equity-search-filters {
+        position: sticky;
+        top: 0;
+        z-index: 1;
+        padding-bottom: 0.5rem;
+    }
+    .equity-search-panel .menu { padding-top: 0; }
+
+    /* The selected stock and its live price, under the search box. */
+    .equity-selected { width: 100%; line-height: 1.35; }
+
+    /* The sortable-heading appearance now lives in layout.html, scoped to
+       .module-equity, because Holdings uses it too. */
+
+    /* Add Stock on one line.
+       Written here rather than with grid utilities because the compiled
+       stylesheet is built from the classes these screens already use, and it
+       carries no six column grid at all - a grid-cols-6 would have rendered as
+       nothing. Flex also suits the row better: the stock search needs roughly
+       twice the width of a price box, and every field can shrink together as
+       the window narrows rather than snapping to a new column count. */
+    .equity-add-row {
+        display: flex;
+        flex-wrap: wrap;
+        /* Top aligned, not bottom. The stock field carries a "No stock
+           selected" line UNDER its input, so aligning on the bottom edge would
+           lift that one input above the other five. */
+        align-items: flex-start;
+        gap: 1rem;
+    }
+    .equity-add-row > .form-control {
+        flex: 1 1 11rem;
+        min-width: 0;
+    }
+    /* The search box earns the extra width: it holds a company name, and the
+       results panel below it is anchored to its edges. */
+    .equity-add-row > .equity-search-wrap { flex: 2 1 18rem; }
+
+    /* Column spacing in the watch list.
+       table-sm is tight by design, which suits a dense table of short values
+       and not one where a price, a change and a variance sit side by side and
+       have to be told apart at a glance. */
+    .equity-watch-table th,
+    .equity-watch-table td {
+        padding-left: 1.4rem;
+        padding-right: 1.4rem;
+    }
+    .equity-watch-table th:first-child,
+    .equity-watch-table td:first-child { padding-left: 0.5rem; }
+    .equity-watch-table th:last-child,
+    .equity-watch-table td:last-child { padding-right: 0.5rem; }
+
+    /* Four actions on one row, far enough apart that Delete cannot be hit
+       while reaching for Edit. */
+    .equity-actions { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+
+    /* The status filters read as buttons.
+       A badge has no edge of its own, so three of them in a row looked like
+       three labels that happened to be sitting there. The border is on every
+       chip, selected or not, because the outline says "this can be pressed"
+       and the fill says "this one is". */
+    .equity-chip {
+        border: 1px solid oklch(var(--bc) / 0.25);
+        cursor: pointer;
+        padding-left: 0.85rem;
+        padding-right: 0.85rem;
+    }
+    .equity-chip:hover { border-color: oklch(var(--bc) / 0.5); }
+
+    /* Trade Nature hugs its content.
+       The table fills the width of the card, so every column without a width
+       of its own takes a share of the slack. Trade Nature was taking a large
+       share for values as short as "ETF", and because the column beside it is
+       right aligned all of that share showed up as one wide gap between the
+       nature and its target price. width 1% is the standard way to say "no
+       wider than the content"; the nowrap keeps the longest nature on one
+       line while it does so. */
+    .equity-watch-table th:nth-child(2),
+    .equity-watch-table td:nth-child(2),
+    .equity-watch-table th:nth-child(3),
+    .equity-watch-table td:nth-child(3) {
+        width: 1%;
+        white-space: nowrap;
+    }
+
+    /* Price Alert stands off from Variance.
+       Variance is right aligned and Price Alert left aligned, so their
+       contents meet in the middle of a single column boundary with nothing
+       between them. This is the seam between the numbers and the controls and
+       it should read as one. */
+    .equity-watch-table th:nth-child(9),
+    .equity-watch-table td:nth-child(9) {
+        padding-left: 2.5rem;
+    }
+
+    /* Add and Cancel lead the row; the alert switch sits at the far right,
+       under the alert fields it belongs to. */
+    .equity-add-actions { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
+    .equity-add-actions .equity-add-buttons { margin-left: auto; }
 </style>
 
-<div class="space-y-6">
-    <!-- Header -->
-    <div class="flex justify-between items-center flex-wrap gap-3">
-        <div>
-            <h1 class="text-3xl font-bold">Watch List</h1>
-            <p class="text-base-content/70 mt-1">
-                Stocks under watch with a live price, the variance against your target and an optional price alert.
-                Nothing on this screen places an order.
-            </p>
-        </div>
+<!-- space-y-4, not 6. With the sub-heading and the filter row gone the
+     remaining gaps were doing nothing but holding the table down the page. -->
+<div class="space-y-4">
+    <!--
+        Header.
+
+        No big heading here. The top bar already names the page and, unlike
+        anything in this content area, it does not scroll away - so a second
+        title below it was saying the same thing twice, and the copy that
+        survived scrolling was the one nobody had chosen.
+    -->
+    <div class="flex justify-end items-center flex-wrap gap-3">
         <div class="flex gap-3 items-center flex-wrap">
-            <span class="text-xs text-base-content/50 equity-num" id="equity-feed-marker"></span>
+            <!-- The filters lead the header row: they change what the table
+                 below contains, which is a bigger claim on the eye than the
+                 time it was last read. -->
+            {% if accounts %}
+            <div class="flex items-center gap-2 flex-wrap" id="equity-status-filters"></div>
+            {% endif %}
             <span id="equity-feed-badge" class="hidden"></span>
             <span id="equity-stream-badge" class="hidden"></span>
             <span id="equity-analyze-badge" class="hidden"></span>
             <span class="text-xs text-base-content/50 equity-num" id="equity-last-updated">Not loaded yet</span>
-            <button onclick="equityLoadWatchlist()" class="btn btn-ghost btn-sm h-9" id="equity-refresh-btn">Refresh</button>
+            {% if watchlists %}
+            <select id="equity-watchlist-select" class="select select-bordered select-sm h-9"
+                    aria-label="Which watch list to show" onchange="equitySwitchWatchlist()">
+                <!-- All is the default. A watch list is a way of grouping what
+                     you follow, not a way of hiding the rest of it, and the
+                     first question on opening the screen is usually "what is
+                     happening" rather than "what is happening in this one
+                     group". Selecting a single list narrows to it. -->
+                <option value="all" selected>All</option>
+                {% for entry in watchlists %}
+                <option value="{{ entry.id }}">{{ entry.name }}</option>
+                {% endfor %}
+            </select>
+            {% endif %}
+            <!-- force=true. Without it Refresh took the same path as the ten
+                 second poll, which rewrites only the live price cells when the
+                 same rows come back in the same order - so a target or an
+                 alert changed elsewhere did not appear and the button looked
+                 like it had done nothing. Pressing Refresh is a request for
+                 the whole row, not just its price. -->
+            <button onclick="equityLoadWatchlist(true)" class="btn btn-ghost btn-sm h-9" id="equity-refresh-btn">Refresh</button>
             {% if accounts %}
+            <!-- The spreadsheet pair. Download is a pure read, so it is a
+                 plain link and wears no commit colour. Upload writes nothing
+                 by itself either: it opens a preview, and nothing happens
+                 until that is confirmed. -->
+            <a href="{{ url_for('equity.api_watchlist_export') }}"
+               class="btn btn-outline btn-sm h-9"
+               id="equity-export-link">Download CSV</a>
             <button onclick="equityToggleAddCard()" class="btn btn-primary btn-sm h-9" id="equity-add-toggle-btn">Add Stock</button>
             {% endif %}
         </div>
     </div>
 
-    <!-- Stale marker. Shown instead of blanking the page when a poll fails. -->
-    <div class="alert alert-warning hidden" id="equity-stale-banner">
-        <span id="equity-stale-text"></span>
+    <!--
+        FIX SYMBOL.
+
+        For a row carrying something the broker does not have - a company name
+        typed instead of a ticker, or a symbol the exchange has renamed. The
+        replacement is picked from the broker's own search rather than typed,
+        because typing is how the row got into this state.
+    -->
+    <dialog id="equity-fix-modal" class="modal">
+        <div class="modal-box max-w-2xl">
+            <h3 class="font-bold text-lg" id="equity-fix-title">Fix Symbol</h3>
+            <p class="text-sm text-base-content/60" id="equity-fix-subtitle"></p>
+
+            <div class="form-control mt-3">
+                <label class="label" for="equity-fix-search">
+                    <span class="label-text">Search for the company</span>
+                </label>
+                <input type="text" id="equity-fix-search"
+                       class="input input-bordered input-sm"
+                       placeholder="For example: State Bank, Wockhardt, Bajaj Finance"
+                       oninput="equityFixSearchInput()">
+            </div>
+
+            <div class="mt-2 max-h-64 overflow-y-auto" id="equity-fix-results"></div>
+
+            <div class="alert mt-3 hidden" id="equity-fix-chosen-banner">
+                <span id="equity-fix-chosen"></span>
+            </div>
+
+            <p class="text-xs text-base-content/60 mt-2">
+                Your target, alert and trade nature stay on the row, and your note moves with it.
+                Every other row carrying the same wrong symbol is corrected too.
+            </p>
+
+            <div class="modal-action">
+                <form method="dialog">
+                    <button class="btn btn-sm btn-outline equity-btn">Cancel</button>
+                </form>
+                <button class="btn btn-sm btn-primary equity-btn" id="equity-fix-apply"
+                        onclick="equityApplyFixSymbol()" disabled>Correct Symbol</button>
+            </div>
+        </div>
+    </dialog>
+
+
+    <!-- Stale marker. Shown instead of blanking the page when a poll fails.
+
+         The WRAPPER is hidden too, not only the banner inside it. A wrapper
+         left visible around a hidden child still takes its share of the
+         page's vertical rhythm, and two of them were holding three rem of
+         empty space between the heading and the table for most of the day. -->
+    <div class="flex justify-center hidden" id="equity-stale-wrap">
+        <div class="alert w-auto max-w-2xl shadow-lg alert-warning hidden" id="equity-stale-banner">
+            <span id="equity-stale-text"></span>
+        </div>
     </div>
 
-    <!-- Result of the last write. -->
-    <div class="alert hidden" id="equity-result-banner">
-        <span id="equity-result-text"></span>
+    <!-- Result of the last write. Wrapper hidden with it; see above. -->
+    <div class="flex justify-center hidden" id="equity-result-wrap">
+        <div class="alert w-auto max-w-2xl shadow-lg hidden" id="equity-result-banner">
+            <span id="equity-result-text"></span>
+        </div>
     </div>
 
     {% if accounts %}
+
     <!-- Price alerts that fired while this screen was open. -->
     <div class="card bg-base-100 shadow hidden" id="equity-alerts-card">
         <div class="card-body p-4">
@@ -76,14 +280,20 @@
     <!-- Add stock -->
     <div class="card bg-base-100 shadow-xl hidden" id="equity-add-card">
         <div class="card-body">
-            <h2 class="card-title">Add Stock</h2>
+            <h2 class="card-title">
+                Add Stock
+                <!-- Which list this will land in. Stated on the card because the
+                     selector that governs it sits at the top of the page. -->
+                <span class="badge badge-ghost" id="equity-add-target-list"></span>
+            </h2>
             <p class="text-sm text-base-content/60">
-                Search NSE and BSE for an equity or an ETF. Derivatives and indices are not offered: this module
-                trades CNC delivery only.
+                Search NSE and BSE for a share, an ETF or a listed fund unit. Each result is labelled, and the
+                buttons above the list narrow it to one kind. Derivatives and indices are not offered: this
+                module trades CNC delivery only.
             </p>
 
-            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                <div class="form-control equity-search-wrap md:col-span-2 lg:col-span-1">
+            <div class="equity-add-row">
+                <div class="form-control equity-search-wrap">
                     <label class="label" for="equity-add-search">
                         <span class="label-text">Stock</span>
                     </label>
@@ -93,18 +303,23 @@
                            placeholder="Type at least two characters"
                            autocomplete="off"
                            oninput="equitySearchInput()">
-                    <ul class="menu bg-base-200 rounded-box shadow-lg equity-search-results hidden"
-                        id="equity-search-results"></ul>
-                    <label class="label">
-                        <span class="label-text-alt" id="equity-add-selected">No stock selected</span>
-                    </label>
+                    <div class="equity-search-panel bg-base-200 rounded-box shadow-lg hidden"
+                         id="equity-search-panel">
+                        <div class="equity-search-filters bg-base-200 flex items-center gap-1 flex-wrap px-3 pt-3"
+                             id="equity-search-filters"></div>
+                        <ul class="menu menu-sm" id="equity-search-results"></ul>
+                    </div>
+                    <div class="label">
+                        <div class="label-text-alt" id="equity-add-selected">No stock selected</div>
+                    </div>
                 </div>
 
                 <div class="form-control">
                     <label class="label" for="equity-add-exchange">
                         <span class="label-text">Exchange</span>
                     </label>
-                    <select id="equity-add-exchange" class="select select-bordered select-sm">
+                    <select id="equity-add-exchange" class="select select-bordered select-sm"
+                            onchange="equitySearchInput()">
                         <option value="NSE" selected>NSE</option>
                         <option value="BSE">BSE</option>
                     </select>
@@ -148,16 +363,35 @@
                         <option value="BELOW">At or below the alert price</option>
                     </select>
                 </div>
+
+                <!-- A select, not a switch, and in the field row with the rest.
+                     A toggle sitting apart from six boxes was the only control
+                     on the card that did not look like the others, and it was
+                     the only one you had to look at twice to read the state of.
+                     Enable is first, so it is what the form opens on: a stock is
+                     added to a watch list in order to be watched. -->
+                <div class="form-control">
+                    <label class="label" for="equity-add-alert-enabled">
+                        <span class="label-text">Alert</span>
+                    </label>
+                    <select id="equity-add-alert-enabled" class="select select-bordered select-sm">
+                        <option value="1" selected>Enable</option>
+                        <option value="0">Disable</option>
+                    </select>
+                </div>
             </div>
 
-            <div class="flex items-center gap-4 flex-wrap mt-2">
-                <label class="label cursor-pointer gap-3">
-                    <input type="checkbox" id="equity-add-alert-enabled" class="toggle toggle-sm toggle-primary">
-                    <span class="label-text">Enable the price alert</span>
-                </label>
-                <button onclick="equityAddItem()" class="btn btn-primary btn-sm" id="equity-add-submit-btn">Add</button>
-                <button onclick="equityToggleAddCard(false)" class="btn btn-ghost btn-sm">Cancel</button>
-                <span class="text-xs text-base-content/60" id="equity-add-count"></span>
+            <!-- Actions only. Every field, the alert among them, is on the row
+                 above; this line commits what that row says. -->
+            <div class="equity-add-actions mt-2">
+                <div class="equity-add-buttons flex items-center gap-3 flex-wrap">
+                    <span class="text-xs text-base-content/60" id="equity-add-count"></span>
+                    <button onclick="equityAddItem()" class="btn btn-primary btn-sm equity-btn" id="equity-add-submit-btn">Add</button>
+                    <!-- Outlined, not ghost. A ghost button on a white card has no
+                         edge at all until it is hovered, so Cancel read as loose
+                         text next to a solid Add. -->
+                    <button onclick="equityToggleAddCard(false)" class="btn btn-outline btn-sm equity-btn">Reset</button>
+                </div>
             </div>
         </div>
     </div>
@@ -165,35 +399,97 @@
     <!-- Watch list table -->
     <div class="card bg-base-100 shadow-xl">
         <div class="card-body">
-            <h2 class="card-title">My Watch List</h2>
-            <p class="text-sm text-base-content/60">
-                Prices refresh every 10 seconds from the shared push feed. Variance is the live price measured
-                against your target, so a stock below its target reads as negative.
-            </p>
+            <h2 class="card-title" id="equity-watchlist-title">{{ (watchlists | selectattr("is_default") | first).name if watchlists else "My Watch List" }}</h2>
+            <!-- Sold out since you last looked, and back on this list. -->
+            <p class="text-sm text-success hidden" id="equity-returned-note"></p>
 
             <div class="overflow-x-auto">
-                <table class="table table-sm">
+                <table class="table table-sm equity-watch-table">
                     <thead>
                         <tr>
-                            <th>Stock</th>
-                            <th>Trade Nature</th>
-                            <th class="text-right">Target Price</th>
-                            <th class="text-right">LTP</th>
-                            <th class="text-right">Change</th>
-                            <th class="text-right">Variance</th>
-                            <th>Price Alert</th>
+                            <!-- Not sortable, and deliberately. This is where a
+                                 row sits in the order you are looking at, so
+                                 sorting BY it would be asking to sort by the
+                                 order it is already in. -->
+                            <th class="text-right">Sl</th>
+                            <th>
+                                <button type="button" class="equity-sort"
+                                        title="Sort by stock name, A to Z" onclick="equitySortBy('symbol')">Stock<span
+                                        class="equity-sort-mark" id="equity-sort-mark-symbol"></span></button>
+                            </th>
+                            <!-- Shown only when every list is on screen at once. In a
+                                 single list view the column would repeat one value down
+                                 the page and tell nobody anything. -->
+                            <th class="equity-list-col hidden">
+                                <button type="button" class="equity-sort"
+                                        title="Sort by watch list, A to Z" onclick="equitySortBy('watchlist_name')">Watch List<span
+                                        class="equity-sort-mark" id="equity-sort-mark-watchlist_name"></span></button>
+                            </th>
+                            <th>
+                                <button type="button" class="equity-sort"
+                                        title="Sort by trade nature, A to Z" onclick="equitySortBy('trade_nature')">Trade Nature<span
+                                        class="equity-sort-mark" id="equity-sort-mark-trade_nature"></span></button>
+                            </th>
+                            <th class="text-right">
+                                <button type="button" class="equity-sort"
+                                        title="Sort by target price" onclick="equitySortBy('target_price')">Target Price<span
+                                        class="equity-sort-mark" id="equity-sort-mark-target_price"></span></button>
+                            </th>
+                            <th class="text-right">
+                                <button type="button" class="equity-sort"
+                                        title="Sort by alert price" onclick="equitySortBy('alert_price')">Alert Price<span
+                                        class="equity-sort-mark" id="equity-sort-mark-alert_price"></span></button>
+                            </th>
+                            <th class="text-right">
+                                <button type="button" class="equity-sort"
+                                        title="Sort by last traded price" onclick="equitySortBy('ltp')">LTP<span
+                                        class="equity-sort-mark" id="equity-sort-mark-ltp"></span></button>
+                            </th>
+                            <th class="text-right">
+                                <button type="button" class="equity-sort"
+                                        title="Sort by today's change" onclick="equitySortBy('change_pct')">Change<span
+                                        class="equity-sort-mark" id="equity-sort-mark-change_pct"></span></button>
+                            </th>
+                            <th class="text-right">
+                                <button type="button" class="equity-sort"
+                                        title="Sort by variance against the target" onclick="equitySortBy('variance_pct')">Variance<span
+                                        class="equity-sort-mark" id="equity-sort-mark-variance_pct"></span></button>
+                            </th>
+                            <th>
+                                <button type="button" class="equity-sort"
+                                        title="Sort by when the alert fired, most recent first"
+                                        onclick="equitySortBy('alert_triggered_at')">Price Alert<span
+                                        class="equity-sort-mark" id="equity-sort-mark-alert_triggered_at"></span></button>
+                            </th>
                             <th>Actions</th>
                         </tr>
                     </thead>
                     <tbody id="equity-watchlist-body">
                         <tr>
-                            <td colspan="8" class="text-center py-8 text-base-content/60">
+                            <td colspan="11" class="text-center py-8 text-base-content/60">
                                 Loading the watch list.
                             </td>
                         </tr>
                     </tbody>
                 </table>
             </div>
+
+            <!-- Pages. Hidden until there is more than one. -->
+            <div class="flex items-center justify-between flex-wrap gap-3 mt-3 hidden"
+                 id="equity-pager">
+                <span class="text-xs text-base-content/60 equity-num" id="equity-pager-note"></span>
+                <div class="join" id="equity-pager-buttons"></div>
+            </div>
+
+            <!-- The closing line. Static, and at the bottom of the card, the
+                 same place and the same size as the closing line on Holdings.
+                 It replaces the paragraph that used to sit above the table and
+                 the amber line that named the held stocks one by one. -->
+            <p class="text-xs text-base-content/60 mt-4">
+                Prices refresh every 10 sec. Stocks that are in the Holdings list are hidden here, and their stop
+                loss, target and notes are to be modified from the Holdings screen. Each comes back here once it is
+                removed from Holdings after its sale.
+            </p>
         </div>
     </div>
 
@@ -207,7 +503,7 @@
                 connected account.
             </p>
             <div class="mt-6">
-                <a href="{{ url_for('accounts.add') }}" class="btn btn-primary">Add Account</a>
+                <a href="{{ url_for('accounts.add') }}" class="btn btn-primary btn-sm">Add Account</a>
             </div>
         </div>
     </div>
@@ -261,7 +557,7 @@
 
             <label class="label cursor-pointer justify-start gap-3">
                 <input type="checkbox" id="equity-edit-alert-enabled" class="toggle toggle-sm toggle-primary">
-                <span class="label-text">Enable the price alert</span>
+                <span class="label-text">Enable Alert</span>
             </label>
 
             <p class="text-xs text-base-content/60">
@@ -271,9 +567,9 @@
 
         <div class="modal-action">
             <form method="dialog">
-                <button class="btn btn-sm">Cancel</button>
+                <button class="btn btn-sm btn-outline equity-btn">Cancel</button>
             </form>
-            <button class="btn btn-primary btn-sm" id="equity-edit-save-btn" onclick="equitySaveEdit()">Save</button>
+            <button class="btn btn-primary btn-sm equity-btn" id="equity-edit-save-btn" onclick="equitySaveEdit()">Save</button>
         </div>
     </div>
 </dialog>
@@ -284,16 +580,22 @@
         <h3 class="font-bold text-lg">Remove From Watch List</h3>
         <p class="py-4" id="equity-remove-text"></p>
         <p class="text-sm text-base-content/60">
-            This only removes the row from the watch list. It does not touch any holding, order or price alert history.
+            The price alert set against this stock is removed with the row. Your holdings and your orders are not
+            touched, and nothing is sold.
         </p>
         <div class="modal-action">
             <form method="dialog">
-                <button class="btn btn-sm">Cancel</button>
+                <button class="btn btn-sm btn-outline equity-btn">Cancel</button>
             </form>
-            <button class="btn btn-error btn-sm" id="equity-remove-confirm-btn" onclick="equityConfirmRemove()">Delete</button>
+            <button class="btn btn-error btn-sm equity-btn" id="equity-remove-confirm-btn" onclick="equityConfirmRemove()">Delete</button>
         </div>
     </div>
 </dialog>
+
+<!-- The "Updated" line, shared by every equity screen so one thing is
+     said one way: date and time, green while the market is open and
+     amber while it is closed. -->
+<script src="{{ url_for('static', filename='js/equity_updated.js') }}"></script>
 
 <script src="{{ url_for('static', filename='js/equity_common.js') }}"></script>
 <script>
@@ -380,15 +682,39 @@ const EquityFormat = {
 
     clockTime: function (isoText) {
         if (!isoText) { return ''; }
-        const parsed = new Date(isoText);
+        // The server sends UTC with no timezone marker. A marker-less value is
+        // read by the browser as LOCAL time, which put every clock on this screen
+        // 5h30m behind. Mark it as UTC, then render explicitly in IST so the
+        // screen agrees with the market whatever the machine thinks the time is.
+        let text = String(isoText);
+        if (!/(Z|[+-]\d{2}:?\d{2})$/.test(text)) { text += 'Z'; }
+        const parsed = new Date(text);
         if (isNaN(parsed.getTime())) { return ''; }
-        return parsed.toLocaleTimeString('en-IN', { hour12: false });
+        return parsed.toLocaleTimeString('en-IN', { hour12: false, timeZone: 'Asia/Kolkata' });
+    },
+
+    // The date behind a timestamp, dd/mm/yy, in IST.
+    //
+    // Same UTC marking as clockTime above and for the same reason: without the
+    // marker the browser reads the value as local time, and a fill just after
+    // midnight IST would carry the previous day's date.
+    clockDate: function (isoText) {
+        if (!isoText) { return ''; }
+        let text = String(isoText);
+        if (!/(Z|[+-]\d{2}:?\d{2})$/.test(text)) { text += 'Z'; }
+        const parsed = new Date(text);
+        if (isNaN(parsed.getTime())) { return ''; }
+        return parsed.toLocaleDateString('en-GB', {
+            day: '2-digit', month: '2-digit', year: '2-digit',
+            timeZone: 'Asia/Kolkata'
+        });
     }
 };
 
+// The PRD asks for a refresh about every 10 seconds.
 const EQUITY_FETCH_TIMEOUT_MS = 20000;
 const EQUITY_SEARCH_DEBOUNCE_MS = 350;
-const EQUITY_COLUMN_COUNT = 8;
+const EQUITY_COLUMN_COUNT = 11;
 const EQUITY_MAX_ALERT_LINES = 20;
 const EQUITY_PLACE_ORDER_URL = '{{ url_for("equity.place_order") }}';
 
@@ -398,32 +724,69 @@ let equityRenderedIds = '';
 let equitySearchTimer = null;
 let equitySearchController = null;
 let equitySelectedSearch = null;
+let equitySearchRows = [];
+let equitySearchCounts = {};
+let equitySearchKind = 'ALL';
+let equityQuoteController = null;
 let equityEditItemId = null;
 let equityRemoveItemId = null;
 let equityAlertLines = [];
+
+// The kind buttons that sit above the search results. Bonds and rights
+// entitlements have no button of their own: they are rare, they are never
+// what a typist is reaching for, and they stay reachable under All.
+const EQUITY_KIND_FILTERS = [
+    { key: 'ALL', label: 'All' },
+    { key: 'STOCK', label: 'Share' },
+    { key: 'ETF', label: 'ETF' },
+    { key: 'MF', label: 'Fund' }
+];
+
+const EQUITY_KIND_BADGES = {
+    STOCK: 'badge-ghost',
+    ETF: 'badge-info',
+    MF: 'badge-warning',
+    BOND: 'badge-neutral',
+    RIGHTS: 'badge-neutral'
+};
 
 // ---------------------------------------------------------------------------
 // Small shared helpers
 // ---------------------------------------------------------------------------
 
-function equityShowBanner(bannerId, textId, message, kind) {
+// Every page level status message on this screen wears the same shape: a pill
+// only as wide as its text, centred, rather than a bar stretched across the
+// page. Rewriting className replaces the whole list, so the sizing has to be
+// restated wherever a banner's colour is set.
+const EQUITY_BANNER_CLASS = 'alert w-auto max-w-2xl shadow-lg';
+
+function equityShowBanner(bannerId, textId, message, kind, wrapId) {
     const banner = document.getElementById(bannerId);
     const text = document.getElementById(textId);
+    // The wrapper is hidden with its banner. Hiding only the banner leaves a
+    // zero-height flex box that still takes its share of the page's vertical
+    // spacing, which is where the gap under the heading was coming from.
+    const wrap = wrapId ? document.getElementById(wrapId) : null;
     if (!banner || !text) { return; }
     if (!message) {
         banner.classList.add('hidden');
+        if (wrap) { wrap.classList.add('hidden'); }
         return;
     }
     text.textContent = message;
-    banner.className = 'alert ' + (kind === 'error' ? 'alert-error' : (kind === 'warning' ? 'alert-warning' : 'alert-success'));
+    banner.className = EQUITY_BANNER_CLASS + ' ' +
+        (kind === 'error' ? 'alert-error' : (kind === 'warning' ? 'alert-warning' : 'alert-success'));
+    if (wrap) { wrap.classList.remove('hidden'); }
 }
 
 function equityShowStale(message) {
-    equityShowBanner('equity-stale-banner', 'equity-stale-text', message, 'warning');
+    equityShowBanner('equity-stale-banner', 'equity-stale-text', message,
+                     'warning', 'equity-stale-wrap');
 }
 
 function equityShowResult(message, kind) {
-    equityShowBanner('equity-result-banner', 'equity-result-text', message, kind);
+    equityShowBanner('equity-result-banner', 'equity-result-text', message,
+                     kind, 'equity-result-wrap');
 }
 
 // A number input that was left blank means "clear this field". A blank is sent
@@ -445,8 +808,7 @@ function equityReadOptionalNumber(id) {
 // ---------------------------------------------------------------------------
 
 function equitySearchInput() {
-    equitySelectedSearch = null;
-    equitySetText('equity-add-selected', 'No stock selected', 'label-text-alt');
+    equityClearSelection();
 
     if (equitySearchTimer) { clearTimeout(equitySearchTimer); }
     equitySearchTimer = setTimeout(equityRunSearch, EQUITY_SEARCH_DEBOUNCE_MS);
@@ -454,11 +816,12 @@ function equitySearchInput() {
 
 async function equityRunSearch() {
     const input = document.getElementById('equity-add-search');
-    const list = document.getElementById('equity-search-results');
-    if (!input || !list) { return; }
+    if (!input) { return; }
 
     const query = (input.value || '').trim();
     if (query.length < 2) {
+        equitySearchRows = [];
+        equitySearchCounts = {};
         equityCloseSearchResults();
         return;
     }
@@ -478,48 +841,123 @@ async function equityRunSearch() {
         );
         const data = await response.json();
 
-        list.textContent = '';
-        if (data.status !== 'success' || !(data.results || []).length) {
-            const item = document.createElement('li');
-            const text = document.createElement('span');
-            text.className = 'text-sm text-base-content/60';
-            text.textContent = data.status === 'success'
-                ? 'No NSE or BSE equity or ETF matched that search.'
-                : (data.message || 'Symbol search is unavailable right now.');
-            item.appendChild(text);
-            list.appendChild(item);
-            list.classList.remove('hidden');
+        if (data.status !== 'success') {
+            equitySearchRows = [];
+            equitySearchCounts = {};
+            equityRenderSearchResults(
+                data.message || 'Symbol search is unavailable right now.');
             return;
         }
 
-        data.results.forEach(function (result) {
-            const item = document.createElement('li');
-            const button = document.createElement('a');
-            button.href = '#';
-            button.onclick = function (event) {
-                event.preventDefault();
-                equityPickSearchResult(result);
-            };
+        equitySearchRows = data.results || [];
+        equitySearchCounts = data.counts || {};
 
-            const symbol = document.createElement('span');
-            symbol.className = 'font-semibold';
-            symbol.textContent = result.symbol;
-            button.appendChild(symbol);
-
-            const meta = document.createElement('span');
-            meta.className = 'text-xs text-base-content/60';
-            meta.textContent = result.exchange + (result.name ? ' ' + result.name : '');
-            button.appendChild(meta);
-
-            item.appendChild(button);
-            list.appendChild(item);
-        });
-        list.classList.remove('hidden');
+        // A filter left over from the last search that nothing matches now
+        // would show an empty list for no visible reason. Fall back to All.
+        if (equitySearchKind !== 'ALL' && !(equitySearchCounts[equitySearchKind] || 0)) {
+            equitySearchKind = 'ALL';
+        }
+        equityRenderSearchResults();
     } catch (error) {
         if (error && error.name === 'AbortError') { return; }
         console.error('Equity symbol search failed:', error);
         equityCloseSearchResults();
     }
+}
+
+function equityRenderSearchResults(errorMessage) {
+    const panel = document.getElementById('equity-search-panel');
+    const filters = document.getElementById('equity-search-filters');
+    const list = document.getElementById('equity-search-results');
+    if (!panel || !filters || !list) { return; }
+
+    filters.textContent = '';
+    list.textContent = '';
+    panel.classList.remove('hidden');
+
+    if (errorMessage) {
+        filters.classList.add('hidden');
+        const item = document.createElement('li');
+        const text = document.createElement('span');
+        text.className = 'text-sm text-base-content/60';
+        text.textContent = errorMessage;
+        item.appendChild(text);
+        list.appendChild(item);
+        return;
+    }
+    filters.classList.remove('hidden');
+
+    EQUITY_KIND_FILTERS.forEach(function (filter) {
+        const total = filter.key === 'ALL'
+            ? equitySearchRows.length
+            : (equitySearchCounts[filter.key] || 0);
+
+        const chip = document.createElement('button');
+        chip.type = 'button';
+        chip.className = 'btn btn-xs ' +
+            (equitySearchKind === filter.key ? 'btn-primary' : 'btn-ghost');
+        chip.textContent = filter.label + (total ? ' ' + total : '');
+        chip.disabled = filter.key !== 'ALL' && total === 0;
+        chip.onclick = function (event) {
+            event.preventDefault();
+            // Re-rendering below removes this very button from the page. By
+            // the time the click reaches the outside-click handler the button
+            // is no longer inside the search box, so without this the handler
+            // reads it as a click elsewhere and shuts the whole panel.
+            event.stopPropagation();
+            equitySearchKind = filter.key;
+            equityRenderSearchResults();
+            const input = document.getElementById('equity-add-search');
+            if (input) { input.focus(); }
+        };
+        filters.appendChild(chip);
+    });
+
+    const rows = equitySearchKind === 'ALL'
+        ? equitySearchRows
+        : equitySearchRows.filter(function (row) { return row.kind === equitySearchKind; });
+
+    if (!rows.length) {
+        const item = document.createElement('li');
+        const text = document.createElement('span');
+        text.className = 'text-sm text-base-content/60';
+        text.textContent = equitySearchRows.length
+            ? 'Nothing of that kind matched. Try All.'
+            : 'No NSE or BSE share, ETF or fund matched that search.';
+        item.appendChild(text);
+        list.appendChild(item);
+        return;
+    }
+
+    rows.forEach(function (result) {
+        const item = document.createElement('li');
+        const button = document.createElement('a');
+        button.href = '#';
+        button.className = 'flex items-center gap-2';
+        button.onclick = function (event) {
+            event.preventDefault();
+            equityPickSearchResult(result);
+        };
+
+        const symbol = document.createElement('span');
+        symbol.className = 'font-semibold';
+        symbol.textContent = result.symbol;
+        button.appendChild(symbol);
+
+        const badge = document.createElement('span');
+        badge.className = 'badge badge-xs shrink-0 ' +
+            (EQUITY_KIND_BADGES[result.kind] || 'badge-ghost');
+        badge.textContent = result.kind_label || 'Share';
+        button.appendChild(badge);
+
+        const meta = document.createElement('span');
+        meta.className = 'text-xs text-base-content/60 truncate';
+        meta.textContent = result.exchange + (result.name ? ' ' + result.name : '');
+        button.appendChild(meta);
+
+        item.appendChild(button);
+        list.appendChild(item);
+    });
 }
 
 function equityPickSearchResult(result) {
@@ -531,12 +969,124 @@ function equityPickSearchResult(result) {
     const exchangeEl = document.getElementById('equity-add-exchange');
     if (exchangeEl && result.exchange) { exchangeEl.value = result.exchange; }
 
-    equitySetText(
-        'equity-add-selected',
-        result.symbol + ' on ' + result.exchange + (result.name ? ', ' + result.name : ''),
-        'label-text-alt text-success'
-    );
     equityCloseSearchResults();
+    equityRenderSelection(null, 'Reading the live price...');
+    equityFetchSelectedQuote(result);
+}
+
+function equityClearSelection() {
+    equitySelectedSearch = null;
+    if (equityQuoteController) {
+        equityQuoteController.abort();
+        equityQuoteController = null;
+    }
+    const box = document.getElementById('equity-add-selected');
+    if (box) {
+        box.textContent = 'No stock selected';
+        box.className = 'label-text-alt';
+    }
+}
+
+/**
+ * Show what is selected, with its live price underneath.
+ *
+ * The price is the confirmation. Two shares can share four letters of a
+ * symbol, and the name a broker sends is often abbreviated past the point of
+ * being recognisable, so the last traded price is what tells the eye whether
+ * the right line was picked before it joins a watch list.
+ */
+function equityRenderSelection(quote, note) {
+    const box = document.getElementById('equity-add-selected');
+    if (!box) { return; }
+
+    const result = equitySelectedSearch;
+    if (!result) {
+        box.textContent = 'No stock selected';
+        box.className = 'label-text-alt';
+        return;
+    }
+
+    box.textContent = '';
+    box.className = 'text-xs equity-selected';
+
+    const heading = document.createElement('div');
+    heading.className = 'flex items-center gap-2 flex-wrap';
+
+    const symbol = document.createElement('span');
+    symbol.className = 'font-semibold text-success';
+    symbol.textContent = result.symbol;
+    heading.appendChild(symbol);
+
+    const badge = document.createElement('span');
+    badge.className = 'badge badge-xs ' +
+        (EQUITY_KIND_BADGES[result.kind] || 'badge-ghost');
+    badge.textContent = result.kind_label || 'Share';
+    heading.appendChild(badge);
+
+    const meta = document.createElement('span');
+    meta.className = 'text-base-content/60';
+    meta.textContent = result.exchange + (result.name ? ' - ' + result.name : '');
+    heading.appendChild(meta);
+
+    box.appendChild(heading);
+
+    const priceLine = document.createElement('div');
+    priceLine.className = 'equity-num mt-1';
+
+    if (quote && Number(quote.ltp) > 0) {
+        const label = document.createElement('span');
+        label.className = 'text-base-content/50 mr-1';
+        label.textContent = 'CMP';
+        priceLine.appendChild(label);
+
+        const ltp = document.createElement('span');
+        ltp.className = 'text-sm font-semibold';
+        ltp.textContent = EquityFormat.rupees(quote.ltp);
+        priceLine.appendChild(ltp);
+
+        const change = document.createElement('span');
+        change.className = 'ml-2 ' + EquityFormat.pnlClass(quote.change);
+        change.textContent = EquityFormat.signed(quote.change) +
+            ' (' + EquityFormat.signedPercent(quote.change_pct) + ')';
+        priceLine.appendChild(change);
+    } else {
+        priceLine.className += ' text-base-content/60';
+        priceLine.textContent = note || 'The live price is not available right now.';
+    }
+
+    box.appendChild(priceLine);
+}
+
+async function equityFetchSelectedQuote(result) {
+    if (equityQuoteController) { equityQuoteController.abort(); }
+    equityQuoteController = new AbortController();
+
+    try {
+        const response = await fetch(
+            '/equity/api/quote?symbol=' + encodeURIComponent(result.symbol) +
+            '&exchange=' + encodeURIComponent(result.exchange),
+            { signal: equityQuoteController.signal }
+        );
+        const data = await response.json();
+
+        // A slower answer for a stock that is no longer the selected one must
+        // not overwrite the newer selection.
+        if (!equitySelectedSearch ||
+            equitySelectedSearch.symbol !== result.symbol ||
+            equitySelectedSearch.exchange !== result.exchange) {
+            return;
+        }
+
+        if (data.status === 'success' && data.quote) {
+            equityRenderSelection(data.quote, '');
+        } else {
+            equityRenderSelection(null, data.message || 'The live price is not available right now.');
+        }
+    } catch (error) {
+        if (error && error.name === 'AbortError') { return; }
+        console.error('Equity quote read failed:', error);
+        equityRenderSelection(null, 'The live price is not available right now.');
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -577,8 +1127,9 @@ async function equityAddItem() {
         return;
     }
 
+    // A select now, so the state is read from its value. '1' is Enable.
     const enabledEl = document.getElementById('equity-add-alert-enabled');
-    const enabled = enabledEl ? enabledEl.checked : false;
+    const enabled = enabledEl ? enabledEl.value === '1' : false;
     if (enabled && alertPrice.value === null) {
         equityShowResult('A price alert needs an alert price.', 'error');
         return;
@@ -590,6 +1141,7 @@ async function equityAddItem() {
     const body = {
         symbol: symbol,
         exchange: exchangeEl ? exchangeEl.value : 'NSE',
+        watchlist_id: equityWatchlistId(),
         trade_nature_id: natureEl && natureEl.value ? parseInt(natureEl.value, 10) : null,
         target_price: target.value,
         alert_price: alertPrice.value,
@@ -634,10 +1186,12 @@ function equityResetAddForm() {
     });
     const direction = document.getElementById('equity-add-alert-direction');
     if (direction) { direction.value = ''; }
+    // Back to Enable, not Disable: the reset restores the form's default, and
+    // the default is Enable. Resetting it the other way would mean the first
+    // stock added is alerted and every one after it silently is not.
     const enabled = document.getElementById('equity-add-alert-enabled');
-    if (enabled) { enabled.checked = false; }
-    equitySelectedSearch = null;
-    equitySetText('equity-add-selected', 'No stock selected', 'label-text-alt');
+    if (enabled) { enabled.value = '1'; }
+    equityClearSelection();
     equityCloseSearchResults();
 }
 
@@ -672,26 +1226,6 @@ async function equityUpdateItem(itemId, body, successMessage) {
         equityLoadWatchlist(true);
         return false;
     }
-}
-
-function equityNatureChanged(itemId, select) {
-    const value = select.value ? parseInt(select.value, 10) : null;
-    equityUpdateItem(itemId, { trade_nature_id: value }, 'Trade nature saved.');
-}
-
-function equityTargetChanged(itemId, input) {
-    const raw = (input.value || '').trim();
-    if (raw === '') {
-        equityUpdateItem(itemId, { target_price: null }, 'Target price cleared.');
-        return;
-    }
-    const value = parseFloat(raw);
-    if (!isFinite(value) || value <= 0) {
-        equityShowResult('The target price must be a positive number, or blank.', 'error');
-        equityLoadWatchlist(true);
-        return;
-    }
-    equityUpdateItem(itemId, { target_price: value }, 'Target price saved.');
 }
 
 function equityAlertToggled(itemId, checkbox, hasAlertPrice) {
@@ -729,6 +1263,11 @@ function equityOpenEdit(itemId) {
     const direction = document.getElementById('equity-edit-alert-direction');
     if (direction) { direction.value = item.alert_direction || ''; }
 
+    // Mirrors the row, and deliberately so. This dialog was briefly defaulted
+    // to on, which made re-arming a fired alert one action instead of two -
+    // but it also meant that opening Edit on a row whose alert had been
+    // switched off ON PURPOSE, and saving any unrelated field, switched it
+    // back on. An edit screen shows what is stored; it does not decide.
     const enabled = document.getElementById('equity-edit-alert-enabled');
     if (enabled) { enabled.checked = Boolean(item.price_alert_enabled); }
 
@@ -837,6 +1376,46 @@ async function equityConfirmRemove() {
 
 let equityItems = [];
 
+// Column sorting. An empty key means the order the server sent, which is the
+// order the list starts in and the one a third click returns to.
+let equitySortKey = '';
+let equitySortDir = 'asc';
+
+// The ids of the rows in the order they are currently shown. The ten second
+// refresh follows this order rather than re-sorting, so rows never move under
+// the pointer between clicks.
+let equityRowOrder = [];
+
+// Which named list is on screen. Null means "whichever is the default", which
+// is what the server falls back to and what a bookmark from before named lists
+// existed still asks for.
+// The literal, not EQUITY_WATCHLIST_ALL: that constant is declared further
+// down, and a const is in its temporal dead zone until then - reading it here
+// would throw before a single line of this screen had run.
+let equityActiveWatchlistId = 'all';
+
+const EQUITY_SORT_COLUMNS = {
+    symbol: 'text',
+    trade_nature: 'text',
+    target_price: 'number',
+    ltp: 'number',
+    change_pct: 'number',
+    variance_pct: 'number',
+    alert_price: 'number',
+    watchlist_name: 'text',
+    // Sorted as text, which is correct here: the value is an ISO timestamp,
+    // and ISO timestamps compare in the right order as plain strings.
+    alert_triggered_at: 'text'
+};
+
+// Columns whose first click sorts DESCENDING.
+//
+// The default cycle starts ascending, which is right for a name or a price.
+// It is wrong for "when did this fire": nobody wants the oldest alert at the
+// top. The question being asked by clicking that heading is "what happened
+// most recently", so the first click answers it.
+const EQUITY_SORT_DESC_FIRST = { alert_triggered_at: true };
+
 function equityItemById(itemId) {
     for (let index = 0; index < equityItems.length; index++) {
         if (equityItems[index].id === itemId) { return equityItems[index]; }
@@ -857,63 +1436,107 @@ function equitySymbolCell(item) {
     meta.textContent = item.exchange || '';
     td.appendChild(meta);
 
+    // Your broker answered, and it does not have this symbol. Said loudly,
+    // because the row is otherwise indistinguishable from one waiting for the
+    // market to open - and this one will wait for ever. Usually a company name
+    // typed instead of a ticker, or a symbol the exchange has renamed.
+    if (item.symbol_unknown) {
+        const badge = document.createElement('div');
+        badge.className = 'badge badge-sm badge-error mt-1';
+        badge.title = 'Your broker does not have a stock with this symbol, so '
+            + 'no price will ever arrive and no alert can fire. Press Fix '
+            + 'Symbol to search for the right one.';
+        badge.textContent = 'Symbol not found';
+        td.appendChild(badge);
+    }
+
     return td;
+}
+
+function equityListCell(item) {
+    // Carries the same class as its header so the two are shown and hidden
+    // together; see equityShowListColumn.
+    const td = document.createElement('td');
+    td.className = 'equity-list-col'
+        + (equityShowingAll() ? '' : ' hidden');
+    td.textContent = item.watchlist_name || '';
+    return td;
+}
+
+
+// The amber line that named the held stocks one by one was removed on
+// 6 September at the owner's instruction. The rule it explained is now stated
+// once, plainly, in the closing line under the table: a stock you hold is
+// hidden here and comes back when the last share is sold. The rows are still
+// hidden by the same read-time filter on the server; only the announcement is
+// gone.
+
+/**
+ * Say which stocks have just come back, and on what terms.
+ *
+ * Only ever the stocks that had to be CREATED - one bought and sold that was
+ * never on a list before. A stock that was already watched simply reappears
+ * where it was, which needs no announcement.
+ */
+function equityWriteReturnedNote(symbols) {
+    const note = document.getElementById('equity-returned-note');
+    if (!note) { return; }
+
+    if (!symbols.length) {
+        note.classList.add('hidden');
+        note.textContent = '';
+        return;
+    }
+
+    note.classList.remove('hidden');
+    note.textContent = 'Sold out and added back to this list: ' + symbols.join(', ')
+        + '. Each kept the trade nature it was held under and has no price alert - '
+        + 'set one with Edit. Delete any you do not want and it will not come back.';
 }
 
 function equityNatureCell(item) {
+    // Static text, not a dropdown. A control in every row of a list that
+    // repaints every ten seconds is a control that can be changed by accident
+    // and repainted under the hand that changed it. Editing goes through the
+    // Edit button, where the change is deliberate and confirmed.
     const td = document.createElement('td');
-
-    const select = document.createElement('select');
-    select.className = 'select select-bordered select-xs w-32';
-    select.setAttribute('aria-label', 'Trade nature for ' + item.symbol);
-
-    const blank = document.createElement('option');
-    blank.value = '';
-    blank.textContent = 'Not set';
-    select.appendChild(blank);
-
-    {% for nature in trade_natures %}
-    (function () {
-        const option = document.createElement('option');
-        option.value = '{{ nature.id }}';
-        option.textContent = {{ nature.name | tojson }};
-        select.appendChild(option);
-    })();
-    {% endfor %}
-
-    // A nature that has since been deactivated still has to be shown, or the
-    // dropdown would silently look like the row has no nature at all.
-    if (item.trade_nature_id && !select.querySelector('option[value="' + item.trade_nature_id + '"]')) {
-        const option = document.createElement('option');
-        option.value = String(item.trade_nature_id);
-        option.textContent = (item.trade_nature || 'Trade nature ' + item.trade_nature_id) + ' (inactive)';
-        select.appendChild(option);
+    const text = item.trade_nature || '';
+    td.textContent = text || 'Not set';
+    if (!text) {
+        td.className = 'text-base-content/50';
     }
-
-    select.value = item.trade_nature_id ? String(item.trade_nature_id) : '';
-    select.onchange = function () { equityNatureChanged(item.id, select); };
-
-    td.appendChild(select);
     return td;
 }
+
 
 function equityTargetCell(item) {
+    // Static, for the same reason as the trade nature above.
     const td = document.createElement('td');
-    td.className = 'text-right';
-
-    const input = document.createElement('input');
-    input.type = 'number';
-    input.min = '0';
-    input.step = '0.05';
-    input.className = 'input input-bordered input-xs w-28 text-right equity-num';
-    input.placeholder = 'Not set';
-    input.value = item.target_price === null || item.target_price === undefined ? '' : item.target_price;
-    input.setAttribute('aria-label', 'Target price for ' + item.symbol);
-    input.onchange = function () { equityTargetChanged(item.id, input); };
-
-    td.appendChild(input);
+    td.className = 'text-right equity-num';
+    const hasTarget = item.target_price !== null && item.target_price !== undefined;
+    td.textContent = hasTarget ? EquityFormat.rupees(item.target_price) : 'Not set';
+    if (!hasTarget) {
+        td.className = 'text-right text-base-content/50';
+    }
     return td;
 }
+
+
+function equityAlertPriceCell(item) {
+    // The alert price as a column of its own, beside the target it is usually
+    // set against, so the two can be read down the page and compared. The
+    // Price Alert column keeps the switch and the direction; this one is the
+    // number.
+    const td = document.createElement('td');
+    td.className = 'text-right equity-num';
+    const hasAlert = item.alert_price !== null && item.alert_price !== undefined;
+    td.textContent = hasAlert ? EquityFormat.rupees(item.alert_price) : 'Not set';
+    if (!hasAlert) {
+        td.className = 'text-right text-base-content/50';
+    }
+    return td;
+}
+
 
 function equityAlertCell(item) {
     const td = document.createElement('td');
@@ -924,22 +1547,29 @@ function equityAlertCell(item) {
     const toggle = document.createElement('input');
     toggle.type = 'checkbox';
     toggle.className = 'toggle toggle-xs toggle-primary';
+    // Carries an id so the poll can correct it. Without one the switch was
+    // written once, when the row was built, and never again - so an alert that
+    // fired and switched itself off updated its text and left the switch
+    // showing on until the next full rebuild.
+    toggle.id = 'equity-alert-toggle-' + item.id;
     toggle.checked = Boolean(item.price_alert_enabled);
     toggle.setAttribute('aria-label', 'Price alert for ' + item.symbol);
     const hasAlertPrice = item.alert_price !== null && item.alert_price !== undefined;
     toggle.onchange = function () { equityAlertToggled(item.id, toggle, hasAlertPrice); };
     wrapper.appendChild(toggle);
 
+    // The price itself now has its own column, so this says only which side of
+    // it fires. Repeating the figure here would put the same number on the row
+    // twice and invite them to disagree.
     const label = document.createElement('span');
     label.className = 'text-xs equity-num';
     if (!hasAlertPrice) {
         label.textContent = 'No alert price';
         label.className = 'text-xs text-base-content/50';
     } else {
-        const direction = item.alert_direction === 'ABOVE'
+        label.textContent = item.alert_direction === 'ABOVE'
             ? 'at or above'
             : (item.alert_direction === 'BELOW' ? 'at or below' : 'direction pending');
-        label.textContent = direction + ' ' + EquityFormat.rupees(item.alert_price);
     }
     wrapper.appendChild(label);
 
@@ -956,21 +1586,56 @@ function equityAlertCell(item) {
 
 function equityWriteAlertState(el, item) {
     if (!el) { return; }
+    // Fired is checked BEFORE off, and the order matters now: firing switches
+    // the alert off, so testing "off" first would have replaced the one thing
+    // worth reading - when it alerted - with the word Off.
+    if (item.alert_triggered_at) {
+        // Time then date. An alert that fired days ago reads the same as one
+        // from this morning without it, and a watch list row can sit fired for
+        // as long as it takes to notice.
+        el.textContent = 'Alert at ' + EquityFormat.clockTime(item.alert_triggered_at) +
+            ' ' + EquityFormat.clockDate(item.alert_triggered_at);
+        el.className = 'text-xs text-warning';
+        return;
+    }
     if (!item.price_alert_enabled) {
         el.textContent = 'Off';
         el.className = 'text-xs text-base-content/50';
         return;
     }
-    if (item.alert_triggered_at) {
-        el.textContent = 'Fired at ' + EquityFormat.clockTime(item.alert_triggered_at) +
-            (item.alert_triggered_price ? ' on ' + EquityFormat.rupees(item.alert_triggered_price) : '') +
-            '. Edit to re-arm.';
-        el.className = 'text-xs text-warning';
+    // Before anything else. An alert on a symbol the broker does not have can
+    // never fire, whatever the row is set to, and "Active, waiting for prices"
+    // on a row that will wait for ever is the worst thing this screen could
+    // say.
+    if (item.symbol_unknown) {
+        el.textContent = 'Never - symbol not found';
+        el.className = 'text-xs text-error font-semibold';
+        el.title = 'This alert cannot fire, because your broker has no stock '
+            + 'with this symbol. Fix the symbol and it will work.';
         return;
     }
     if (item.alert_armed) {
-        el.textContent = 'Armed';
-        el.className = 'text-xs text-success';
+        // Armed means being evaluated, and nothing else may say Armed.
+        //
+        // The monitor reads the push feed alone. Outside market hours no ticks
+        // arrive, the feed drops anything older than ninety seconds, and the
+        // price on this screen comes from the REST backstop instead - so the
+        // row read Armed while nothing was being evaluated at all. It will be,
+        // on the first tick after the open.
+        if (item.price_is_live) {
+            el.textContent = 'Active';
+            el.className = 'text-xs text-success';
+        } else {
+            // Grey, not amber. Waiting for the market to open is the ordinary
+            // state of an alert for most of the day and night; colouring it as
+            // a warning would mean the screen spent most of its life looking
+            // as though something were wrong.
+            el.textContent = 'Active, waiting for prices';
+            el.className = 'text-xs text-base-content/50';
+            el.title = 'Alerts are checked against the live price feed. There '
+                + 'is no live price for this stock right now, so this alert '
+                + 'will be evaluated on the first tick after the market opens.';
+        }
         return;
     }
     el.textContent = 'Not armed';
@@ -981,7 +1646,7 @@ function equityActionsCell(item) {
     const td = document.createElement('td');
 
     const wrapper = document.createElement('div');
-    wrapper.className = 'flex items-center gap-1 flex-wrap';
+    wrapper.className = 'equity-actions';
 
     const buy = document.createElement('a');
     buy.className = 'btn btn-xs btn-success';
@@ -997,6 +1662,20 @@ function equityActionsCell(item) {
     sell.title = 'Open Place Order with ' + item.symbol + ' pre-filled to sell';
     wrapper.appendChild(sell);
 
+    // Only on a row the broker could not find. Every other row already has
+    // the symbol it should have, and a button offering to change it would be
+    // an invitation to break one.
+    if (item.symbol_unknown) {
+        const fix = document.createElement('button');
+        fix.type = 'button';
+        fix.className = 'btn btn-xs btn-error';
+        fix.textContent = 'Fix Symbol';
+        fix.title = 'Search for the symbol your broker actually uses for this '
+            + 'company';
+        fix.onclick = function () { equityOpenFixSymbol(item); };
+        wrapper.appendChild(fix);
+    }
+
     const edit = document.createElement('button');
     edit.type = 'button';
     edit.className = 'btn btn-xs btn-outline';
@@ -1004,10 +1683,22 @@ function equityActionsCell(item) {
     edit.onclick = function () { equityOpenEdit(item.id); };
     wrapper.appendChild(edit);
 
+    // Your own thesis and risk for this stock. Filled when there is something
+    // behind it, outlined when there is not, so the column says at a glance
+    // which stocks you have written about.
+    if (window.EquityNotes) {
+        wrapper.appendChild(window.EquityNotes.button(
+            item.symbol, item.exchange, item.has_note,
+            function () { equityLoadWatchlist(true); }
+        ));
+    }
+
     const remove = document.createElement('button');
     remove.type = 'button';
-    // The approved mockup shows this action as Delete, in red.
-    remove.className = 'btn btn-xs btn-ghost text-error';
+    // The approved mockup shows this action as Delete, in red. Outlined like
+    // Edit beside it: as a ghost it had no edge, so the one irreversible
+    // action on the row was the only one that did not look like a button.
+    remove.className = 'btn btn-xs btn-outline btn-error';
     remove.textContent = 'Delete';
     remove.onclick = function () { equityOpenRemove(item.id); };
     wrapper.appendChild(remove);
@@ -1027,14 +1718,25 @@ function equityPlaceOrderUrl(item, side) {
     return EQUITY_PLACE_ORDER_URL + '?' + params.toString();
 }
 
-function equityWatchRow(item) {
+function equityWatchRow(item, serial) {
     const tr = document.createElement('tr');
     tr.className = 'hover';
     tr.id = 'equity-row-' + item.id;
 
+    // Where this row sits in the order on screen, counting through the whole
+    // filtered list rather than restarting on each page - so row 43 is row 43
+    // whichever page it is on. It renumbers when you sort, which is what a
+    // serial number on a sorted table means.
+    tr.appendChild(equityCell(
+        serial === undefined ? '' : String(serial),
+        'text-right equity-num text-base-content/60'
+    ));
+
     tr.appendChild(equitySymbolCell(item));
+    tr.appendChild(equityListCell(item));
     tr.appendChild(equityNatureCell(item));
     tr.appendChild(equityTargetCell(item));
+    tr.appendChild(equityAlertPriceCell(item));
 
     const ltp = equityCell('', 'text-right equity-num font-semibold');
     ltp.id = 'equity-ltp-' + item.id;
@@ -1082,7 +1784,7 @@ function equityWriteLiveCells(item) {
     const variance = document.getElementById('equity-variance-' + item.id);
     if (variance) {
         if (item.has_variance) {
-            variance.textContent = EquityFormat.signedPercent(item.variance_pct) + ' (' + EquityFormat.signed(item.variance) + ')';
+            variance.textContent = EquityFormat.signedPercent(item.variance_pct);
             variance.className = ('text-right equity-num ' + EquityFormat.pnlClass(item.variance)).trim();
         } else {
             variance.textContent = item.target_price ? 'No price yet' : 'No target set';
@@ -1090,66 +1792,301 @@ function equityWriteLiveCells(item) {
         }
     }
 
+    // The switch is server state, not a local control, so the poll owns it:
+    // the alert monitor turns it off the moment a level fires and this is what
+    // carries that onto a screen already open.
+    const alertToggle = document.getElementById('equity-alert-toggle-' + item.id);
+    if (alertToggle) {
+        alertToggle.checked = Boolean(item.price_alert_enabled);
+    }
+
     equityWriteAlertState(document.getElementById('equity-alert-state-' + item.id), item);
 }
 
-function equityRenderTable(items, force) {
+/**
+ * Cycle the sort on one column: ascending, then descending, then back to the
+ * order the list arrived in.
+ *
+ * The third step matters. Without it a list that has been sorted once can
+ * never be put back, and the order the server sends is the one the watch list
+ * was built in - which is itself a useful order to return to.
+ */
+function equitySortBy(key) {
+    if (!Object.prototype.hasOwnProperty.call(EQUITY_SORT_COLUMNS, key)) { return; }
+
+    const first = EQUITY_SORT_DESC_FIRST[key] ? 'desc' : 'asc';
+    const second = first === 'asc' ? 'desc' : 'asc';
+
+    if (equitySortKey !== key) {
+        equitySortKey = key;
+        equitySortDir = first;
+    } else if (equitySortDir === first) {
+        equitySortDir = second;
+    } else {
+        equitySortKey = '';
+        equitySortDir = 'asc';
+    }
+
+    // Back to the first page. Sorting asks a new question and the answer
+    // starts at the top, not wherever the previous answer had been scrolled to.
+    equityPage = 1;
+    equityRenderTable(equityItems, true, true);
+}
+
+function equityUpdateSortMarks() {
+    Object.keys(EQUITY_SORT_COLUMNS).forEach(function (key) {
+        const mark = document.getElementById('equity-sort-mark-' + key);
+        if (!mark) { return; }
+        if (equitySortKey === key) {
+            mark.textContent = equitySortDir === 'asc' ? '\u2191' : '\u2193';
+            mark.className = 'equity-sort-mark is-active';
+        } else {
+            mark.textContent = '\u2195';
+            mark.className = 'equity-sort-mark';
+        }
+    });
+}
+
+/**
+ * What one row is worth in the column being sorted.
+ *
+ * Returned with a missing flag rather than as a bare value, because a row with
+ * nothing in the column is not the same as a row holding zero. A stock with no
+ * target set has no place among the targets at either end of the order, so it
+ * is reported as missing and sinks to the bottom whichever way the sort runs.
+ */
+function equitySortValue(item, key) {
+    const blank = { missing: true, value: EQUITY_SORT_COLUMNS[key] === 'number' ? 0 : '' };
+
+    if (key === 'ltp' && !item.has_ltp) { return blank; }
+    if (key === 'change_pct' && !(item.has_ltp && item.prev_close)) { return blank; }
+    if (key === 'variance_pct' && !item.has_variance) { return blank; }
+
+    const raw = item[key];
+    if (raw === null || raw === undefined || raw === '') { return blank; }
+
+    if (EQUITY_SORT_COLUMNS[key] === 'number') {
+        const num = Number(raw);
+        return isFinite(num) ? { missing: false, value: num } : blank;
+    }
+    return { missing: false, value: String(raw).toUpperCase() };
+}
+
+function equitySortItems(items) {
+    if (!equitySortKey || !EQUITY_SORT_COLUMNS[equitySortKey]) { return items.slice(); }
+
+    const key = equitySortKey;
+    const factor = equitySortDir === 'desc' ? -1 : 1;
+
+    return items.slice().sort(function (first, second) {
+        const left = equitySortValue(first, key);
+        const right = equitySortValue(second, key);
+
+        if (left.missing !== right.missing) { return left.missing ? 1 : -1; }
+        if (left.value < right.value) { return -factor; }
+        if (left.value > right.value) { return factor; }
+
+        // Equal on the sorted column, so the stock name breaks the tie and the
+        // order stays the same from one refresh to the next.
+        const a = String(first.symbol || '');
+        const b = String(second.symbol || '');
+        return a < b ? -1 : (a > b ? 1 : 0);
+    });
+}
+
+/**
+ * Put the rows in the order they should appear, without re-sorting them.
+ *
+ * Sorting happens on a click and only on a click. A refresh brings new prices,
+ * not a new order: a list that re-sorted itself every ten seconds would move
+ * rows out from under the pointer mid-click and would never sit still long
+ * enough to read. So the order settled by the last click is remembered as a
+ * list of ids and simply replayed, with anything added since placed at the end.
+ */
+function equityArrangeItems(items, resort) {
+    if (resort) {
+        const sorted = equitySortItems(items);
+        equityRowOrder = sorted.map(function (item) { return item.id; });
+        return sorted;
+    }
+
+    const pending = {};
+    items.forEach(function (item) { pending[item.id] = item; });
+
+    const ordered = [];
+    equityRowOrder.forEach(function (id) {
+        if (pending[id]) {
+            ordered.push(pending[id]);
+            delete pending[id];
+        }
+    });
+    items.forEach(function (item) {
+        if (pending[item.id]) { ordered.push(item); }
+    });
+
+    equityRowOrder = ordered.map(function (item) { return item.id; });
+    return ordered;
+}
+
+// How many rows one page holds.
+const EQUITY_PAGE_SIZE = 100;
+
+// Which page is on screen, 1 based.
+let equityPage = 1;
+
+function equityRenderTable(items, force, resort) {
     const body = document.getElementById('equity-watchlist-body');
     if (!body) { return; }
 
-    const ids = items.map(function (item) { return item.id; }).join(',');
+    equityUpdateSortMarks();
+    equityRenderStatusFilters(items);
+    equityShowListColumn(equityShowingAll());
+
+    // Filter first, then order, then page. Any other sequence gives a page 2
+    // that does not follow page 1.
+    const matching = equityStatusFilter === null
+        ? items
+        : (items || []).filter(function (item) {
+            return equityAlertStatus(item) === equityStatusFilter;
+        });
+
+    const arranged = equityArrangeItems(matching, Boolean(resort));
+
+    const pages = Math.max(1, Math.ceil(arranged.length / EQUITY_PAGE_SIZE));
+    if (equityPage > pages) { equityPage = pages; }
+    const start = (equityPage - 1) * EQUITY_PAGE_SIZE;
+    const ordered = arranged.slice(start, start + EQUITY_PAGE_SIZE);
+
+    equityRenderPager(arranged.length, pages, start, ordered.length);
+
+    const ids = ordered.map(function (item) { return item.id; }).join(',');
 
     if (!force && ids === equityRenderedIds) {
-        // Same rows as last time, so only the live cells are rewritten. The
-        // trade nature select and the target price box keep whatever the admin
-        // is part way through typing.
-        items.forEach(equityWriteLiveCells);
+        // Same rows in the same order as last time, which is the ordinary case
+        // on the ten second poll, so only the live price cells are rewritten
+        // and the rest of the row is left alone. Refresh passes force and gets
+        // the whole row rebuilt.
+        ordered.forEach(equityWriteLiveCells);
         return;
     }
 
-    // A rebuild would discard an edit in progress, so it waits for the box to
-    // lose focus rather than overwriting it.
+    // Nothing in a row is editable any more, so there is no half typed value
+    // to protect - but a rebuild still moves the element under the pointer, so
+    // an unforced repaint keeps its hands off a row being used.
     const active = document.activeElement;
     if (!force && active && body.contains(active)) {
-        items.forEach(equityWriteLiveCells);
+        ordered.forEach(equityWriteLiveCells);
         return;
     }
 
     body.textContent = '';
     equityRenderedIds = ids;
 
-    if (!items.length) {
+    if (!ordered.length) {
+        // Names the list when one is chosen. Now that the chip filters within
+        // the selected list, "no stock has a paused alert" would be read as a
+        // statement about everything, when it is only a statement about the
+        // list on screen.
+        const listName = equityCurrentListName();
         body.appendChild(equityMessageRow(
-            'No stocks under watch. Use Add Stock to search NSE or BSE and start watching one.'
+            equityStatusFilter
+                ? 'No stock' + (listName ? ' in ' + listName : '')
+                  + ' has an alert that is '
+                  + EQUITY_STATUS_LABEL[equityStatusFilter].toLowerCase() + '.'
+                : 'No stocks under watch. Use Add Stock to search NSE or BSE and start watching one.'
         ));
         return;
     }
 
-    items.forEach(function (item) {
-        body.appendChild(equityWatchRow(item));
+    ordered.forEach(function (item, offset) {
+        body.appendChild(equityWatchRow(item, start + offset + 1));
     });
-    items.forEach(equityWriteLiveCells);
+    ordered.forEach(equityWriteLiveCells);
+}
+
+/**
+ * Show or hide the Watch List column.
+ *
+ * Done by class rather than by rebuilding the table, so the header cell and
+ * every row cell move together and cannot drift apart. A column shown in the
+ * head and missing in the body shifts every value one place left, which reads
+ * as wrong data rather than as a layout fault.
+ */
+function equityShowListColumn(show) {
+    document.querySelectorAll('.equity-list-col').forEach(function (cell) {
+        cell.classList.toggle('hidden', !show);
+    });
+}
+
+/**
+ * Page numbers under the table.
+ *
+ * Hidden entirely while everything fits on one page: a pager with a single
+ * page in it is a control that cannot do anything.
+ */
+function equityRenderPager(total, pages, start, shown) {
+    const pager = document.getElementById('equity-pager');
+    const buttons = document.getElementById('equity-pager-buttons');
+    const note = document.getElementById('equity-pager-note');
+    if (!pager || !buttons) { return; }
+
+    pager.classList.toggle('hidden', pages <= 1);
+    if (pages <= 1) { return; }
+
+    if (note) {
+        note.textContent = 'Showing ' + (start + 1) + ' to ' + (start + shown)
+            + ' of ' + total;
+    }
+
+    buttons.textContent = '';
+
+    const add = function (label, page, enabled, active) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'join-item btn btn-sm' + (active ? ' btn-active' : '');
+        button.textContent = label;
+        button.disabled = !enabled;
+        if (enabled) {
+            button.onclick = function () {
+                equityPage = page;
+                equityRenderTable(equityItems, true, false);
+            };
+        }
+        buttons.appendChild(button);
+    };
+
+    add('Previous', equityPage - 1, equityPage > 1, false);
+    for (let page = 1; page <= pages; page++) {
+        add(String(page), page, page !== equityPage, page === equityPage);
+    }
+    add('Next', equityPage + 1, equityPage < pages, false);
 }
 
 // ---------------------------------------------------------------------------
 // Alerts
 // ---------------------------------------------------------------------------
 
-function equityRecordAlerts(alerts) {
-    if (!alerts || !alerts.length) { return; }
+/**
+ * Add one fired alert to the running list on this screen.
+ *
+ * The popup in the corner is raised by equity_alerts.js, which every equity
+ * screen loads. This is the extra thing the Watch List does with the same
+ * alert: keep it visible in a list rather than letting it vanish with the
+ * popup. It is called through the hook that file exposes.
+ */
+function equityRecordAlert(alert) {
+    if (!alert || !alert.message) { return; }
 
-    alerts.forEach(function (alert) {
-        equityAlertLines.unshift({
-            text: alert.message,
-            at: alert.triggered_at
-        });
-        if (typeof showToast === 'function') {
-            showToast(alert.message, 'warning');
-        }
+    equityAlertLines.unshift({
+        text: alert.message,
+        at: alert.created_at
     });
     equityAlertLines = equityAlertLines.slice(0, EQUITY_MAX_ALERT_LINES);
     equityRenderAlerts();
 }
+
+window.EquityAlerts = window.EquityAlerts || {};
+window.EquityAlerts.onAlert = equityRecordAlert;
 
 function equityRenderAlerts() {
     const card = document.getElementById('equity-alerts-card');
@@ -1192,12 +2129,23 @@ function equityClearAlerts() {
 function equityApplyPayload(payload, force) {
     equityItems = payload.items || [];
     equityRenderTable(equityItems, force);
-    equityRecordAlerts(payload.alerts);
+
+    // The card is headed with the list's own name, so a screen showing "Key
+    // Stocks" says so rather than saying "My Watch List" for every list.
+    if (payload.watchlist_name) {
+        equitySetText('equity-watchlist-title', payload.watchlist_name, 'card-title');
+        equitySetText('equity-add-target-list', payload.watchlist_name, 'badge badge-ghost');
+    }
+    if (payload.watchlist_id) {
+        equityActiveWatchlistId = payload.watchlist_id;
+    }
 
     equitySetText(
         'equity-add-count',
         equityItems.length + ' of ' + (payload.max_items || 100) + ' stocks used'
     );
+
+    equityWriteReturnedNote(payload.returned_to_watchlist || []);
 
     if (payload.price_alerts_enabled === false) {
         equityShowStale(
@@ -1207,33 +2155,449 @@ function equityApplyPayload(payload, force) {
         equityShowStale('');
     }
 
-    const feed = payload.price_feed || {};
-    equitySetText(
-        'equity-feed-marker',
-        feed.source === 'websocket' ? 'Prices: live feed'
-            : (feed.source === 'mixed' ? 'Prices: feed and fallback'
-                : (feed.source === 'rest' ? 'Prices: fallback quotes' : 'Prices: none yet'))
-    );
+    // The feed marker is gone from the header. It said the same thing three
+    // ways for anyone who did not already know what a push feed was, and the
+    // one case where the distinction matters - an alert that is not being
+    // evaluated - is now stated on the row itself.
 
-    equitySetText('equity-last-updated', 'Updated ' + EquityFormat.clockTime(payload.generated_at));
-
-    equityRenderFeedBadge(payload.price_feed);
-
-    equityRenderAnalyzeBadge(payload.analyze && payload.analyze.analyze);
+    if (window.EquityUpdated) {
+        // The prices this screen just drew, so the line can say whether
+        // they are MOVING rather than guess from the clock.
+        window.EquityUpdated.write(
+            'equity-last-updated', payload.generated_at, null,
+            window.EquityUpdated.priceKey(payload.items)
+        );
+        equityRenderFeedBadge(payload.price_feed);
+        equityRenderAnalyzeBadge(payload.analyze && payload.analyze.analyze);
+    }
 }
 
-async function equityLoadWatchlist(force) {
-    if (equityLoading) { return; }
-    equityLoading = true;
+/**
+ * The list to act on: whatever the selector is showing.
+ *
+ * Everything on this screen is scoped to one list - the rows, the stock count,
+ * the cap, and where a new stock lands. Reading it from one place means the
+ * Add Stock card can never quietly add to a different list from the one being
+ * looked at.
+ */
+// Every list at once. A string, so it can never be mistaken for a list id.
+const EQUITY_WATCHLIST_ALL = 'all';
 
-    const button = document.getElementById('equity-refresh-btn');
+function equityWatchlistId() {
+    const select = document.getElementById('equity-watchlist-select');
+    if (select && select.value) {
+        if (select.value === EQUITY_WATCHLIST_ALL) { return EQUITY_WATCHLIST_ALL; }
+        const parsed = parseInt(select.value, 10);
+        if (!isNaN(parsed)) { return parsed; }
+    }
+    return equityActiveWatchlistId;
+}
+
+function equityShowingAll() {
+    return equityWatchlistId() === EQUITY_WATCHLIST_ALL;
+}
+
+function equityWatchlistQuery() {
+    const id = equityWatchlistId();
+    return id ? '&watchlist_id=' + encodeURIComponent(id) : '';
+}
+
+// ---------------------------------------------------------------------------
+// Alert status: filtering, and the chips that drive it
+// ---------------------------------------------------------------------------
+
+const EQUITY_STATUS_ORDER = ['ACTIVE', 'TRIGGERED', 'PAUSED'];
+const EQUITY_STATUS_LABEL = {
+    ACTIVE: 'Active',
+    TRIGGERED: 'Triggered',
+    PAUSED: 'Paused'
+};
+const EQUITY_STATUS_BADGE = {
+    ACTIVE: 'badge-success',
+    TRIGGERED: 'badge-warning',
+    // Neutral, not ghost. Ghost is what an UNSELECTED chip wears, so a
+    // selected Paused was indistinguishable from the ones nobody had clicked.
+    PAUSED: 'badge-neutral'
+};
+
+// Which status the table is filtered to, or null for everything.
+let equityStatusFilter = null;
+
+/**
+ * Which of the three states one row's alert is in, or null when the row has no
+ * alert at all.
+ *
+ * Triggered is tested FIRST, matching the server. Firing switches an alert off
+ * by itself, so testing "off" first matched every alert that had ever fired
+ * and Triggered could only ever count zero - which is what put HDFCBANK, with
+ * "Alert at 14:04:36" printed on its own row, under Paused.
+ *
+ * An alert switched off by hand and never fired has no triggered stamp, so it
+ * still reads as paused.
+ */
+function equityAlertStatus(item) {
+    if (item.alert_price === null || item.alert_price === undefined) { return null; }
+    if (item.alert_triggered_at) { return 'TRIGGERED'; }
+    if (!item.price_alert_enabled) { return 'PAUSED'; }
+    return 'ACTIVE';
+}
+
+/**
+ * The name of the watch list on screen, or '' when All is selected.
+ *
+ * Read from the selector rather than held in a variable, so it can never
+ * disagree with the control the person is looking at.
+ */
+function equityCurrentListName() {
+    const select = document.getElementById('equity-watchlist-select');
+    if (!select || select.value === EQUITY_WATCHLIST_ALL) { return ''; }
+    return select.selectedIndex >= 0
+        ? select.options[select.selectedIndex].textContent.trim() : '';
+}
+
+function equityRenderStatusFilters(items) {
+    const host = document.getElementById('equity-status-filters');
+    if (!host) { return; }
+
+    const counts = { ACTIVE: 0, TRIGGERED: 0, PAUSED: 0 };
+    (items || []).forEach(function (item) {
+        const status = equityAlertStatus(item);
+        if (status) { counts[status] += 1; }
+    });
+
+    host.textContent = '';
+    EQUITY_STATUS_ORDER.forEach(function (status) {
+        const chip = document.createElement('button');
+        chip.type = 'button';
+        // Shown even at zero. A chip that vanishes when its count reaches zero
+        // cannot be clicked to ask the question, and "none" is an answer worth
+        // being able to ask for.
+        // Outlined always, so an unselected chip still reads as a button and
+        // not as a stray label. Selected, each takes its own colour - Paused
+        // included, which previously stayed ghost-grey when chosen and so
+        // looked exactly like the two that had not been chosen.
+        chip.className = 'equity-chip badge ' + (equityStatusFilter === status
+            ? EQUITY_STATUS_BADGE[status] : 'badge-ghost');
+        chip.textContent = EQUITY_STATUS_LABEL[status] + ' ' + counts[status];
+        chip.onclick = function () { equitySetStatusFilter(status); };
+        host.appendChild(chip);
+    });
+}
+
+function equitySetStatusFilter(status) {
+    // Clicking the chip you are already on clears it, so a filter can always
+    // be undone with the control that set it.
+    equityStatusFilter = (equityStatusFilter === status) ? null : status;
+
+    // The chip filters WITHIN the list on screen. It used to switch the
+    // selector back to All first, on the reasoning that "what is triggered" is
+    // a question about everything - but the counts printed on the chips are
+    // worked out from the rows of the list currently selected, so choosing My Holdings
+    // showed "Active 3" and clicking it produced 9 rows from every list.
+    //
+    // A number on a button has to be the number of things that button gives
+    // you. Whichever way the two are made to agree, they have to agree, and
+    // filtering the list in front of you is the one that does not move the
+    // ground under the person who just chose it.
+    equityPage = 1;
+    equityRenderTable(equityItems, true, false);
+}
+
+function equitySwitchWatchlist() {
+    equityActiveWatchlistId = equityWatchlistId();
+    // The download follows the screen. Moved here rather than left on the link
+    // as it was built, which would have exported All for ever.
+    equitySyncExportLink();
+
+    // The new list has different rows, so the remembered order and the sort
+    // belong to the list being left, not the one arriving.
+    equityRowOrder = [];
+    equityRenderedIds = '';
+    equitySortKey = '';
+    equitySortDir = 'asc';
+    equityPage = 1;
+
+    // Name the list being loaded, and put it on the heading straight away.
+    // The heading was the thing that stayed wrong, so it is the thing that has
+    // to change first: the screen should never show one list's name over
+    // another list's rows, even for a moment.
+    const selector = document.getElementById('equity-watchlist-select');
+    const chosen = selector && selector.selectedIndex >= 0
+        ? selector.options[selector.selectedIndex].textContent.trim()
+        : '';
+    if (chosen) {
+        equitySetText('equity-watchlist-title', chosen, 'card-title');
+        equitySetText('equity-add-target-list', chosen, 'badge badge-ghost');
+    }
+
+    const body = document.getElementById('equity-watchlist-body');
+    if (body) {
+        body.textContent = '';
+        body.appendChild(equityMessageRow(
+            chosen ? 'Loading ' + chosen + '.' : 'Loading.', EQUITY_COLUMN_COUNT
+        ));
+    }
+
+    equityShowResult('');
+    equityLoadWatchlist(true);
+}
+
+// Every load is numbered. Only the newest one is allowed to paint.
+//
+// Switching list looked like it did nothing for up to ten seconds, and then
+// changed on its own. Two faults, both here:
+//
+//   A poll already in flight for the PREVIOUS list finished after the switch
+//       and painted its own rows and its own name over the new selection - so
+//       the selector said Key Stocks while the card said My Holdings. The answer had
+//       simply outlived the question that asked it.
+//   The switch itself was DROPPED whenever a poll happened to be running,
+//       because the guard below returned early on any overlap. Nothing then
+//       loaded the new list until the next tick came round.
+//
+// The counter fixes the first: a response that is no longer the newest request
+// is discarded rather than painted. Letting a forced load through fixes the
+// second: pressing Refresh, or changing list, is a request that must not be
+// silently swallowed because a background poll happened to be mid-flight.
+let equityRequestSeq = 0;
+
+// ---------------------------------------------------------------------------
+// Fixing a symbol the broker does not have
+// ---------------------------------------------------------------------------
+//
+// Its own small search rather than the Add Stock one, which is wired into that
+// card's own state. The replacement is PICKED, never typed: typing is how the
+// row got into this state.
+
+let equityFixItem = null;
+let equityFixChoice = null;
+let equityFixTimer = null;
+let equityFixBusy = false;
+
+function equityOpenFixSymbol(item) {
+    equityFixItem = item;
+    equityFixChoice = null;
+
+    equitySetText('equity-fix-title', 'Fix Symbol - ' + item.symbol);
+    equitySetText('equity-fix-subtitle',
+        'Your broker has no stock called ' + item.symbol + ' on '
+        + (item.exchange || 'NSE') + ', so no price will ever arrive and no '
+        + 'alert can fire. Find the right one below.');
+
+    const box = document.getElementById('equity-fix-search');
+    if (box) { box.value = ''; }
+    const results = document.getElementById('equity-fix-results');
+    if (results) { results.textContent = ''; }
+    const banner = document.getElementById('equity-fix-chosen-banner');
+    if (banner) { banner.classList.add('hidden'); }
+    const apply = document.getElementById('equity-fix-apply');
+    if (apply) { apply.disabled = true; }
+
+    const modal = document.getElementById('equity-fix-modal');
+    if (modal && typeof modal.showModal === 'function') { modal.showModal(); }
+}
+
+function equityFixSearchInput() {
+    if (equityFixTimer) { clearTimeout(equityFixTimer); }
+    equityFixTimer = setTimeout(equityRunFixSearch, EQUITY_SEARCH_DEBOUNCE_MS);
+}
+
+async function equityRunFixSearch() {
+    const box = document.getElementById('equity-fix-search');
+    const host = document.getElementById('equity-fix-results');
+    if (!box || !host) { return; }
+
+    const query = String(box.value || '').trim();
+    if (query.length < 2) { host.textContent = ''; return; }
+
+    try {
+        const response = await fetch(
+            '/equity/api/symbol-search?q=' + encodeURIComponent(query),
+            { signal: AbortSignal.timeout(EQUITY_FETCH_TIMEOUT_MS) }
+        );
+        const data = await response.json();
+        host.textContent = '';
+
+        if (data.status !== 'success') {
+            const row = document.createElement('div');
+            row.className = 'text-xs text-error';
+            row.textContent = data.message || 'The search is unavailable.';
+            host.appendChild(row);
+            return;
+        }
+
+        const results = data.results || [];
+        if (!results.length) {
+            const row = document.createElement('div');
+            row.className = 'text-xs text-base-content/60';
+            row.textContent = 'Nothing found for "' + query + '".';
+            host.appendChild(row);
+            return;
+        }
+
+        results.slice(0, 20).forEach(function (result) {
+            const row = document.createElement('button');
+            row.type = 'button';
+            row.className = 'btn btn-sm btn-ghost btn-block justify-between';
+            const left = document.createElement('span');
+            left.className = 'font-semibold';
+            left.textContent = result.symbol + '  ' + (result.exchange || '');
+            row.appendChild(left);
+            const right = document.createElement('span');
+            right.className = 'text-xs text-base-content/60';
+            right.textContent = result.name || '';
+            row.appendChild(right);
+            row.onclick = function () { equityChooseFix(result); };
+            host.appendChild(row);
+        });
+    } catch (error) {
+        host.textContent = '';
+        const row = document.createElement('div');
+        row.className = 'text-xs text-error';
+        row.textContent = 'The search could not be reached.';
+        host.appendChild(row);
+        console.error('Fix symbol search failed:', error);
+    }
+}
+
+function equityChooseFix(result) {
+    equityFixChoice = result;
+    const banner = document.getElementById('equity-fix-chosen-banner');
+    if (banner) {
+        banner.classList.remove('hidden');
+        banner.className = 'alert mt-3 alert-warning';
+    }
+    equitySetText('equity-fix-chosen',
+        (equityFixItem ? equityFixItem.symbol : '') + '  becomes  '
+        + result.symbol + ' on ' + (result.exchange || 'NSE')
+        + (result.name ? '  -  ' + result.name : ''));
+    const apply = document.getElementById('equity-fix-apply');
+    if (apply) { apply.disabled = false; }
+}
+
+async function equityApplyFixSymbol() {
+    const button = document.getElementById('equity-fix-apply');
+    // Disabled as the FIRST statement, so a double click cannot send twice.
+    if (equityFixBusy) { return; }
+    if (!equityFixItem || !equityFixChoice) { return; }
+    equityFixBusy = true;
     if (button) { button.disabled = true; }
 
     try {
-        const response = await fetch('/equity/api/watchlist/quotes?_t=' + Date.now(), {
+        const response = await fetchWithCSRF(
+            '/equity/api/watchlist/' + equityFixItem.id + '/symbol', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'same-origin',
+                body: JSON.stringify({
+                    symbol: equityFixChoice.symbol,
+                    exchange: equityFixChoice.exchange || 'NSE'
+                }),
+                signal: AbortSignal.timeout(EQUITY_FETCH_TIMEOUT_MS)
+            });
+        const data = await response.json();
+
+        if (data.status !== 'success') {
+            equitySetText('equity-fix-chosen', data.message || 'That could not be changed.');
+            const banner = document.getElementById('equity-fix-chosen-banner');
+            if (banner) { banner.className = 'alert mt-3 alert-error'; }
+            return;
+        }
+
+        const modal = document.getElementById('equity-fix-modal');
+        if (modal && typeof modal.close === 'function') { modal.close(); }
+        if (typeof showToast === 'function') {
+            showToast(data.message || 'Symbol corrected', 'success');
+        }
+        equityLoadWatchlist(true);
+    } catch (error) {
+        equitySetText('equity-fix-chosen',
+            'That was sent but no answer came back. Press Refresh and check '
+            + 'before trying again.');
+        const banner = document.getElementById('equity-fix-chosen-banner');
+        if (banner) { banner.className = 'alert mt-3 alert-error'; }
+        console.error('Fix symbol failed:', error);
+    } finally {
+        equityFixBusy = false;
+        if (button) { button.disabled = false; }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The watch list as a spreadsheet
+// ---------------------------------------------------------------------------
+//
+// Download is a plain link and needs no code beyond keeping its query string
+// in step with the list you are looking at.
+//
+// Upload is two steps on purpose: the file is read in the browser, sent to be
+// PLANNED, and nothing is written until the plan has been seen and confirmed.
+// The same text is sent again on apply, and the server plans it a second time
+// from that text - so nothing this page says about the plan is ever what gets
+// applied.
+
+
+function equityExportUrl() {
+    const select = document.getElementById('equity-watchlist-select');
+    const chosen = select && select.value ? select.value : 'all';
+    return '/equity/api/watchlist/export?watchlist_id=' + encodeURIComponent(chosen);
+}
+
+function equitySyncExportLink() {
+    // The download follows whichever list is on screen. Kept in step here
+    // rather than built at page load, which would have exported All for ever.
+    const link = document.getElementById('equity-export-link');
+    if (link) { link.href = equityExportUrl(); }
+}
+
+/**
+ * Show what the file CHANGES, and nothing else.
+ *
+ * The owner's instruction on 6 September: a file of ten rows that changes one
+ * of them was printing all ten, an amber banner and a red banner, with the one
+ * change in the middle. Now the change is the whole dialog.
+ *
+ * Listed: ADD, CHANGE, SKIP. A SKIP changes nothing but is the file being
+ * REFUSED, which has to be read. UNCHANGED rows are counted on one grey line
+ * and never printed.
+ *
+ * The two banners are gone. Nothing they said is lost: an armed alert already
+ * says "this arms the price alert" in red on its own row, and a cleared note
+ * already reads in red bold on its own row. With the unchanged rows gone those
+ * lines are no longer buried, which is the argument for this being safer than
+ * what it replaces rather than merely shorter.
+ */
+async function equityLoadWatchlist(force) {
+    // A background poll still stands aside for one already running. A forced
+    // load - Refresh, or a change of list - never does.
+    if (equityLoading && !force) { return; }
+
+    const seq = ++equityRequestSeq;
+    equityLoading = true;
+
+    // Only a load the ADMIN asked for greys the button.
+    //
+    // It used to be disabled by the background poll as well, which runs every
+    // ten seconds - so the button spent a good part of its life looking dead
+    // for a reason nobody had asked about, and a poll that finished late could
+    // leave it that way. A background refresh is not something the screen
+    // should be reporting as busy; only a press of this button is.
+    const button = force ? document.getElementById('equity-refresh-btn') : null;
+    if (button) {
+        button.disabled = true;
+        button.textContent = 'Refreshing';
+    }
+
+    try {
+        const response = await fetch(
+            '/equity/api/watchlist/quotes?_t=' + Date.now() + equityWatchlistQuery(), {
             signal: AbortSignal.timeout(EQUITY_FETCH_TIMEOUT_MS)
         });
         const data = await response.json();
+
+        // Superseded while this was in the air. Say nothing and paint nothing:
+        // a newer request is already on its way to answering the same screen.
+        if (seq !== equityRequestSeq) { return; }
 
         if (data.status !== 'success') {
             equityShowStale('Live prices unavailable, showing the last values loaded. ' + (data.message || ''));
@@ -1242,16 +2606,32 @@ async function equityLoadWatchlist(force) {
 
         equityApplyPayload(data, Boolean(force));
     } catch (error) {
+        if (seq !== equityRequestSeq) { return; }
         // Degrade to a visible stale marker, never blank the page.
         equityShowStale('Live prices unavailable, showing the last values loaded. Retrying shortly.');
         console.error('Equity watch list load failed:', error);
     } finally {
-        equityLoading = false;
-        if (button) { button.disabled = false; }
+        // Only the newest request owns the shared flags. An older one finishing
+        // late must not re-enable the button that the newer one disabled.
+        if (seq === equityRequestSeq) {
+            equityLoading = false;
+        }
+        // The button is restored by whichever request disabled it, newest or
+        // not. Ownership matters for the shared loading flag; a button left
+        // greyed forever is the worse failure.
+        if (button) {
+            button.disabled = false;
+            button.textContent = 'Refresh';
+        }
     }
 }
 
 document.addEventListener('click', function (event) {
+    // A click on something the handler that ran before us has already removed
+    // cannot be tested for containment: a detached element is inside nothing.
+    // Those clicks began inside the search box, so leave the panel alone.
+    if (event.target && event.target.isConnected === false) { return; }
+
     const wrap = document.querySelector('.equity-search-wrap');
     if (wrap && !wrap.contains(event.target)) {
         equityCloseSearchResults();
@@ -1259,6 +2639,7 @@ document.addEventListener('click', function (event) {
 });
 
 document.addEventListener('DOMContentLoaded', function () {
+    equitySyncExportLink();
     {% if accounts %}
     equityLoadWatchlist(true);
     equityPollTimer = equityStartEventStream(equityLoadWatchlist, ['prices', 'alerts']);
@@ -1267,9 +2648,16 @@ document.addEventListener('DOMContentLoaded', function () {
 
 window.addEventListener('beforeunload', function () {
     if (equityPollTimer) {
-        equityPollTimer();
+        equityPollTimer && equityPollTimer();
         equityPollTimer = null;
     }
 });
 </script>
+
+
+<!-- The investment note: your own thesis and risk for a stock. Shared with the
+     other screen that offers it, so the dialog lives in one file rather than
+     two copies of the same markup. -->
+<script src="{{ url_for('static', filename='js/equity_notes.js') }}"></script>
+
 {% endblock %}

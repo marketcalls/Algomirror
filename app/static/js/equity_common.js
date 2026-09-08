@@ -417,3 +417,38 @@ function equityRenderAccountOptions(options) {
         equityAccountsRendered = true;
     }
 }
+
+/* ------------------------------------------------------- unverified rows */
+
+/*
+ * A row the broker has not confirmed yet. Identical in the Order Book and
+ * the Trade Book, so it lives here rather than in both.
+ */
+function equityRenderUnverified(payload) {
+    const banner = document.getElementById('equity-unverified-banner');
+    const text = document.getElementById('equity-unverified-text');
+    if (!banner || !text) { return; }
+
+    const ids = ((payload.window || {}).unverified_accounts) || [];
+    if (!ids.length) {
+        banner.classList.add('hidden');
+        return;
+    }
+
+    // Named, not numbered. "Account 2" means nothing at a glance, and the whole
+    // point of this line is that it registers immediately.
+    const names = {};
+    ((payload.options || {}).accounts || []).forEach(function (account) {
+        names[String(account.account_id)] = account.account_name;
+    });
+    const listed = ids.map(function (id) {
+        return names[String(id)] || ('Account ' + id);
+    });
+
+    text.textContent = listed.join(', ')
+        + (listed.length === 1 ? ' could not be read.' : ' could not be read.')
+        + ' Anything placed there is missing from the rows below. Nothing here is'
+        + ' marked as absent from the broker because of it - an account that did'
+        + ' not answer is not an account with nothing in it.';
+    banner.classList.remove('hidden');
+}

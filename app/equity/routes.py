@@ -5312,6 +5312,73 @@ def api_symbol_search():
     })
 
 
+@equity_bp.route('/api/quote')
+@login_required
+@api_rate_limit()
+@_json_route
+def api_quote():
+    """
+    Live price for one symbol, for the stock picker on Place Order and the
+    watch list.
+
+    Query string:
+        symbol    required
+        exchange  defaults to NSE
+
+    Served from the pushed feed, so the common case costs no broker call. The
+    symbol is subscribed on the way through, which is what makes the number
+    keep moving on screen afterwards rather than being a one-off snapshot.
+
+    api_rate_limit rather than heavy_rate_limit: this reads a local cache, and
+    the REST backstop inside _resolve_prices is already bounded.
+
+    Response: {"status", "quote": {"symbol", "exchange", "ltp", "prev_close",
+               "change", "change_pct"}}
+    """
+    symbol = _arg('symbol').upper()
+    if not symbol:
+        raise _BadRequest('symbol is required')
+    exchange = (_arg('exchange') or 'NSE').upper()
+
+    key = (symbol, exchange)
+    context = _account_context(fetch_funds=False, fetch_holdings=False)
+
+    quotes, price_feed = _resolve_prices(
+        context['creds'], {}, [key], want_prev_close=True, prune=False
+    )
+
+    quote = quotes.get(key) or {}
+    ltp = _to_float(quote.get('ltp'))
+    prev_close = _to_float(quote.get('prev_close'))
+
+    if ltp <= 0:
+        # No price yet is the normal first answer for a symbol nothing was
+        # watching a moment ago, so it is not an error. The subscription is
+        # now in place and the next read will have one.
+        return _ok({
+            'quote': None,
+            'message': 'No live price for this symbol yet.',
+            'price_feed': price_feed,
+            'generated_at': _iso(datetime.utcnow()),
+        })
+
+    change = ltp - prev_close if prev_close > 0 else 0.0
+    change_pct = percent_of(change, prev_close) if prev_close > 0 else 0.0
+
+    return _ok({
+        'quote': {
+            'symbol': symbol,
+            'exchange': exchange,
+            'ltp': _money(ltp),
+            'prev_close': _money(prev_close),
+            'change': _money(change),
+            'change_pct': round(change_pct, 2),
+        },
+        'price_feed': price_feed,
+        'generated_at': _iso(datetime.utcnow()),
+    })
+
+
 @equity_bp.route('/api/depth')
 @login_required
 @heavy_rate_limit()
@@ -6671,6 +6738,92 @@ def api_save_settings_preferences():
 # places an order, because a wrong automatic correction on a real position is
 # worse than a visible unknown.
 # ---------------------------------------------------------------------------
+
+@equity_bp.route('/api/orders/reconcile', methods=['POST'])
+@login_required
+@heavy_rate_limit()
+@_json_route
+def api_reconcile_orders():
+    """
+    Check every account against the broker, on demand.
+
+    Order state normally arrives on the push stream, so nothing polls for it.
+    This is the manual equivalent, for the two cases a stream cannot cover: the
+    admin wants to be certain right now, or a broker with no order adapter never
+    pushed anything in the first place.
+
+    It reads. It settles a split against what the broker reports, books fills
+    that arrived while the stream was down, and resolves resting GTTs. It never
+    places, modifies or cancels an order.
+
+    Response: {"status", "message", "accounts", "settled", "fills", "gtts"}
+    """
+    from app.utils.equity_fill_poller import reconcile_account
+    from app.utils.equity_gtt_reconciler import reconcile_account_gtts
+
+    accounts = TradingAccount.query.filter_by(
+        user_id=current_user.id, is_active=True
+    ).all()
+    if not accounts:
+        return _ok({'message': 'No active accounts to check.', 'accounts': 0})
+
+    settled = fills = gtts = 0
+    failed = []
+
+    for account in accounts:
+        try:
+            tick = reconcile_account(account.id) or {}
+            settled += _to_int(tick.get('splits_settled'))
+            fills += _to_int(tick.get('fills_booked'))
+        except Exception as exc:
+            current_app.logger.warning(
+                f'Equity reconcile failed for account {account.id}: {exc}'
+            )
+            failed.append(account.account_name or str(account.id))
+            continue
+
+        try:
+            gtt_tick = reconcile_account_gtts(account.id) or {}
+            gtts += _to_int(gtt_tick.get('splits_settled'))
+        except Exception as exc:
+            current_app.logger.warning(
+                f'Equity GTT reconcile failed for account {account.id}: {exc}'
+            )
+
+    # Whatever changed, the screens should hear about it the same way they hear
+    # about a pushed event, rather than waiting for the next one.
+    if settled or fills or gtts:
+        from app.utils.equity_events import bump, TOPIC_HOLDINGS, TOPIC_ORDERS
+        bump(TOPIC_ORDERS)
+        bump(TOPIC_HOLDINGS)
+
+    parts = []
+    if settled:
+        parts.append(f'{settled} order(s) settled')
+    if fills:
+        parts.append(f'{fills} fill(s) booked')
+    if gtts:
+        parts.append(f'{gtts} GTT(s) resolved')
+    if failed:
+        parts.append('could not reach ' + ', '.join(failed))
+
+    message = (
+        'Checked %d account(s): %s.' % (len(accounts), '; '.join(parts))
+        if parts else
+        'Checked %d account(s). Everything already matched the broker.' % len(accounts)
+    )
+
+    _log_activity('equity_orders_reconciled', message)
+
+    return _ok({
+        'message': message,
+        'accounts': len(accounts),
+        'settled': settled,
+        'fills': fills,
+        'gtts': gtts,
+        'unreachable': failed,
+    })
+
 
 @equity_bp.route('/api/external-activity')
 @login_required
