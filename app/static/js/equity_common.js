@@ -95,61 +95,102 @@ async function equityReadJson(response) {
     return { ok: false, definite: definite, status: status, data: data, message: message };
 }
 
-/* --------------------------------------------------------------- polling */
+/* ----------------------------------------------------------- live updates */
 
 /*
- * Poll on an interval, but not while the tab is hidden.
+ * Refresh when the server says something changed. No interval anywhere.
  *
- * Every equity screen ran a bare setInterval, so a tab left open overnight kept
- * asking five brokers for funds and holdings until the laptop was closed. It
- * also meant that on returning to a tab the screen showed whatever was on it
- * when it was hidden, for up to a full interval, with no indication the number
- * was old.
+ * Every equity screen used to run a bare setInterval and re-fetch its whole
+ * payload on a timer whether anything had changed or not. A tab left open
+ * overnight kept asking five brokers for funds and holdings until the laptop
+ * was closed, and a screen was on average half an interval out of date while
+ * looking current.
  *
- * Hidden pauses the timer; visible refreshes once immediately and then resumes.
- * Returns a stop function, so a screen that navigates away can clean up rather
- * than leaving a timer running against a dead DOM.
+ * The server already knows the instant anything changes: prices arrive on the
+ * shared WebSocket and order state on the order stream. /equity/api/stream
+ * pushes a small event naming the topics that moved, and this refreshes on it.
+ *
+ * Deliberately no polling fallback. A silent fallback would hide a broken
+ * stream behind exactly the behaviour this replaced. When the connection drops,
+ * the feed badge says Offline and the screen's Refresh button still works, so a
+ * stale screen is visibly stale rather than quietly stale.
+ *
+ * Hidden tabs close the stream entirely and reopen on return, refreshing once
+ * as they do, because what is on screen may be arbitrarily old by then.
+ *
+ * Returns a stop function for a screen that navigates away.
  */
-function equityStartPolling(fn, intervalMs) {
-    let timer = null;
+function equityStartEventStream(fn, topics) {
+    let source = null;
+    let stopped = false;
 
-    function tick() {
+    function refresh() {
         try {
             fn();
         } catch (error) {
-            console.error('Equity poll failed:', error);
+            console.error('Equity refresh failed:', error);
         }
     }
 
-    function start() {
-        if (timer === null) {
-            timer = setInterval(tick, intervalMs);
+    function setStreamBadge(connected) {
+        const el = document.getElementById('equity-stream-badge');
+        if (!el) { return; }
+        if (connected) {
+            el.className = 'hidden';
+            el.textContent = '';
+            el.removeAttribute('title');
+        } else {
+            el.className = 'badge badge-error badge-sm';
+            el.textContent = 'Disconnected';
+            el.title = 'Live updates are not connected. Use Refresh for current figures.';
         }
     }
 
-    function stop() {
-        if (timer !== null) {
-            clearInterval(timer);
-            timer = null;
+    function open() {
+        if (stopped || source !== null || typeof EventSource === 'undefined') { return; }
+
+        const query = (topics && topics.length) ? '?topics=' + topics.join(',') : '';
+        source = new EventSource('/equity/api/stream' + query);
+
+        source.addEventListener('hello', function () {
+            setStreamBadge(true);
+        });
+
+        source.addEventListener('change', function () {
+            refresh();
+        });
+
+        source.onerror = function () {
+            setStreamBadge(false);
+            // EventSource reconnects on its own. Closing here and reopening
+            // would fight it and lose the browser's own backoff.
+        };
+    }
+
+    function close() {
+        if (source !== null) {
+            source.close();
+            source = null;
         }
     }
 
     function onVisibilityChange() {
         if (document.hidden) {
-            stop();
+            close();
         } else {
-            // Refresh before resuming: what is on screen is up to one whole
-            // interval old, and on a trading screen that reads as current.
-            tick();
-            start();
+            // What is on screen may be arbitrarily old after a hidden spell,
+            // so refresh before reconnecting rather than waiting for an event.
+            refresh();
+            open();
         }
     }
 
     document.addEventListener('visibilitychange', onVisibilityChange);
-    if (!document.hidden) { start(); }
+    if (!document.hidden) { open(); }
 
-    return function stopPolling() {
-        stop();
+    return function stopEventStream() {
+        stopped = true;
+        close();
         document.removeEventListener('visibilitychange', onVisibilityChange);
     };
 }

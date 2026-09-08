@@ -24,6 +24,7 @@
         </div>
         <div class="flex gap-3 items-center flex-wrap">
             <span id="equity-feed-badge" class="hidden"></span>
+            <span id="equity-stream-badge" class="hidden"></span>
             <span id="equity-analyze-badge" class="hidden"></span>
             <span class="text-xs text-base-content/50 equity-num" id="equity-last-updated">Not loaded yet</span>
             {% if accounts %}
@@ -440,7 +441,6 @@ const EquityFormat = {
     }
 };
 
-const EQUITY_POLL_MS = 30000;
 const EQUITY_FETCH_TIMEOUT_MS = 20000;
 const EQUITY_WRITE_TIMEOUT_MS = 60000;
 const EQUITY_COLUMN_COUNT = 14;
@@ -1532,10 +1532,10 @@ document.addEventListener('DOMContentLoaded', function () {
     {% if accounts %}
     equityUpdateExportLink();
     equityRefreshAll();
-    equityPollTimer = equityStartPolling(function () {
+    equityPollTimer = equityStartEventStream(function () {
         equityLoadHoldings(false);
         equityLoadExitQueue();
-    }, EQUITY_POLL_MS);
+    }, ['prices', 'holdings']);
     {% endif %}
 });
 

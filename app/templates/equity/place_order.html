@@ -45,6 +45,7 @@
         </div>
         <div class="flex gap-3 items-center flex-wrap">
             <span id="equity-feed-badge" class="hidden"></span>
+            <span id="equity-stream-badge" class="hidden"></span>
             <span id="equity-analyze-badge" class="hidden"></span>
             <span class="text-xs text-base-content/50 equity-num" id="equity-last-updated"></span>
         </div>
@@ -870,7 +871,7 @@ function equityShowTab(name) {
     if (showStatus) {
         equityLoadOrderStatus();
         if (!equityStatusTimer) {
-            equityStatusTimer = equityStartPolling(equityLoadOrderStatus, EQUITY_STATUS_POLL_MS);
+            equityStatusTimer = equityStartEventStream(equityLoadOrderStatus, ['prices', 'orders']);
         }
     } else if (equityStatusTimer) {
         equityStatusTimer();
@@ -1842,7 +1843,7 @@ function equityDepthToggled() {
     if (toggle.checked) {
         equityLoadDepth();
         if (!equityDepthTimer) {
-            equityDepthTimer = equityStartPolling(equityLoadDepth, EQUITY_DEPTH_POLL_MS);
+            equityDepthTimer = equityStartEventStream(equityLoadDepth, ['prices', 'orders']);
         }
     } else if (equityDepthTimer) {
         equityDepthTimer();

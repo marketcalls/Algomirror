@@ -242,18 +242,50 @@ def test_the_servers_own_message_wins_when_it_sends_one():
 # Polling and badges.
 # ---------------------------------------------------------------------------
 
-def test_no_equity_template_uses_a_bare_interval():
+def test_no_equity_template_polls_at_all():
     """
-    Bare setInterval kept a hidden tab asking five brokers for funds all night,
-    and showed an interval-old number for a full interval on return. Every
-    equity screen goes through equityStartPolling, which pauses on hidden and
-    refreshes before resuming.
+    The architecture rule: equity screens are pushed to, never polled.
+
+    The server knows the instant anything changes, because prices arrive on the
+    shared WebSocket and order state on the order stream. A setInterval here
+    would put back exactly the behaviour /equity/api/stream replaced, and would
+    do it silently.
     """
     for path in templates():
         text = path.read_text(encoding='utf-8')
-        assert 'setInterval(' not in text, f'{path.name} still calls setInterval directly'
-        assert 'clearInterval(' not in text, (
-            f'{path.name} still calls clearInterval; equityStartPolling returns a stop function'
+        assert 'setInterval(' not in text, f'{path.name} polls with setInterval'
+        assert 'clearInterval(' not in text, f'{path.name} still manages a poll timer'
+        assert 'equityStartPolling' not in text, (
+            f'{path.name} uses the removed polling helper; use equityStartEventStream'
+        )
+
+
+def test_the_shared_module_offers_no_polling_helper():
+    """A helper that polls is a helper somebody will reach for."""
+    text = COMMON_JS.read_text(encoding='utf-8')
+    # Comments explain what was removed and why, which is not a call.
+    code = re.sub(r'/\*.*?\*/', '', text, flags=re.S)
+    code = re.sub(r'//[^\n]*', '', code)
+
+    assert 'equityStartPolling' not in code
+    assert 'setInterval' not in code
+
+
+def test_the_live_screens_subscribe_to_the_event_stream():
+    expected = {'dashboard.html', 'holdings.html', 'watchlist.html',
+                'order_book.html', 'trade_book.html', 'place_order.html'}
+    using = {
+        p.name for p in templates()
+        if 'equityStartEventStream(' in p.read_text(encoding='utf-8')
+    }
+    assert expected <= using, f'not on the event stream: {sorted(expected - using)}'
+
+
+def test_every_template_has_the_stream_badge_slot():
+    """A dropped stream must be visible, since there is no polling fallback."""
+    for path in templates():
+        assert 'id="equity-stream-badge"' in path.read_text(encoding='utf-8'), (
+            f'{path.name} has no stream badge slot'
         )
 
 

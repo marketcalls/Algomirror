@@ -37,6 +37,7 @@
         <div class="flex gap-3 items-center flex-wrap">
             <span class="text-xs text-base-content/50 equity-num" id="equity-feed-marker"></span>
             <span id="equity-feed-badge" class="hidden"></span>
+            <span id="equity-stream-badge" class="hidden"></span>
             <span id="equity-analyze-badge" class="hidden"></span>
             <span class="text-xs text-base-content/50 equity-num" id="equity-last-updated">Not loaded yet</span>
             <button onclick="equityLoadWatchlist()" class="btn btn-ghost btn-sm h-9" id="equity-refresh-btn">Refresh</button>
@@ -385,8 +386,6 @@ const EquityFormat = {
     }
 };
 
-// The PRD asks for a refresh about every 10 seconds.
-const EQUITY_POLL_MS = 10000;
 const EQUITY_FETCH_TIMEOUT_MS = 20000;
 const EQUITY_SEARCH_DEBOUNCE_MS = 350;
 const EQUITY_COLUMN_COUNT = 8;
@@ -1262,7 +1261,7 @@ document.addEventListener('click', function (event) {
 document.addEventListener('DOMContentLoaded', function () {
     {% if accounts %}
     equityLoadWatchlist(true);
-    equityPollTimer = equityStartPolling(equityLoadWatchlist, EQUITY_POLL_MS);
+    equityPollTimer = equityStartEventStream(equityLoadWatchlist, ['prices', 'alerts']);
     {% endif %}
 });
 

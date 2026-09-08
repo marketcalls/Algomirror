@@ -23,6 +23,7 @@
         </div>
         <div class="flex gap-3 items-center flex-wrap">
             <span id="equity-feed-badge" class="hidden"></span>
+            <span id="equity-stream-badge" class="hidden"></span>
             <span id="equity-analyze-badge" class="hidden"></span>
             <span class="text-xs text-base-content/50 equity-num" id="equity-last-updated">Not loaded yet</span>
             <button onclick="equityLoadDashboard()" class="btn btn-ghost btn-sm h-9" id="equity-refresh-btn">
@@ -270,7 +271,6 @@ const EquityFormat = {
     }
 };
 
-const EQUITY_POLL_MS = 30000;
 const EQUITY_FETCH_TIMEOUT_MS = 20000;
 let equityPollTimer = null;
 let equityLoading = false;
@@ -448,7 +448,7 @@ async function equityLoadDashboard() {
 document.addEventListener('DOMContentLoaded', function () {
     {% if accounts %}
     equityLoadDashboard();
-    equityPollTimer = equityStartPolling(equityLoadDashboard, EQUITY_POLL_MS);
+    equityPollTimer = equityStartEventStream(equityLoadDashboard, ['prices', 'orders', 'holdings']);
     {% endif %}
 });
 

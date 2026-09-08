@@ -24,6 +24,7 @@
         </div>
         <div class="flex gap-3 items-center flex-wrap">
             <span id="equity-feed-badge" class="hidden"></span>
+            <span id="equity-stream-badge" class="hidden"></span>
             <span id="equity-analyze-badge" class="hidden"></span>
             <span class="text-xs text-base-content/50 equity-num" id="equity-last-updated">Not loaded yet</span>
             <button onclick="equityLoadTradeBook()" class="btn btn-ghost btn-sm h-9" id="equity-refresh-btn">Refresh</button>
@@ -300,7 +301,6 @@ const EquityFormat = {
     }
 };
 
-const EQUITY_POLL_MS = 30000;
 const EQUITY_FETCH_TIMEOUT_MS = 20000;
 const EQUITY_COLUMN_COUNT = 13;
 
@@ -652,7 +652,7 @@ async function equityLoadTradeBook() {
 
 document.addEventListener('DOMContentLoaded', function () {
     equityLoadTradeBook();
-    equityPollTimer = equityStartPolling(equityLoadTradeBook, EQUITY_POLL_MS);
+    equityPollTimer = equityStartEventStream(equityLoadTradeBook, ['orders']);
 });
 
 window.addEventListener('beforeunload', function () {

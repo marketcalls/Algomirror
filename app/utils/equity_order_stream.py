@@ -72,6 +72,9 @@ from app.models import (
     EQUITY_SPLIT_STATUS_REJECTED,
     EQUITY_SPLIT_STATUSES_OPEN,
 )
+from app.utils.equity_events import (
+    bump, TOPIC_EXTERNAL, TOPIC_HOLDINGS, TOPIC_ORDERS,
+)
 from app.utils.openalgo_client import ExtendedOpenAlgoAPI
 
 logger = logging.getLogger(__name__)
@@ -333,8 +336,12 @@ class EquityOrderStream:
             account_id, message = item
             try:
                 with self._app.app_context():
-                    self._apply(account_id, message)
+                    topics = self._apply(account_id, message)
                     db.session.commit()
+                # Signalled after the commit, so a woken SSE reader sees the
+                # state the event describes rather than the state before it.
+                for topic in (topics or ()):
+                    bump(topic)
             except Exception as exc:
                 self._last_error = str(exc)
                 logger.error(
@@ -352,16 +359,21 @@ class EquityOrderStream:
     # ----------------------------------------------------------------- apply
 
     def _apply(self, account_id, message):
-        """Move one order event into the database."""
+        """
+        Move one order event into the database.
+
+        Returns the change topics it touched, so the caller can wake the SSE
+        readers that care about them after the commit.
+        """
         if not isinstance(message, dict):
-            return
+            return ()
 
         self._stats['events'] += 1
         self._last_event_at = datetime.utcnow()
 
         order_id = _as_text(message.get('orderid') or message.get('order_id'))
         if not order_id:
-            return
+            return ()
 
         split = EquityOrderSplit.query.filter_by(
             account_id=account_id, broker_order_id=order_id
@@ -374,9 +386,11 @@ class EquityOrderStream:
 
         if split is None:
             self._record_external(account_id, order_id, message)
-            return
+            return (TOPIC_EXTERNAL,)
 
         self._update_split(split, message)
+        # A settled order changes what Holdings shows, not just the books.
+        return (TOPIC_ORDERS, TOPIC_HOLDINGS)
 
     def _match_resting_gtt(self, account_id, order_id, message):
         """

@@ -3,7 +3,7 @@
 How Saravanan's equity commit gets folded into AlgoMirror: what is adopted, what is
 rewritten, what is discarded, and what has to be fixed first.
 
-Status: Phase 0 and 1 done. Phase 2 core done (2.2, 2.6, 2.7 open). Phase 3 done except SSE (3.3). Phase 4 done except the Order Status cost estimate. Phase 5: equity_common.js extracted, template adoption not started.
+Status: architecture is now event driven end to end. No equity component polls: order state arrives on `subscribe_orders`, prices on the shared feed, and the browser is pushed to over SSE. Phases 0 to 4 done bar 2.7 and the Order Status cost estimate. Phase 5: equity_common.js extracted, template adoption from the client tree not started.
 Prepared: 8 September 2026.
 
 ## 0. Provenance
@@ -349,7 +349,7 @@ restarts. So this phase is mostly surfacing and widening, not plumbing.
 | --- | --- | --- |
 | 3.1 | Move the price feed from LTP to Quote mode | DONE | Quote carries the previous close that LTP does not, removing a per-symbol per-day REST call. Stored separately from the traded price and not age gated, since it belongs to a finished session |
 | 3.2 | Websocket depth for Place Order | PRD M4 wants 5-level depth. Websocket depth supplies strictly more than REST (adds a per-level `orders` count). Currently REST at 15s (`app/equity/routes.py:5183`). Subscribe one symbol, only while the panel is open, keep REST as the cold-start fallback since the first frame has not arrived on open |
-| 3.3 | SSE for the live equity screens | Follow `app/trading/routes.py:1519`: capture `current_app._get_current_object()` before the generator, `with app.app_context()` plus `db.session.expire_all()` each iteration, `X-Accel-Buffering: no`. Client pattern from `strategy/builder.html:2503-2541` |
+| 3.3 | SSE for the live equity screens | DONE | Follow `app/trading/routes.py:1519`: capture `current_app._get_current_object()` before the generator, `with app.app_context()` plus `db.session.expire_all()` each iteration, `X-Accel-Buffering: no`. Client pattern from `strategy/builder.html:2503-2541` |
 | 3.4 | Feed freshness badge | DONE | `equityRenderFeedBadge` shows Live / Mixed / REST / Offline on the five price screens, with the detail in a tooltip. F&O vocabulary reused |
 | 3.5 | Analyze-mode badge | DONE | `_analyze_mode_for` reads `analyzerstatus` per HOST (not per account, matching OpenAlgo's semantics), cached 60s, and the five price screens render it. A host that cannot be read reports "not analyze" rather than inventing a warning | Analyzer mode is application-wide per OpenAlgo instance, not per API key. Detect via `POST /api/v1/analyzer`, read `data.analyze_mode`. The existing per-account F&O badge is really reporting a host-level fact |
 | 3.6 | Pause polling on `visibilitychange` | DONE | `equityStartPolling` replaces every bare `setInterval`. A hidden tab stops polling; returning refreshes once before resuming |

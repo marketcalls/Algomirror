@@ -155,6 +155,19 @@ def _normalise_keys(symbol_keys) -> List[SymbolKey]:
     return keys
 
 
+def _signal_price_change():
+    """Wake anything waiting on a price change. Never raises.
+
+    Imported lazily and swallowed on failure: this runs on the WebSocket reader
+    thread, where an exception would take the feed down.
+    """
+    try:
+        from app.utils.equity_events import bump, TOPIC_PRICES
+        bump(TOPIC_PRICES)
+    except Exception:
+        pass
+
+
 def _get_manager():
     """
     Return the shared ProfessionalWebSocketManager, or None.
@@ -591,6 +604,7 @@ class EquityPriceFeed:
             prev_close = _to_price(data.get('close'))
 
             now = datetime.now(timezone.utc)
+            changed = False
 
             with self._lock:
                 self._last_feed_tick_at = now
@@ -609,11 +623,16 @@ class EquityPriceFeed:
                     # bounded REST backstop refreshes it.
                     self._prices[key] = price
                     self._price_times[key] = now
+                    changed = True
                 if prev_close > 0:
                     # No age gate. A previous close is a property of the last
                     # completed session, so unlike a traded price it does not
                     # go stale during the day.
                     self._prev_closes[key] = prev_close
+
+            # Outside the lock: waking SSE waiters must not hold the tick lock.
+            if changed:
+                _signal_price_change()
 
         except Exception as exc:
             try:

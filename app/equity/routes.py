@@ -36,6 +36,7 @@ WHERE THE DATA COMES FROM, and why the screens are not three round trips deep:
         the broker at all.
 """
 
+import json
 import csv
 import io
 import math
@@ -6748,3 +6749,82 @@ def api_acknowledge_external_activity(trade_id):
         )
 
     return _ok({'id': row.id, 'acknowledged_at': _iso(row.acknowledged_at)})
+
+
+# ---------------------------------------------------------------------------
+# Server Sent Events
+#
+# The equity screens used to poll: every one ran a setInterval and re-fetched
+# its whole payload on a timer whether anything had changed or not. The server
+# already knows the instant something changes, because prices arrive on the
+# shared WebSocket and order state arrives on the order stream, so this pushes
+# instead.
+#
+# The generator BLOCKS on the change signal rather than looping on a sleep. A
+# quiet market costs one parked thread and no queries. The timeout is a
+# heartbeat, not a poll: it exists so the connection stays warm through proxies
+# and so a client that has gone away is noticed.
+# ---------------------------------------------------------------------------
+
+@equity_bp.route('/api/stream')
+@login_required
+def api_stream():
+    """
+    Push a small event whenever equity state changes.
+
+    Query string:
+        topics  comma separated, defaults to all. One of prices, orders,
+                holdings, alerts, external.
+
+    Each message is a JSON object naming the topics that moved and their
+    revisions. It deliberately carries no payload: a screen decides for itself
+    which of its endpoints to re-read, so this stays one small endpoint rather
+    than a second copy of every screen's serialiser that could drift from it.
+    """
+    from flask import Response, stream_with_context
+    from app.utils.equity_events import (
+        ALL_TOPICS, revisions, wait_for_change,
+    )
+
+    requested = [t.strip() for t in (_arg('topics') or '').split(',') if t.strip()]
+    topics = [t for t in requested if t in ALL_TOPICS] or list(ALL_TOPICS)
+
+    # Captured before the generator: current_app is a proxy bound to this
+    # request, and the generator outlives it.
+    app = current_app._get_current_object()
+
+    def generate():
+        seen = revisions(topics)
+        # Tell the client where it is starting, so a reconnect can resume
+        # without re-reading everything.
+        yield 'event: hello\ndata: %s\n\n' % json.dumps({
+            'topics': topics, 'revisions': seen,
+        })
+
+        while True:
+            current, changed = wait_for_change(seen, timeout=25.0, topics=topics)
+            if changed:
+                moved = [t for t in topics if current.get(t, 0) > seen.get(t, -1)]
+                seen = current
+                with app.app_context():
+                    yield 'event: change\ndata: %s\n\n' % json.dumps({
+                        'topics': moved,
+                        'revisions': current,
+                        'generated_at': _iso(datetime.utcnow()),
+                    })
+            else:
+                # Heartbeat. A comment frame keeps proxies from closing the
+                # connection and lets a dead client be detected on write.
+                yield ': keep-alive\n\n'
+
+    return Response(
+        stream_with_context(generate()),
+        mimetype='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+            # nginx buffers text/event-stream by default, which holds every
+            # message until the buffer fills and makes the stream look dead.
+            'X-Accel-Buffering': 'no',
+        },
+    )
