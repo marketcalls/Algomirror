@@ -1396,8 +1396,27 @@ class EquityOrder(db.Model):
 
     @property
     def is_open(self):
-        """True while the order can still be modified or cancelled"""
-        return self.status in (EQUITY_ORDER_STATUS_PENDING, EQUITY_ORDER_STATUS_PARTIAL)
+        """
+        True while the order can still be modified or cancelled.
+
+        The status alone is not enough. PARTIAL means "the accounts did not all
+        do the same thing", which is true both while some are still working and
+        for ever afterwards: an order with one account filled and one skipped
+        settles at PARTIAL and stays there. Reading only the status therefore
+        left such an order permanently modifiable, offering Modify and Cancel
+        on an order where nothing remained to modify or cancel.
+
+        An order is open only while at least one account is still working at
+        the broker.
+
+        Costs one query. Callers that already have the split counts in hand
+        (the order book payload does) should use those instead of this.
+        """
+        if self.status not in (EQUITY_ORDER_STATUS_PENDING, EQUITY_ORDER_STATUS_PARTIAL):
+            return False
+        return self.splits.filter(
+            EquityOrderSplit.fill_status.in_(EQUITY_SPLIT_STATUSES_OPEN)
+        ).count() > 0
 
     def __repr__(self):
         return f'<EquityOrder {self.side} {self.symbol} Qty: {self.total_quantity} - {self.status}>'

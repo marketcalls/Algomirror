@@ -161,6 +161,19 @@ def sweep(poller, broker):
     return poller._last_tick
 
 
+def _second_account(user_id):
+    """Another account, so a second split on the same order is legal."""
+    account = TradingAccount(
+        user_id=user_id, account_name='sathya', broker_name='upstox',
+        host_url='http://127.0.0.1:5002', websocket_url='ws://127.0.0.1:8767',
+        is_active=False,  # inactive so the sweep does not try to poll it
+    )
+    account.set_api_key('api-key-sathya')
+    db.session.add(account)
+    db.session.flush()
+    return account
+
+
 def trades_for(split):
     return EquityTrade.query.filter_by(split_id=split.id).all()
 
@@ -423,3 +436,56 @@ def test_status_reports_the_last_sweep(split, poller):
     assert report['running'] is True
     assert report['last_error'] is None
     assert report['last_tick']['accounts_polled'] == 1
+
+
+# ------------------------------------------------------ the PARTIAL dead end
+
+def test_a_settled_partial_order_is_not_open(split, poller):
+    """The stuck state: one account filled, one skipped, PARTIAL for ever.
+
+    PARTIAL means "the accounts did not all do the same thing", which is true
+    both while some are still working and permanently afterwards. Reading only
+    the status left such an order modifiable and cancellable for ever, offering
+    both on an order where nothing remained to modify or cancel.
+    """
+    order = db.session.get(EquityOrder, split.equity_order_id)
+
+    # A second account that was skipped and will never do anything. It has to
+    # be a different account: one split per account per order is a constraint.
+    db.session.add(EquityOrderSplit(
+        equity_order_id=order.id, account_id=_second_account(order.user_id).id,
+        quantity=10, fill_status='SKIPPED',
+    ))
+    db.session.commit()
+
+    sweep(poller, FakeBroker(status='complete', trades=[trade()]))
+
+    db.session.refresh(order)
+    assert order.status == EQUITY_SPLIT_STATUS_PARTIAL
+    assert order.is_open is False
+
+
+def test_a_partial_order_with_work_left_is_still_open(split, poller):
+    """The other half of the rule: PARTIAL plus a live account is still open."""
+    order = db.session.get(EquityOrder, split.equity_order_id)
+
+    db.session.add(EquityOrderSplit(
+        equity_order_id=order.id, account_id=_second_account(order.user_id).id,
+        quantity=10, fill_status='FAILED',
+    ))
+    db.session.commit()
+
+    # The original split stays open, so the order still has work outstanding.
+    sweep(poller, FakeBroker(status='open'))
+
+    db.session.refresh(order)
+    assert order.status == EQUITY_SPLIT_STATUS_PARTIAL
+    assert order.is_open is True
+
+
+def test_a_completed_order_is_never_open(split, poller):
+    sweep(poller, FakeBroker(status='complete', trades=[trade()]))
+
+    order = db.session.get(EquityOrder, split.equity_order_id)
+    assert order.status == EQUITY_SPLIT_STATUS_COMPLETED
+    assert order.is_open is False

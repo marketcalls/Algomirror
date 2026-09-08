@@ -2976,6 +2976,10 @@ def _order_payload(order, splits, directory=None, include_splits=False):
     counts = summarise_splits(splits)
     placed = counts['open'] + counts['filled']
     total = counts['total']
+    is_open = (
+        order.status in (EQUITY_ORDER_STATUS_PENDING, EQUITY_ORDER_STATUS_PARTIAL)
+        and counts['open'] > 0
+    )
 
     payload = {
         'order_id': order.id,
@@ -3017,9 +3021,14 @@ def _order_payload(order, splits, directory=None, include_splits=False):
         # stays available separately for anyone who wants "reached the broker".
         'accounts_label': f"{counts['filled']}/{total}",
         'counts': counts,
-        'is_open': bool(order.is_open),
-        'can_modify': bool(order.is_open),
-        'can_cancel': bool(order.is_open),
+        # Computed from the counts already in hand rather than order.is_open,
+        # which would cost a query per order here. Same rule: an order is open
+        # only while an account is still working, so a PARTIAL order whose
+        # splits have all settled (one filled, one skipped) is finished and
+        # must stop offering Modify and Cancel.
+        'is_open': is_open,
+        'can_modify': is_open,
+        'can_cancel': is_open,
     }
     if include_splits:
         payload['splits'] = [_split_payload(split, directory) for split in splits]
